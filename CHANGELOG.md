@@ -4,6 +4,27 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-03
+
+The tech-lead operator now dispatches specialists **in the background** by default,
+so the main conversation never freezes waiting on a slow subagent — the channel
+stays responsive and multiple items run concurrently.
+
+### Changed
+- `skills/tech-lead/SKILL.md` — Dispatch (step 4) rewritten to instruct background
+  dispatch by default (`run_in_background: true` on every Agent call); the operator
+  is notified on completion and can resume/continue a running agent by id. Clarifies
+  that "don't wait for confirmation" (don't pause for the user's "go") is **not**
+  "block on the subagent" (sit synchronously until it returns). Independent items
+  still fan out in parallel; **dependent** work stays sequenced but via background +
+  the notification/track loop rather than synchronous blocking. `run_in_background:
+  false` is reserved for a genuine strict dependency whose result is needed before
+  anything else in the same turn — and even then background is preferred. Track-to-
+  done (step 5) updated to note the operator stays responsive and is re-invoked when
+  each background agent finishes.
+- `.claude-plugin/plugin.json` — version `0.3.0` → `0.4.0` (`minimumVersion`
+  unchanged — that is the min Claude Code runtime, a different field).
+
 ## [0.3.0] - 2026-07-03
 
 Team-operation rules flushed from session learnings into the versioned plugin —
@@ -28,6 +49,7 @@ reviews.
 - `.claude-plugin/plugin.json` — version `0.2.0` → `0.3.0` (`minimumVersion`
   unchanged — that is the min Claude Code runtime, a different field).
 
+[0.4.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.4.0
 [0.3.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.3.0
 
 ## [0.2.0] - 2026-07-03

@@ -156,9 +156,9 @@ gh project item-edit --id <PVTI_…> --project-id <PVT_…> \
   --field-id <STATUS_FIELD_ID> --single-select-option-id <OPTION_ID>
 ```
 
-### 4. Dispatch (automatic)
+### 4. Dispatch (automatic, in the background)
 Once an item is on the board, immediately ping the right specialist in the channel
-— **do not wait for confirmation**. Use the Agent tool with the matching
+— **do not wait for the user's confirmation**. Use the Agent tool with the matching
 `subagent_type`:
 - `engineer` (@dev) — app/service code, IaC, deploy scripts, schema, tests, PRs.
 - `sre` (@sre) — deploy, observability, infra health, incident response.
@@ -166,11 +166,31 @@ Once an item is on the board, immediately ping the right specialist in the chann
 - `security` (@sec) — review a PR diff for vulnerabilities before merge (the
   mandatory pre-merge gate; see Principles). Read-only reviewer, not an implementer.
 
-Launch independent items **in parallel** (multiple Agent calls in one message). In
-each dispatch prompt include: the issue number + URL, the full acceptance criteria,
-the affected files, the constraints, and the explicit instruction to follow the
-repo's AGENTS.md release phases and regression-test rule. Tell each specialist to
-**comment its progress/PR link on the issue** when done.
+**Dispatch in the background by default — never block the channel on a specialist.**
+Pass `run_in_background: true` on every Agent call. You are re-invoked (notified)
+when a background agent finishes, and you can resume or continue a running agent by
+its id. Specialists' work can be slow (a full implement-test-PR cycle, a design
+pass, a review), so a synchronous dispatch would **freeze the main conversation**
+until the subagent returns — the operator must stay responsive to the user while
+work runs. Concretely:
+- **"Don't wait for confirmation" ≠ "block on the subagent."** The first means you
+  don't pause for the user to say "go" before dispatching; it does **not** mean you
+  sit synchronously inside the subagent until it returns. Fire the dispatch, then
+  keep the channel live.
+- Launch independent items **in parallel** — multiple background Agent calls in one
+  message (fan-out). They run concurrently; you collect each one as it completes.
+- **Dependent** work (implement → review → merge) stays **sequenced**, but sequence
+  it via background dispatch + the notification/track loop (step 5), not by blocking
+  synchronously. Kick off the next stage when the prior one reports back.
+- Only set `run_in_background: false` for a **genuine strict dependency** whose
+  result you need **before you can do anything else in the same turn** — and even
+  then, prefer background if you can. Long-running work is never a reason to block;
+  it's the strongest reason to background.
+
+In each dispatch prompt include: the issue number + URL, the full acceptance
+criteria, the affected files, the constraints, and the explicit instruction to
+follow the repo's AGENTS.md release phases and regression-test rule. Tell each
+specialist to **comment its progress/PR link on the issue** when done.
 
 **Branch from freshly-fetched `origin/main`, always.** When you dispatch PRs in
 sequence (or merge one before another opens), instruct each specialist to cut its
@@ -183,7 +203,10 @@ re-cut the branch.
 
 ### 5. Track to done
 After dispatching, summarize for the user: a table of each demand → issue/board
-link → assigned specialist → status. When specialists report back, relay PR links
+link → assigned specialist → status. Because dispatches run in the background, you
+**stay responsive in the channel** while they work — you are re-invoked when each
+background agent completes (and can resume/continue one by its id to push it through
+the next stage of a dependency chain). When specialists report back, relay PR links
 and whether CI/deploy workflows went green. Keep the board `Status` in sync as
 state changes (In Progress → Blocked when it needs the user → Done). The task is
 **not** complete at PR-open; follow it through the repo's release phases to
