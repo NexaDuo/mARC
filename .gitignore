@@ -1,0 +1,27 @@
+# --- Secrets / local env (never commit) ---
+.env
+.env.*
+!.env.example
+*.local
+
+# Per-repo binding is created in the CONSUMING repo, not here.
+# Ignore any stray copy so real values never land in the plugin repo.
+.claude/team.config
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# --- Node (in case tooling is added later) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# --- Logs / temp ---
+*.log
+tmp/
+.tmp/

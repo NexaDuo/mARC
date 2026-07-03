@@ -1,0 +1,50 @@
+# mARC — per-repo team binding
+# -----------------------------------------------------------------------------
+# Copy this file to the CONSUMING repo as `.claude/team.config` and fill it in.
+# It is NOT part of the mARC plugin; it lives in each repo the team works on.
+#
+# The mARC SessionStart hook prints this file into context at the start of every
+# session, so @techlead and the specialists (@dev/@sre/@design/@sec) learn the
+# repo's concrete facts instead of guessing them. Anything omitted here falls
+# back to runtime discovery (e.g. `gh repo view`, `gh project list`).
+#
+# Format: simple `key=value`, one per line. `#` starts a comment.
+# -----------------------------------------------------------------------------
+
+# --- GitHub binding (used by @techlead to record + track work) ---
+# The org that owns the repo and the Project board.
+gh_org=YourOrg
+# Full "owner/name" slug of the repo where issues/PRs are filed.
+gh_repo=YourOrg/your-repo
+# The GitHub Project (v2) number that is the team's source-of-truth board.
+# Omit to let @techlead pick the org's first project (or disambiguate by title).
+project_number=1
+# Optional: the Project's title, to disambiguate when the org has several.
+project_title=your-repo
+
+# --- Architecture authority ---
+# Path (relative to repo root) to the file @techlead/specialists must respect.
+agents_doc=AGENTS.md
+
+# --- Key source paths (where the specialists do their work) ---
+# Comma-separated; adjust to the repo's real layout. Purely informational hints
+# that sharpen a dispatch spec — the specialists still read the tree themselves.
+app_paths=src/,services/
+iac_paths=infrastructure/,deploy/
+test_paths=tests/,e2e/
+ui_paths=web/,frontend/
+
+# --- Validation ---
+# The single command that proves the change works (run locally + in CI).
+validation_command=npm run test:all
+# The health-check / smoke entrypoint @sre runs on a cadence, if any.
+health_check_command=./scripts/health-check.sh
+
+# --- Release-phase facts (what "done" requires in THIS repo) ---
+# Does a real staging->prod pipeline exist? (true/false)
+# If false, the mandatory release phases are N/A and should be stated explicitly.
+has_release_pipeline=true
+# Public URLs the specialists validate against with real requests (comma-sep).
+real_urls=https://staging.example.com,https://app.example.com
+# Free-text notes on the deploy model / non-negotiables specific to this repo.
+release_notes=deploy via GitHub Actions; validate with real URLs; monitor CI to green.

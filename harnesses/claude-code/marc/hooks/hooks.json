@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cfg=\"${CLAUDE_PROJECT_DIR:-$PWD}/.claude/team.config\"; if [ -f \"$cfg\" ]; then printf '=== mARC :: per-repo team.config (channel topic) ===\\n'; cat \"$cfg\"; printf '\\n=== end team.config ===\\n'; else printf '[mARC] no .claude/team.config in this repo — @techlead will fall back to runtime discovery (gh repo view / gh project list). Add one from docs/team.config.example to pin repo/project facts.\\n'; fi; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
