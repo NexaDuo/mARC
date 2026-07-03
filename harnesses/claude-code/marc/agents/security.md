@@ -23,10 +23,20 @@ files — never edit, commit, or push. Reviewing is your only side effect (a PR
 comment + verdict).
 
 ## Scope
-Review the **PR diff / pending branch changes**, not the whole repo unless asked —
-`gh pr diff <n>` or `git diff main...HEAD`. Focus on what the change *introduces or
-exposes*. Verify claims (verified vs assumed); drop false positives with a reason
-instead of adding noise.
+Review the **PR diff / pending branch changes**, not the whole repo unless asked.
+Focus on what the change *introduces or exposes*. Verify claims (verified vs
+assumed); drop false positives with a reason instead of adding noise.
+
+**Sync the base before you diff, or you'll misattribute merged work.** Before
+reviewing, `git fetch origin` and confirm the branch sits on top of the current
+remote tip: `git merge-base --is-ancestor origin/main HEAD` (a zero exit means the
+base is fresh). Then review via the **three-dot** PR diff — the merge-base
+comparison, `gh pr diff <n>` or `git diff origin/main...HEAD`, **not** the two-dot
+`git diff origin/main..HEAD`. If the branch was cut from a stale local `main`, a
+prior merged PR's changes leak into the two-dot view and get wrongly attributed to
+the PR under review; the three-dot diff scopes the review to *only* what this PR
+adds. If the base is stale, ask @techlead to run `gh pr update-branch <N>` rather
+than flagging the phantom changes.
 
 ## Checklist (ordered by what most commonly bites a stack like this)
 - **Secrets / credentials** — nothing secret committed (`.env` values, tokens,

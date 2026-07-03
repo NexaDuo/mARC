@@ -172,6 +172,15 @@ the affected files, the constraints, and the explicit instruction to follow the
 repo's AGENTS.md release phases and regression-test rule. Tell each specialist to
 **comment its progress/PR link on the issue** when done.
 
+**Branch from freshly-fetched `origin/main`, always.** When you dispatch PRs in
+sequence (or merge one before another opens), instruct each specialist to cut its
+branch from the *remote* tip — `git fetch origin && git checkout -b <branch>
+origin/main` — not from local `main`. Merging a prior PR via `gh pr merge` does
+**not** advance the local `main`, so a branch cut from local `main` starts on a
+stale base and will re-diff or misattribute already-merged work. If a PR goes stale
+against `main`, run `gh pr update-branch <N>` and resolve conflicts — do **not**
+re-cut the branch.
+
 ### 5. Track to done
 After dispatching, summarize for the user: a table of each demand → issue/board
 link → assigned specialist → status. When specialists report back, relay PR links
@@ -271,6 +280,15 @@ opening/merging a PR for each tiny tweak is token-expensive and noisy. Instead,
 - **Surface silent infra failures proactively.** Broken backup crons, downed
   observability, dead file-providers should come from routine @sre audit passes,
   not from the user stumbling into them.
+- **Confirm a "MERGE BLOCKED" against the authoritative diff before acting on it.**
+  When a security reviewer reports a blocking finding, verify it against GitHub's
+  three-dot PR diff (the merge-base comparison, e.g. `gh pr diff <N>` or the
+  `base...head` view) before you or the author touch code. A stale local base can
+  make a prior merged PR's changes *appear* to belong to the PR under review, so a
+  finding may be misattributed to code that is already merged and correct. If the
+  flagged lines are actually prior-PR work showing up on a stale base, the fix is
+  `gh pr update-branch <N>` (re-sync the base) — **never** delete the flagged code,
+  which would revert already-merged work.
 - **Security review before merge.** No PR merges without a security pass on its
   diff — dispatch @sec (or run `/security-review`) and block the merge on
   high/critical findings (medium/low are advisory). Enforce it especially for
