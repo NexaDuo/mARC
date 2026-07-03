@@ -4,6 +4,30 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-03
+
+A SessionStart safety-net hook now warns — one line, into context — when the
+**installed** plugin version is behind the version on the repo's `main`, so users
+with marketplace auto-update OFF don't silently miss fixes. Auto-update remains the
+primary recommendation; the hook is the backstop.
+
+### Added
+- `hooks/outdated-check.sh` + a second `SessionStart` entry in `hooks/hooks.json`
+  (coexists with the existing team.config-injection hook). It reads the installed
+  version from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`, fetches the
+  remote version from `plugin.json` on `main` (raw GitHub, NOT GitHub Releases),
+  and if the installed major/minor is behind prints one nudge line with the update
+  command. **Warn-only:** explicit short `timeout` on the network call; offline /
+  error / rate-limit / missing tool (`jq`/`curl`/`wget`) => silent no-op — every
+  code path exits 0 and never blocks or fails the session. Anti-nag: only nudges on
+  a major/minor difference, not on patch bumps.
+- `README.md` — Update section now leads with enabling marketplace auto-update for
+  `nexaduo` (eliminates drift); the hook is documented as the safety net.
+
+### Changed
+- `.claude-plugin/plugin.json` — version `0.4.0` → `0.5.0` (`minimumVersion`
+  unchanged — that is the min Claude Code runtime, a different field).
+
 ## [0.4.0] - 2026-07-03
 
 The tech-lead operator now dispatches specialists **in the background** by default,

@@ -81,6 +81,13 @@ dispatches the specialist subagents on demand.
 
 ## Update
 
+**Recommended: enable auto-update for the `nexaduo` marketplace.** With auto-update
+on, Claude Code pulls new plugin versions for you and you never drift behind — this
+is the primary, drift-free path. Manage it from `/plugin` → the `nexaduo`
+marketplace → enable auto-update.
+
+To update manually at any time:
+
 ```
 claude plugin update marc@nexaduo
 ```
@@ -88,9 +95,17 @@ claude plugin update marc@nexaduo
 or, from within Claude Code:
 
 ```
-/plugin marketplace update marc
+/plugin marketplace update nexaduo
 /reload-plugins
 ```
+
+**Safety net (for auto-update-off users):** mARC ships a `SessionStart` hook that,
+once per session, checks whether your installed version is behind the version on
+`main` and, if so, prints a single one-line nudge with the update command. It is
+warn-only — it makes a short, timeout-bounded network check and degrades to a silent
+no-op when offline, rate-limited, or tooling is missing; it never blocks or slows a
+session. It only nudges on a minor/major difference, so routine patch releases won't
+pester you.
 
 ## Bind mARC to a repo (optional but recommended)
 
