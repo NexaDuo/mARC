@@ -4,6 +4,32 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-03
+
+Team-operation rules flushed from session learnings into the versioned plugin —
+two generic, repo-agnostic guardrails for sequenced PRs and stale-base security
+reviews.
+
+### Changed
+- `skills/tech-lead/SKILL.md` — two rules added. **Dispatch (step 4):** when
+  dispatching PRs in sequence, instruct each specialist to branch from
+  freshly-fetched `origin/main` (`git fetch origin && git checkout -b <branch>
+  origin/main`), because merging a prior PR via `gh pr merge` does not advance the
+  local `main`; a stale PR is re-synced with `gh pr update-branch <N>`, not
+  re-cut. **Principles (verification):** before acting on a security reviewer's
+  "MERGE BLOCKED", confirm the finding against GitHub's authoritative three-dot PR
+  diff — a stale local base can misattribute a prior merged PR's changes to the PR
+  under review, and the fix is `gh pr update-branch`, never deleting the flagged
+  (already-merged) code.
+- `agents/security.md` — before reviewing, `git fetch origin` and confirm the
+  branch base is fresh (`git merge-base --is-ancestor origin/main HEAD`), then
+  review via the three-dot PR diff so a prior merged PR's changes on a stale base
+  aren't misattributed to the PR under review.
+- `.claude-plugin/plugin.json` — version `0.2.0` → `0.3.0` (`minimumVersion`
+  unchanged — that is the min Claude Code runtime, a different field).
+
+[0.3.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.3.0
+
 ## [0.2.0] - 2026-07-03
 
 Opt-in onboarding — a repo can now graduate from ephemeral session-memory to a
