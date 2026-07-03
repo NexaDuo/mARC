@@ -1,1 +1,120 @@
-# mARC
+<!-- mARC :: Multi-Agent Relay Control -->
+
+```
+        ███╗   ███╗  █████╗  ██████╗   ██████╗
+        ████╗ ████║ ██╔══██╗ ██╔══██╗ ██╔════╝
+        ██╔████╔██║ ███████║ ██████╔╝ ██║
+        ██║╚██╔╝██║ ██╔══██║ ██╔══██╗ ██║
+        ██║ ╚═╝ ██║ ██║  ██║ ██║  ██║ ╚██████╗
+        ╚═╝     ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝  ╚═════╝
+   ▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖▄▖
+        m u l t i · a g e n t · r e l a y · c o n t r o l
+   ▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘
+```
+
+```
+*** Now talking in #marc
+*** Topic: turn a discussion into tracked, delegated, shipped work
+--> @techlead has been given channel operator status
+    @techlead: specialists, standby. i'll convene you when there's work.
+    @dev @sre @design @sec: ready.
+```
+
+**mARC (Multi-Agent Relay Control)** packages a full software-delivery **agent
+team** as a portable [Claude Code](https://claude.com/claude-code) **plugin +
+self-marketplace**, dressed in a retro/vaporwave **IRC** console aesthetic. It is
+**not** a new orchestration engine — Claude Code's Agent Teams already handle
+dispatch, parallelism, and isolation. mARC is the *package and the brand*: one
+generic team you install once, user-scope, and reuse across every repo.
+
+## The metaphor — one channel, one op, a bench of specialists
+
+Think of your project as an IRC channel. **`@techlead`** holds channel-operator
+status: it listens to the discussion, compiles it into well-specified, tracked
+work on your GitHub Project board, then pings the right specialist to do it.
+
+| handle       | role                 | pings for                                            |
+|--------------|----------------------|------------------------------------------------------|
+| `@techlead`  | channel operator     | convene, spec, record on the board, dispatch, track  |
+| `@dev`       | engineer             | app/service code, IaC, deploy scripts, schema, tests |
+| `@sre`       | reliability          | deploys, observability, incidents, backups/DR, cost  |
+| `@design`    | front-end            | UI screens, UX, end-to-end web flows                 |
+| `@sec`       | security (read-only) | pre-merge diff review — the mandatory merge gate     |
+
+`@techlead` is a **skill** (`/tech-lead`); `@dev`, `@sre`, `@design`, `@sec` are
+**subagents** it dispatches.
+
+## Generic by design — per-repo binding lives in the consuming repo
+
+The team carries **no** hardcoded stack facts. When it runs in a repo, it learns
+that repo at runtime:
+
+- It reads the repo's `AGENTS.md` / `CLAUDE.md` for architecture, release phases,
+  and lessons.
+- It reads that repo's **`.claude/team.config`** for the concrete bindings — gh
+  org/repo, project number, key paths, the validation command, release-phase
+  facts. See [`docs/team.config.example`](docs/team.config.example).
+- If `team.config` is absent, `@techlead` discovers the repo/project dynamically
+  (`gh repo view`, `gh project list --owner <org>`) instead of guessing.
+
+A `SessionStart` hook prints the active `team.config` into context at the top of
+each session (and a friendly note if none exists).
+
+## Install (user-scope → available in every repo)
+
+```
+/plugin marketplace add NexaDuo/mARC
+/plugin install marc@marc
+```
+
+Or run the auditable installer (adds the marketplace + installs the plugin, prints
+the banner):
+
+```
+./install.sh
+```
+
+After install, `@techlead` is available as `/tech-lead` in any repo, and it
+dispatches the specialist subagents on demand.
+
+## Update
+
+```
+claude plugin update marc@marc
+```
+
+or, from within Claude Code:
+
+```
+/plugin marketplace update marc
+/reload-plugins
+```
+
+## Bind mARC to a repo (optional but recommended)
+
+Drop a `.claude/team.config` into the consuming repo (copy
+[`docs/team.config.example`](docs/team.config.example) and fill it in). This pins
+the GitHub org/repo, the Project number, the key source paths, and the validation
+command so `@techlead` and the specialists stop guessing. Precedence to remember:
+a repo's own `.claude/` overrides the plugin, which overrides user config.
+
+## Layout
+
+```
+.claude-plugin/
+  plugin.json          # plugin manifest (name marc, v0.1.0)
+  marketplace.json     # self-marketplace entry → github NexaDuo/mARC
+agents/                # @dev, @sre, @design, @sec subagents (genericized)
+skills/tech-lead/      # @techlead channel-operator skill (/tech-lead)
+hooks/hooks.json       # SessionStart → inject .claude/team.config
+docs/team.config.example
+install.sh             # safe, auditable installer + banner
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+```
+*** @techlead sets mode +v on your next idea
+```
