@@ -4,6 +4,37 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-03
+
+Dogfood refinements to the opt-in onboarding flow (`/marc:init` + the tech-lead
+first-run offer, both shipped in 0.3.0). Hardens project-board discovery against a
+real incident, tightens the generated `team.config` schema, cuts permission-prompt
+noise during discovery, and extends the CI schema contract.
+
+### Changed
+- `skills/init/SKILL.md` + `skills/tech-lead/SKILL.md` — **project discovery no
+  longer silently binds to a default/"untitled" board.** A dogfood run picked
+  `project_number=1` (the owner's auto-created "untitled project"), routing issues
+  to the wrong board. Both skills now: use a clearly-titled single match only after
+  surfacing which board was chosen; and when the only match is generic/untitled or
+  there are multiple matches, **ask the user** (AskUserQuestion) or leave
+  `project_number` an explicit `TODO` with a written warning — never a silent guess.
+  The tech-lead flow no longer auto-picks `.projects[0]`.
+- `skills/init/SKILL.md` — the generated `team.config` template now emits
+  **comments on their own line only**; no inline comments on `key=value` lines
+  (the SessionStart parser is a naïve `key=value` reader). Documented the value-
+  hygiene rule. Discovery probes are batched into a single Bash block to reduce
+  permission prompts; the Write confirmations remain the intentional safety gate.
+- `docs/team.config.example` — header documents the "comments on their own line
+  only" rule; `project_number` guidance warns against the auto-created untitled
+  project (verified: the example carries no inline-comment value lines).
+- `.github/workflows/ci.yml` — the "team.config schema contract" step now also
+  asserts **no inline comment on any value line** and that `gh_org`/`gh_repo` are
+  present, and runs a **negative test** (an inline-comment fixture MUST fail the
+  gate). Deterministic, zero token cost, no live model run.
+- `.claude-plugin/plugin.json` — version `0.5.0` → `0.6.0` (`minimumVersion`
+  unchanged — that is the min Claude Code runtime, a different field).
+
 ## [0.5.0] - 2026-07-03
 
 A SessionStart safety-net hook now warns — one line, into context — when the

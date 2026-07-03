@@ -8,7 +8,10 @@
 # repo's concrete facts instead of guessing them. Anything omitted here falls
 # back to runtime discovery (e.g. `gh repo view`, `gh project list`).
 #
-# Format: simple `key=value`, one per line. `#` starts a comment.
+# Format: simple `key=value`, one per line. Comments live on their OWN line
+# (a line starting with `#`); never inline after a value — the SessionStart
+# parser is a naïve `key=value` reader and would ingest a trailing `# ...` as
+# part of the value. Keep every value clean.
 # -----------------------------------------------------------------------------
 
 # --- GitHub binding (used by @techlead to record + track work) ---
@@ -17,8 +20,10 @@ gh_org=YourOrg
 # Full "owner/name" slug of the repo where issues/PRs are filed.
 gh_repo=YourOrg/your-repo
 # The GitHub Project (v2) number that is the team's source-of-truth board.
-# Omit to let @techlead pick the org's first project (or disambiguate by title).
-project_number=1
+# Set the EXACT board number. Do NOT use the owner's auto-created "untitled"
+# project (often #1) — that routes issues to the wrong board. Omit only if you
+# want @techlead to list candidates and ask/disambiguate by title at runtime.
+project_number=42
 # Optional: the Project's title, to disambiguate when the org has several.
 project_title=your-repo
 
