@@ -36,6 +36,24 @@ when a session starts:
    release-phase facts. The plugin's SessionStart hook already prints it into
    context.
 
+### First-run offer: opt into a persistent binding (`/marc:init`)
+If **both** `AGENTS.md` **and** `.claude/team.config` are absent, this repo has no
+persistent team binding — you are running purely on runtime discovery + session
+memory. That works (zero-config is a shipped feature), but session memory is
+**ephemeral**: next session re-discovers everything and any board/paths you
+learned are gone. Once, on this first run, **offer** to fix that:
+
+> You can pin this repo's facts with `/marc:init` — it scaffolds
+> `.claude/team.config` (and optionally a lean `AGENTS.md` skeleton) so the board,
+> source paths, and validation command stay stable across sessions. It shows you
+> every file before writing and writes nothing without your explicit yes. Want me
+> to run it?
+
+Proceed to `/marc:init` **only on the user's confirmation**. If they decline,
+continue exactly as before — **do not** change any zero-config behavior, and do
+not re-offer every session (offer at most once unless the user asks). Never
+create `team.config`/`AGENTS.md` silently.
+
 ### Discover the target repo + project (mirror the dynamic Status-field pattern)
 Never hardcode a repo slug or project number. Resolve them once per session, in
 this order (first hit wins), and cache the values:

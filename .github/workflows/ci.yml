@@ -61,6 +61,25 @@ jobs:
           jq . .claude-plugin/marketplace.json > /dev/null
           jq . harnesses/claude-code/marc/.claude-plugin/plugin.json > /dev/null
 
+      # 3b. team.config schema contract. `/marc:init` (skills/init) prefills a
+      #     `.claude/team.config` from this canonical example, so the schema must
+      #     stay parseable as `key=value` and keep the required GitHub-binding
+      #     keys. This is a deterministic proxy for the generated file; validating
+      #     an actual /marc:init run needs a live model (Tier 3, out of CI scope).
+      - name: team.config schema contract
+        run: |
+          f=docs/team.config.example
+          test -f "$f" || { echo "::error::$f missing"; exit 1; }
+          # Every non-comment, non-blank line must be `key=value`.
+          if grep -vE '^\s*(#|$)' "$f" | grep -vqE '^[A-Za-z_][A-Za-z0-9_]*=.*$'; then
+            grep -vE '^\s*(#|$)' "$f" | grep -vE '^[A-Za-z_][A-Za-z0-9_]*=.*$'
+            echo "::error::team.config.example has a non key=value line"; exit 1
+          fi
+          for k in gh_org gh_repo; do
+            grep -qE "^${k}=" "$f" || { echo "::error::team.config.example missing required key: $k"; exit 1; }
+          done
+          echo "team.config schema contract: OK (key=value; gh_org/gh_repo present)."
+
       # 4. YAML frontmatter lint of every agent + skill file. Extracts the
       #    `---`-delimited frontmatter and yaml.safe_load()s it. This catches the
       #    class of bug where an unquoted `": "` inside a `description:` value

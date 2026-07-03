@@ -4,6 +4,35 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-03
+
+Opt-in onboarding — a repo can now graduate from ephemeral session-memory to a
+persistent, versioned team binding, without ever writing a file silently and
+without changing the zero-config default.
+
+### Added
+- `skills/init/SKILL.md` — the `/marc:init` onboarding skill. Discovers the
+  repo's org/repo/project **at runtime via `gh`** and prefills three
+  **independently opt-in** artifacts, each shown verbatim and written only on an
+  explicit "yes": `.claude/team.config` (prefilled from the
+  `docs/team.config.example` schema, unknowns left as clearly-marked `TODO`
+  placeholders), an optional lean `AGENTS.md` **skeleton of section headings
+  only** (no placebo prose, per the anti-anchoring lesson), and an optional
+  `enabledPlugins` pin **merged** into `.claude/settings.json` (the deliberate
+  "adopt for good" step — merge, never clobber). Nothing is ever written
+  silently.
+
+### Changed
+- `skills/tech-lead/SKILL.md` — first-run offer: when **both** `AGENTS.md` and
+  `.claude/team.config` are absent, `@techlead` offers to run `/marc:init`
+  (explaining that session memory is ephemeral while `team.config` stabilizes
+  board/paths across sessions) and proceeds only on confirmation. Zero-config
+  behavior is byte-for-byte unchanged if declined.
+- `.claude-plugin/plugin.json` — version `0.1.0` → `0.2.0` (`minimumVersion`
+  unchanged — that is the min Claude Code runtime, a different field).
+
+[0.2.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.2.0
+
 ## [0.1.0] - 2026-07-03
 
 Initial release — the agent team extracted from a single repo into a portable,
