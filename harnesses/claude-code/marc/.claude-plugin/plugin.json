@@ -1,6 +1,6 @@
 {
   "name": "marc",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "mARC (Multi-Agent Relay Control) — an IRC/vaporwave-styled Claude Code plugin that packages a full agent team (tech-lead operator + engineer, sre, design, security specialists) as a reusable, cross-repo team. @techlead convenes the specialists in the channel.",
   "minimumVersion": "2.0.0",
   "author": {

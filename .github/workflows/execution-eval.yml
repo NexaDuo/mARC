@@ -16,6 +16,12 @@ name: Execution eval (Tier 3 — DISABLED stub)
 # billing. To enable later: add the secret, then flesh out the eval step and
 # (optionally) add a `schedule:` for a nightly advisory run.
 #
+# FORK SAFETY (issue #22): because the trigger is `workflow_dispatch` ONLY (never
+# `push`/`pull_request`), this secret-bearing Tier-3 job can NEVER be triggered by
+# a pull request — including a fork-based `field-lesson` contribution PR. Fork PRs
+# therefore can never reach `ANTHROPIC_API_KEY`. Do NOT add `pull_request` here.
+# The merge-gate CI (ci.yml, Tier 1/2) is deliberately no-secret and safe on forks.
+#
 # See issue #5 (Tier 3 = follow-up) before enabling.
 # -----------------------------------------------------------------------------
 
