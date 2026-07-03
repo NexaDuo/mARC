@@ -69,10 +69,24 @@ GH_ORG=$(  [ -f "$CFG" ] && sed -n 's/^gh_org=//p'  "$CFG" )
 : "${GH_ORG:=${GH_REPO%%/*}}"
 
 # --- PROJECT NUMBER ---
+# 1. team.config wins if it declares one (and it isn't a TODO placeholder).
 PROJ=$( [ -f "$CFG" ] && sed -n 's/^project_number=//p' "$CFG" )
-# Else pick the org's board (disambiguate by title in team.config if >1).
-: "${PROJ:=$(gh project list --owner "$GH_ORG" --format json | jq -r '.projects[0].number')}"
+case "$PROJ" in TODO*|"") PROJ="" ;; esac
+# 2. Else LIST candidates (number + title) — do NOT auto-pick .projects[0].
+[ -z "$PROJ" ] && gh project list --owner "$GH_ORG" --format json \
+  | jq -r '.projects[] | "\(.number)\t\(.title)"'
 ```
+
+> **Never silently bind to a default/"untitled" project.** `gh project list`
+> frequently returns the owner's auto-created **"@owner's untitled project"** as
+> number `1`; auto-picking `.projects[0]` there routes issues to the wrong board
+> (a real dogfood incident). So:
+> - **Exactly one, clearly-titled** match → you MAY use it, but **state which
+>   board** (number + title) you chose before creating anything.
+> - **Untitled/empty title** (e.g. title empty or `@owner's untitled project`)
+>   **OR more than one** match → this is a genuine decision: **ask the user which
+>   project** (AskUserQuestion), or proceed **Issues-only** with the board add
+>   deferred and flag it. Never guess.
 
 > **Scope note:** `gh project` needs the `project` scope. If it errors with
 > "missing required scopes", tell the user to run
