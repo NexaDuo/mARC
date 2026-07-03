@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>mARC :: Multi-Agent Relay Control</title>
+<meta name="description" content="mARC — Multi-Agent Relay Control: a Claude Code plugin that installs a cross-repo team of AI engineering agents. @techlead ops the #marc channel and convenes @dev, @sre, @design, @sec.">
+<!--
+  Single self-contained page. ALL CSS + JS inline. No external requests:
+  no CDN, no web fonts, no images, no analytics, no remote calls.
+  The only JS is a clipboard-copy handler (auditable below).
+-->
+<style>
+  :root{
+    --bg:#0b0b1a;
+    --bg2:#12122b;
+    --panel:#13132e;
+    --panel2:#181840;
+    --ink:#e9e9fb;          /* body text — AA on --bg */
+    --dim:#a9a9d6;          /* muted text — AA on --bg/--panel */
+    --cyan:#5ef1ff;
+    --magenta:#ff6ac1;
+    --violet:#b892ff;
+    --green:#7CFFB2;
+    --amber:#ffd479;
+    --line:#2a2a55;
+    --op:#ffd479;           /* channel op highlight */
+    --focus:#5ef1ff;
+    --mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "Fira Code", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:var(--mono);
+    color:var(--ink);
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(255,106,193,.14), transparent 60%),
+      radial-gradient(1000px 700px at -10% 10%, rgba(94,241,255,.12), transparent 55%),
+      linear-gradient(180deg, var(--bg) 0%, #05050f 100%);
+    background-attachment:fixed;
+    line-height:1.55;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* CRT scanline overlay — subtle, non-flashing, pointer-transparent */
+  body::before{
+    content:"";
+    position:fixed;
+    inset:0;
+    pointer-events:none;
+    background:repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,.028) 0px,
+      rgba(255,255,255,.028) 1px,
+      transparent 2px,
+      transparent 3px
+    );
+    mix-blend-mode:overlay;
+    z-index:9999;
+  }
+  @media (prefers-reduced-motion: no-preference){
+    .cursor{animation:blink 1.05s steps(1) infinite}
+  }
+  @keyframes blink{50%{opacity:0}}
+
+  a{color:var(--cyan);text-decoration:none;border-bottom:1px dotted rgba(94,241,255,.5)}
+  a:hover,a:focus-visible{color:#fff;border-bottom-color:#fff}
+  :focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}
+
+  .wrap{max-width:940px;margin:0 auto;padding:24px 18px 80px}
+
+  /* ---- window chrome shared ---- */
+  .win{
+    background:linear-gradient(180deg, var(--panel) 0%, var(--bg2) 100%);
+    border:1px solid var(--line);
+    border-radius:12px;
+    box-shadow:0 0 0 1px rgba(94,241,255,.06), 0 24px 60px rgba(0,0,0,.5);
+    overflow:hidden;
+  }
+  .titlebar{
+    display:flex;align-items:center;gap:10px;
+    padding:9px 14px;
+    background:linear-gradient(90deg, rgba(255,106,193,.16), rgba(94,241,255,.12));
+    border-bottom:1px solid var(--line);
+    font-size:.82rem;color:var(--dim);
+  }
+  .dots{display:flex;gap:6px}
+  .dots i{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .dots .r{background:#ff5f56}.dots .y{background:#ffbd2e}.dots .g{background:#27c93f}
+  .titlebar .chan{color:var(--cyan);font-weight:700;letter-spacing:.5px}
+  .titlebar .topic{margin-left:auto;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ---- hero ---- */
+  .hero{margin-top:8px}
+  .hero .body{padding:22px clamp(14px,4vw,34px) 30px}
+  .wordmark{
+    margin:0;
+    font-size:clamp(.34rem,1.7vw,.62rem);
+    line-height:1.05;
+    color:var(--cyan);
+    text-shadow:0 0 6px rgba(94,241,255,.55), 2px 0 rgba(255,106,193,.5), -2px 0 rgba(184,146,255,.4);
+    overflow-x:auto;
+    white-space:pre;
+    padding-bottom:6px;
+  }
+  .pitch{
+    font-size:clamp(1rem,2.6vw,1.35rem);
+    color:var(--ink);
+    margin:14px 0 4px;
+    font-weight:600;
+  }
+  .pitch b{color:var(--magenta)}
+  .sub{color:var(--dim);margin:0 0 20px;max-width:62ch}
+  .sub code{color:var(--amber)}
+  .cta{display:flex;flex-wrap:wrap;gap:12px}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    font-family:var(--mono);font-size:.92rem;font-weight:700;
+    padding:11px 18px;border-radius:9px;cursor:pointer;
+    border:1px solid var(--line);background:var(--panel2);color:var(--ink);
+    text-decoration:none;
+  }
+  .btn.primary{
+    background:linear-gradient(90deg, var(--cyan), var(--violet));
+    color:#0a0a18;border-color:transparent;
+    box-shadow:0 6px 24px rgba(94,241,255,.28);
+  }
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn:hover{border-color:var(--cyan)}
+
+  h2.section{
+    font-size:1.02rem;color:var(--violet);letter-spacing:1px;text-transform:uppercase;
+    margin:44px 0 14px;display:flex;align-items:center;gap:10px;
+  }
+  h2.section::before{content:">>";color:var(--magenta)}
+
+  /* ---- roster / userlist ---- */
+  .roster .body{padding:6px 0}
+  ul.names{list-style:none;margin:0;padding:0}
+  ul.names li{
+    display:flex;gap:14px;align-items:flex-start;
+    padding:14px clamp(14px,3.5vw,22px);
+    border-bottom:1px solid rgba(42,42,85,.6);
+  }
+  ul.names li:last-child{border-bottom:0}
+  .sigil{
+    flex:0 0 auto;width:1.4em;text-align:center;font-weight:900;font-size:1.05rem;
+  }
+  .op .sigil{color:var(--op);text-shadow:0 0 8px rgba(255,212,121,.6)}
+  .voice .sigil{color:var(--green)}
+  .nick{color:var(--cyan);font-weight:700}
+  .op .nick{color:var(--op)}
+  .tag{
+    font-size:.68rem;letter-spacing:.5px;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);
+    color:var(--dim);margin-left:8px;vertical-align:middle;white-space:nowrap;
+  }
+  .op .tag{color:var(--op);border-color:rgba(255,212,121,.5)}
+  .role{color:var(--ink)}
+  .desc{display:block;color:var(--dim);font-size:.9rem;margin-top:3px}
+
+  /* ---- install / IRC exchange ---- */
+  .install .body{padding:8px clamp(12px,3.5vw,22px) 20px;font-size:.94rem}
+  .irc-line{padding:9px 0;border-bottom:1px dashed rgba(42,42,85,.55);}
+  .irc-line:last-of-type{border-bottom:0}
+  .meta{color:var(--dim);font-size:.8rem;display:block;margin-bottom:6px}
+  .meta .who{color:var(--op);font-weight:700}
+  .meta .you{color:var(--green);font-weight:700}
+  .cmd{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    background:#07071a;border:1px solid var(--line);border-radius:8px;
+    padding:10px 12px;
+  }
+  .cmd .prompt{color:var(--magenta);font-weight:800;user-select:none}
+  .cmd code{flex:1 1 240px;color:var(--amber);word-break:break-all;font-size:.95rem}
+  .copy{
+    flex:0 0 auto;
+    font-family:var(--mono);font-size:.78rem;font-weight:700;letter-spacing:.5px;
+    padding:7px 12px;border-radius:7px;cursor:pointer;
+    background:var(--panel2);border:1px solid var(--line);color:var(--cyan);
+  }
+  .copy:hover{border-color:var(--cyan);color:#fff}
+  .copy.copied{background:var(--green);color:#062012;border-color:transparent}
+  .note{color:var(--dim);font-size:.85rem;margin:14px 0 0}
+  .note code{color:var(--amber)}
+
+  /* ---- footer ---- */
+  footer{
+    margin-top:52px;padding-top:22px;border-top:1px solid var(--line);
+    color:var(--dim);font-size:.86rem;
+    display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;
+  }
+  footer .links{display:flex;flex-wrap:wrap;gap:8px 18px}
+  footer .brand{color:var(--cyan);font-weight:700;letter-spacing:1px}
+  .signoff{color:var(--dim);opacity:.7;margin-top:12px;font-size:.8rem}
+
+  @media (max-width:560px){
+    ul.names li{flex-direction:column;gap:4px}
+    .titlebar .topic{display:none}
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+
+  <!-- (1) HERO -->
+  <section class="win hero" aria-labelledby="mark">
+    <div class="titlebar">
+      <span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+      <span class="chan">#marc</span>
+      <span class="topic">topic: multi-agent relay control · @techlead ops the channel</span>
+    </div>
+    <div class="body">
+      <h1 id="mark" class="wordmark" aria-label="mARC">
+        ███╗   ███╗  █████╗  ██████╗   ██████╗
+        ████╗ ████║ ██╔══██╗ ██╔══██╗ ██╔════╝
+        ██╔████╔██║ ███████║ ██████╔╝ ██║
+        ██║╚██╔╝██║ ██╔══██║ ██╔══██╗ ██║
+        ██║ ╚═╝ ██║ ██║  ██║ ██║  ██║ ╚██████╗
+        ╚═╝     ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝  ╚═════╝
+   ▄▖▄▖▄▖▄▖ multi · agent · relay · control ▄▖▄▖▄▖▄▖<span class="cursor" aria-hidden="true">_</span></h1>
+
+      <p class="pitch"><b>Multi-Agent Relay Control</b> — a Claude Code plugin that ops a whole engineering team in your channel.</p>
+      <p class="sub">Install a cross-repo team of AI engineering agents as a Claude Code plugin + self-marketplace. Type <code>/marc:tech-lead</code> and <b class="nick">@techlead</b> convenes the specialists it needs — <b>@dev</b>, <b>@sre</b>, <b>@design</b>, <b>@sec</b> — like an IRC op inviting the room.</p>
+      <div class="cta">
+        <a class="btn primary" href="#install">▶ /join #marc</a>
+        <a class="btn" href="https://github.com/NexaDuo/mARC" target="_blank" rel="noopener noreferrer">view source ↗</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- (2) ROSTER -->
+  <h2 class="section" id="roster">who's in the channel</h2>
+  <section class="win roster" aria-labelledby="roster">
+    <div class="titlebar">
+      <span class="chan">NAMES</span>
+      <span class="topic">#marc · 5 users · 1 operator</span>
+    </div>
+    <div class="body">
+      <ul class="names">
+        <li class="op">
+          <span class="sigil" aria-hidden="true">@</span>
+          <span>
+            <span class="nick">@techlead</span><span class="tag">channel op</span>
+            <span class="role">Leader &amp; router.</span>
+            <span class="desc">Reads the request, breaks it down, and convenes exactly the specialists the job needs. The only skill you invoke by hand: <code>/marc:tech-lead</code>.</span>
+          </span>
+        </li>
+        <li class="voice">
+          <span class="sigil" aria-hidden="true">+</span>
+          <span>
+            <span class="nick">@dev</span><span class="tag">engineering</span>
+            <span class="role">Feature work, refactors, tests.</span>
+            <span class="desc">Ships code across repos — implementation, bug fixes, and the regression tests that keep them fixed.</span>
+          </span>
+        </li>
+        <li class="voice">
+          <span class="sigil" aria-hidden="true">+</span>
+          <span>
+            <span class="nick">@sre</span><span class="tag">reliability</span>
+            <span class="role">Infra, deploys, observability.</span>
+            <span class="desc">Owns runtime health — pipelines, containers, logs/metrics, and self-healing diagnostics.</span>
+          </span>
+        </li>
+        <li class="voice">
+          <span class="sigil" aria-hidden="true">+</span>
+          <span>
+            <span class="nick">@design</span><span class="tag">front-end</span>
+            <span class="role">UI, UX, and the screens.</span>
+            <span class="desc">Builds the user-facing surfaces and flows, wired to real APIs — with the tests to guard them.</span>
+          </span>
+        </li>
+        <li class="voice">
+          <span class="sigil" aria-hidden="true">+</span>
+          <span>
+            <span class="nick">@sec</span><span class="tag">security</span>
+            <span class="role">Review &amp; the merge gate.</span>
+            <span class="desc">Audits changes before they land — the pre-merge security pass that guards the tree.</span>
+          </span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- (3) INSTALL -->
+  <h2 class="section" id="install">join the channel</h2>
+  <section class="win install" aria-labelledby="install">
+    <div class="titlebar">
+      <span class="chan">#marc</span>
+      <span class="topic">paste these into Claude Code</span>
+    </div>
+    <div class="body">
+
+      <div class="irc-line">
+        <span class="meta"><span class="you">you</span> — step 1 · add the marketplace</span>
+        <div class="cmd">
+          <span class="prompt" aria-hidden="true">&gt;</span>
+          <code id="cmd-mkt">/plugin marketplace add NexaDuo/mARC</code>
+          <button class="copy" type="button" data-copy="cmd-mkt" aria-label="Copy: add the mARC marketplace">copy</button>
+        </div>
+      </div>
+
+      <div class="irc-line">
+        <span class="meta"><span class="you">you</span> — step 2 · install the plugin (user scope)</span>
+        <div class="cmd">
+          <span class="prompt" aria-hidden="true">&gt;</span>
+          <code id="cmd-install">/plugin install marc@nexaduo</code>
+          <button class="copy" type="button" data-copy="cmd-install" aria-label="Copy: install the marc plugin">copy</button>
+        </div>
+      </div>
+
+      <div class="irc-line">
+        <span class="meta"><span class="who">@techlead</span> — has joined · op the channel with</span>
+        <div class="cmd">
+          <span class="prompt" aria-hidden="true">&gt;</span>
+          <code id="cmd-invoke">/marc:tech-lead</code>
+          <button class="copy" type="button" data-copy="cmd-invoke" aria-label="Copy: invoke the tech-lead skill">copy</button>
+        </div>
+      </div>
+
+      <div class="irc-line">
+        <span class="meta"><span class="you">shell</span> — prefer a terminal? the auditable one-liner (no <code>curl | sh</code>)</span>
+        <div class="cmd">
+          <span class="prompt" aria-hidden="true">$</span>
+          <code id="cmd-shell">git clone https://github.com/NexaDuo/mARC &amp;&amp; cd mARC &amp;&amp; ./install.sh</code>
+          <button class="copy" type="button" data-copy="cmd-shell" aria-label="Copy: clone and run install.sh">copy</button>
+        </div>
+      </div>
+
+      <p class="note">The shell path runs the repo's own <a href="https://github.com/NexaDuo/mARC/blob/main/install.sh" target="_blank" rel="noopener noreferrer"><code>install.sh</code></a> — it echoes every command before running it, fetches no remote code, and uses only Claude Code's built-in plugin mechanism. Read it before you run it.</p>
+    </div>
+  </section>
+
+  <!-- (4) FOOTER -->
+  <footer>
+    <span class="brand">mARC</span>
+    <span class="links">
+      <a href="https://github.com/NexaDuo/mARC" target="_blank" rel="noopener noreferrer">repository ↗</a>
+      <a href="https://github.com/NexaDuo/mARC#readme" target="_blank" rel="noopener noreferrer">README ↗</a>
+      <a href="https://github.com/NexaDuo/mARC/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License ↗</a>
+    </span>
+    <span style="flex:1"></span>
+    <span>© 2026 NexaDuo</span>
+  </footer>
+  <p class="signoff">*** No trackers. No analytics. No remote calls. This page is a single static file. ***</p>
+
+</main>
+
+<script>
+/* Only JS on the page: copy-to-clipboard for the install commands.
+   No network, no storage, no data collection. */
+(function () {
+  "use strict";
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    // Fallback for non-secure/older contexts.
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy") ? resolve() : reject();
+      } catch (e) {
+        reject(e);
+      } finally {
+        document.body.removeChild(ta);
+      }
+    });
+  }
+
+  document.querySelectorAll(".copy").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var el = document.getElementById(btn.getAttribute("data-copy"));
+      if (!el) return;
+      var text = el.textContent.trim();
+      copyText(text).then(function () {
+        var prev = btn.textContent;
+        btn.textContent = "copied ✓";
+        btn.classList.add("copied");
+        setTimeout(function () {
+          btn.textContent = prev;
+          btn.classList.remove("copied");
+        }, 1600);
+      }).catch(function () {
+        btn.textContent = "select & copy";
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
