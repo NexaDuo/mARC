@@ -1,0 +1,224 @@
+name: CI
+
+# First CI for NexaDuo/mARC (issue #5).
+# Proves — deterministically and at ZERO token cost — that the mARC plugin
+# VALIDATES, INSTALLS, and REGISTERS its skill/agents, including cross-repo.
+# There is no official Claude Code GitHub Action; we install the CLI via npm.
+#
+# Scope: Tier 1 (structural) + Tier 2 (install / cross-repo). No Tier 3
+# (headless execution) — that needs ANTHROPIC_API_KEY + real API cost and lives
+# in the disabled `execution-eval.yml` stub.
+#
+# Empirical finding (verified in-workflow, see the "auth boundary" step below):
+# `claude plugin install marc@nexaduo` runs WITHOUT ANTHROPIC_API_KEY and makes
+# no token-costing API call — it only clones/copies the marketplace repo. So the
+# gate uses the REAL install path and needs NO secret.
+
+on:
+  push:
+  pull_request:
+
+# Nothing here reads or needs any secret. Keep it that way (Tier 1 + Tier 2).
+permissions:
+  contents: read
+
+env:
+  # Pin the CLI for reproducibility. BUMP: bump this to adopt a newer Claude Code
+  # (latest verified working: 2.1.200). Node 22+ is required by the CLI.
+  CLAUDE_CODE_VERSION: "2.1.200"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Tier 1 — structural. Hard gate, no secret, no `claude` install needed except
+  # for `plugin validate`.
+  # ---------------------------------------------------------------------------
+  structural:
+    name: Tier 1 — structural
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code CLI (pinned)
+        run: |
+          npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      # 2. Plugin manifest validation. `--bare` for reproducible output.
+      #    NOTE: we intentionally do NOT pass `--strict`: the manifest carries a
+      #    `minimumVersion` field that the runtime tolerates but reports as an
+      #    "unknown field" warning. That warning is expected and benign — do not
+      #    "fix" it by deleting the field.
+      - name: claude plugin validate
+        run: claude --bare plugin validate harnesses/claude-code/marc
+
+      # 3. Both JSON manifests must parse.
+      - name: jq parse manifests
+        run: |
+          jq . .claude-plugin/marketplace.json > /dev/null
+          jq . harnesses/claude-code/marc/.claude-plugin/plugin.json > /dev/null
+
+      # 4. YAML frontmatter lint of every agent + skill file. Extracts the
+      #    `---`-delimited frontmatter and yaml.safe_load()s it. This catches the
+      #    class of bug where an unquoted `": "` inside a `description:` value
+      #    (e.g. the old security.md) makes the frontmatter invalid YAML and
+      #    silently breaks `plugin validate`.
+      - name: YAML frontmatter lint
+        run: |
+          python3 - <<'PY'
+          import glob, sys, yaml
+          files = sorted(
+              glob.glob("harnesses/claude-code/marc/agents/*.md")
+              + glob.glob("harnesses/claude-code/marc/skills/**/SKILL.md", recursive=True)
+          )
+          if not files:
+              print("ERROR: no agent/skill files found — glob paths wrong?")
+              sys.exit(1)
+          bad = 0
+          for f in files:
+              text = open(f, encoding="utf-8").read()
+              if not text.startswith("---"):
+                  print(f"FAIL {f}: missing frontmatter (no leading '---')")
+                  bad += 1
+                  continue
+              # frontmatter = between the first '---' and the next '---' line
+              parts = text.split("\n")
+              try:
+                  end = parts.index("---", 1)
+              except ValueError:
+                  print(f"FAIL {f}: unterminated frontmatter (no closing '---')")
+                  bad += 1
+                  continue
+              fm = "\n".join(parts[1:end])
+              try:
+                  data = yaml.safe_load(fm)
+              except yaml.YAMLError as e:
+                  print(f"FAIL {f}: frontmatter is not valid YAML: {e}")
+                  bad += 1
+                  continue
+              if not isinstance(data, dict) or "name" not in data:
+                  print(f"FAIL {f}: frontmatter missing required 'name' key")
+                  bad += 1
+                  continue
+              print(f"ok   {f}")
+          if bad:
+              print(f"\n{bad} file(s) failed frontmatter lint")
+              sys.exit(1)
+          print(f"\nAll {len(files)} frontmatter block(s) parsed OK")
+          PY
+
+      # 5. Anti-anchoring gate: the reusable, cross-repo agent/skill ROLE prose
+      #    must not hardcode this-repo/consumer specifics. The NexaDuo name is
+      #    allowed in the manifests / README / install.sh (branding); the gate is
+      #    scoped to agents/ + skills/ prose only.
+      - name: Anti-anchoring grep gate
+        run: |
+          if grep -rniE 'nexaduo|chat-services|run-stack|middleware/|chatwoot|dify|instagram' \
+               harnesses/claude-code/marc/agents \
+               harnesses/claude-code/marc/skills; then
+            echo "::error::Anti-anchoring gate: consumer/this-repo specifics found in agent/skill role prose (see hits above)."
+            exit 1
+          fi
+          echo "Anti-anchoring gate: clean (zero hits)."
+
+      # 6. Installer script static checks.
+      - name: shellcheck + bash -n install.sh
+        run: |
+          shellcheck install.sh
+          bash -n install.sh
+
+  # ---------------------------------------------------------------------------
+  # Tier 2 — install + cross-repo. Prefer no-auth. Uses an isolated,
+  # workspace-local CLAUDE_CONFIG_DIR so nothing leaks between steps/runners.
+  # ---------------------------------------------------------------------------
+  install:
+    name: Tier 2 — install + cross-repo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code CLI (pinned)
+        run: |
+          npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      # 9. Empirically determine the auth boundary, IN the runner, and record it
+      #    in the job log. This is the actual proof behind "no secret needed".
+      #    Runs with ANTHROPIC_API_KEY explicitly unset. If any step here failed
+      #    for lack of auth, the job would go red and we'd fall back per issue #5.
+      - name: Empirical auth-boundary probe (no ANTHROPIC_API_KEY)
+        env:
+          ANTHROPIC_API_KEY: ""
+          CLAUDE_CONFIG_DIR: ${{ github.workspace }}/.marc-probe
+        run: |
+          set -x
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          # These three are the whole Tier-2 chain; if install needed a key it
+          # would fail here with the key unset.
+          claude plugin marketplace add ./
+          claude plugin install marc@nexaduo
+          claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo")' > /dev/null
+          echo "AUTH-BOUNDARY: plugin install SUCCEEDED with no ANTHROPIC_API_KEY."
+
+      # 7. In-repo registration proof (fresh config dir).
+      #    `list --json` exposes the installed plugin; the per-plugin component
+      #    inventory (skills/agents) is exposed by `plugin details`, so we assert
+      #    the plugin via `list --json | jq -e` and the skill+agents via
+      #    `details` output.
+      - name: Tier 2 — in-repo registration
+        env:
+          ANTHROPIC_API_KEY: ""
+          CLAUDE_CONFIG_DIR: ${{ github.workspace }}/.marc-inrepo
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          claude plugin marketplace add ./
+          claude plugin install marc@nexaduo
+
+          echo "== assert plugin marc@nexaduo installed (list --json | jq -e) =="
+          claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
+
+          echo "== assert skill + agents registered (plugin details) =="
+          DETAILS="$(claude plugin details marc@nexaduo)"
+          echo "$DETAILS"
+          for component in tech-lead engineer sre design security; do
+            echo "$DETAILS" | grep -qiw "$component" \
+              || { echo "::error::component '$component' not registered in plugin details"; exit 1; }
+          done
+          echo "In-repo: plugin + tech-lead skill + engineer/sre/design/security agents all registered."
+
+      # 8. Cross-repo proof: from a working directory OUTSIDE the mARC checkout,
+      #    with its OWN fresh config dir, add the marketplace by pointing at the
+      #    mARC checkout path and prove registration there. This is the whole
+      #    point of packaging the team as a portable plugin.
+      - name: Tier 2 — cross-repo registration (outside the repo)
+        env:
+          ANTHROPIC_API_KEY: ""
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/.marc-xrepo-cfg
+          MARC_CHECKOUT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          SANDBOX="$(mktemp -d "${RUNNER_TEMP}/marc-consumer-XXXXXX")"
+          cd "$SANDBOX"
+          echo "consumer sandbox: $SANDBOX (outside $MARC_CHECKOUT)"
+
+          # Point the marketplace at the mARC checkout by absolute path.
+          claude plugin marketplace add "$MARC_CHECKOUT"
+          claude plugin install marc@nexaduo
+
+          claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
+          DETAILS="$(claude plugin details marc@nexaduo)"
+          echo "$DETAILS"
+          for component in tech-lead engineer sre design security; do
+            echo "$DETAILS" | grep -qiw "$component" \
+              || { echo "::error::cross-repo: component '$component' not registered"; exit 1; }
+          done
+          echo "Cross-repo: marc@nexaduo installs and registers from outside the mARC repo."

@@ -1,0 +1,49 @@
+name: Execution eval (Tier 3 — DISABLED stub)
+
+# -----------------------------------------------------------------------------
+# TIER 3 — HEADLESS EXECUTION. INTENTIONALLY DISABLED / NON-COSTING BY DEFAULT.
+# -----------------------------------------------------------------------------
+# Out of scope for the initial CI (issue #5). Unlike Tier 1/2 (which are
+# deterministic and cost ZERO tokens), Tier 3 actually RUNS the agents headless
+# (`claude --bare -p ...` / `claude plugin eval ...`), which:
+#   * REQUIRES an `ANTHROPIC_API_KEY` repo secret, and
+#   * makes real, token-COSTING API calls (non-deterministic output).
+#
+# It is therefore left as a `workflow_dispatch`-only stub: it never runs on
+# push/pull_request, so it costs nothing in the merge gate. It only runs if a
+# human manually dispatches it, AND even then it hard-stops immediately unless
+# the `ANTHROPIC_API_KEY` secret has been added — so it can never silently start
+# billing. To enable later: add the secret, then flesh out the eval step and
+# (optionally) add a `schedule:` for a nightly advisory run.
+#
+# See issue #5 (Tier 3 = follow-up) before enabling.
+# -----------------------------------------------------------------------------
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  execution-eval:
+    name: Tier 3 — headless execution (advisory, opt-in)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require ANTHROPIC_API_KEY (hard stop if absent)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::warning::Tier 3 execution eval is disabled: no ANTHROPIC_API_KEY secret set."
+            echo "This stub is intentionally inert. Add the secret and implement the eval"
+            echo "step (see issue #5) to enable headless, token-costing agent runs."
+            exit 1
+          fi
+          echo "ANTHROPIC_API_KEY present — implement the headless eval step here."
+          # Intentionally not implemented. Example (token-COSTING) shape:
+          #   npm i -g "@anthropic-ai/claude-code@2.1.200"
+          #   claude plugin marketplace add ./
+          #   claude plugin install marc@nexaduo
+          #   claude plugin eval marc@nexaduo   # runs evals/**/case.yaml
+          exit 1
