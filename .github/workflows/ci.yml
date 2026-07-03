@@ -149,6 +149,42 @@ jobs:
           shellcheck install.sh
           bash -n install.sh
 
+      # 7. Wordmark parity gate: the block-letter "mARC" wordmark is a copy-paste
+      #    duplicate across three surfaces (README banner, install.sh banner,
+      #    docs/index.html hero). They MUST stay byte-identical so the brand mark
+      #    never drifts. (Decision on issue #11: the block glyph stays uppercase
+      #    "MARC" — ANSI Shadow is a caps-only shadow font; lowercase renders as
+      #    caps and a bespoke x-height "m" breaks the grid/shadow style. Brand
+      #    case "mARC" is carried by the aria-label + all prose/taglines.)
+      - name: Wordmark parity gate
+        run: |
+          python3 - <<'PY'
+          import sys
+          FILES = ["README.md", "install.sh", "docs/index.html"]
+          def block(path):
+              lines = open(path, encoding="utf-8").read().split("\n")
+              # first row of the block starts (after indent) with the cap-M top "███╗"
+              start = next(i for i, l in enumerate(lines) if l.lstrip().startswith("███╗"))
+              # normalise trailing whitespace only: rows 3-4 legitimately shorter (C is open on the right)
+              return [l.rstrip() for l in lines[start:start + 6]]
+          ref = block(FILES[0])
+          bad = False
+          for f in FILES:
+              b = block(f)
+              if b != ref:
+                  print(f"FAIL {f}: wordmark block differs from {FILES[0]}")
+                  for r, (x, y) in enumerate(zip(ref, b)):
+                      if x != y:
+                          print(f"  row{r+1}: {FILES[0]!r}={x!r}  {f!r}={y!r}")
+                  bad = True
+              else:
+                  print(f"ok   {f}")
+          if bad:
+              print("\nWordmark parity gate: FAILED — the three wordmark surfaces have drifted.")
+              sys.exit(1)
+          print("\nWordmark parity gate: all three surfaces carry an identical 6-row block wordmark.")
+          PY
+
   # ---------------------------------------------------------------------------
   # Tier 2 — install + cross-repo. Prefer no-auth. Uses an isolated,
   # workspace-local CLAUDE_CONFIG_DIR so nothing leaks between steps/runners.
