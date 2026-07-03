@@ -228,29 +228,75 @@ validated success.
 
 ### 6. Capture process improvements where they live (not just in chat)
 When the user teaches you a new way to run the team — a board convention, a
-dispatch rule, a validation gate, a recurring constraint — **persist it into the
-versioned source**, not only into per-session memory:
-- Orchestration / board / dispatch process → **this skill file**
-  (`skills/tech-lead/SKILL.md` in the mARC plugin).
-- A rule specific to one discipline's execution → that **agent definition**
-  (`agents/{engineer,sre,design,security}.md` in the mARC plugin).
-- A durable architectural lesson or non-negotiable specific to a consuming repo →
-  **that repo's AGENTS.md** (not the plugin — keep the plugin generic).
-Personal memory is a convenience cache, not the team's source of truth. If a
-process tweak only lives in memory, the rest of the team (and a fresh session)
-never gets it.
+dispatch rule, a validation gate, a recurring constraint — **persist it where it
+belongs**, not only into per-session memory. Personal memory is a convenience
+cache, not the team's source of truth: if a process tweak only lives in memory,
+the rest of the team (and a fresh session) never gets it.
 
-**But don't pay the full cost every interaction.** Editing a versioned file +
-opening/merging a PR for each tiny tweak is token-expensive and noisy. Instead,
-**buffer and flush on a healthy cadence**:
+**BUT WHERE you persist it is gated by context.** The team ships as a plugin that
+runs inside *someone else's* repo. Editing the plugin's own source (this skill,
+the `agents/*.md`) or opening a pull request against the plugin's home repo is
+**only** legitimate when the current working repo *is* the plugin's source repo
+(dogfooding). In an end-user's repo those same edits are a privacy/ownership
+violation and are also futile — the running plugin files live in a read-only
+cache (`~/.claude/plugins/cache/...`) that is a no-op to edit and is overwritten
+on the next update.
+
+**Context detection — resolve this at runtime, generically (do NOT hardcode any
+org/user/repo slug).** You are in the **plugin source repo** when the current
+working tree contains this plugin's own definition — i.e. a file at
+`harnesses/claude-code/marc/.claude-plugin/plugin.json` whose `name` is `marc`
+(the repo whose `plugin.json` declares *this* plugin). Optionally cross-check that
+the discovered `gh` repo is that same plugin's home. If that file is not present
+in the working tree, treat the repo as an **end-user (consumer) repo**.
+
+```bash
+# Are we inside the mARC plugin's own source repo? (generic, slug-free)
+PLUGIN_MANIFEST="${CLAUDE_PROJECT_DIR:-.}/harnesses/claude-code/marc/.claude-plugin/plugin.json"
+if [ -f "$PLUGIN_MANIFEST" ] && [ "$(jq -r .name "$PLUGIN_MANIFEST" 2>/dev/null)" = "marc" ]; then
+  IN_PLUGIN_SOURCE_REPO=1   # dogfooding: plugin self-edits + upstream PRs allowed
+else
+  IN_PLUGIN_SOURCE_REPO=0   # consumer repo: plugin is read-only, local targets only
+fi
+```
+
+**If IN the plugin source repo (dogfooding) → current behavior applies:**
+- Orchestration / board / dispatch process → **this skill file**
+  (`skills/tech-lead/SKILL.md`).
+- A rule specific to one discipline's execution → that **agent definition**
+  (`agents/{engineer,sre,design,security}.md`).
+- You MAY edit these plugin files and open a PR against the plugin's own home
+  repo, and flush the buffer (below) into that versioned source.
+
+**If in ANY OTHER repo (end-user / consumer) — HARD PROHIBITION.** In a consumer
+repo you **MUST NOT** edit the plugin's skill/agent files, and you **MUST NOT**
+open an autonomous upstream pull request against the plugin's source repo. This is
+not advisory. Process improvements are persisted **only to the local, editable
+targets the operator owns**:
+- A durable architectural lesson or non-negotiable for this repo →
+  **this repo's `AGENTS.md`** (keep the plugin generic; never edit the plugin).
+- A team/board/dispatch convention scoped to this repo → **this repo's
+  `.claude/team.config`**.
+- Anything transient → the **personal `process-improvements-buffer` memory note**.
+
+A lesson that is genuinely upstream-worthy (would improve the plugin for
+*everyone*) is **NOT** acted on autonomously from a consumer repo. **Defer it to
+the sanctioned opt-in upstream channel (see issue #22)** — record it locally and
+surface it there; do not build or invoke that channel here.
+
+**Don't pay the full cost every interaction (applies to whichever target above).**
+Editing a versioned file + opening/merging a PR for each tiny tweak is
+token-expensive and noisy. Instead, **buffer and flush on a healthy cadence**:
 - **Buffer (cheap, every time):** append the tweak as a dated bullet to a
   `process-improvements-buffer` memory note. One line, near-zero cost.
-- **Flush (batched, periodic):** roll the buffer into the versioned
-  skill/agent file (or the consuming repo's AGENTS.md) in **one PR** when it's
-  worth it — a natural trigger is *≥ ~3 pending items* **or** *the oldest entry is
-  ≥ 3 days old* (whichever comes first), or when the user asks. Check the buffer's
-  age at the **start** of a tech-lead session and flush if it's stale; then clear
-  the flushed entries.
+- **Flush (batched, periodic):** roll the buffer into the appropriate versioned
+  target — **the plugin skill/agent file only when in the plugin source repo**,
+  otherwise the **consuming repo's AGENTS.md / team.config** — in **one PR** when
+  it's worth it. A natural trigger is *≥ ~3 pending items* **or** *the oldest
+  entry is ≥ 3 days old* (whichever comes first), or when the user asks. Check the
+  buffer's age at the **start** of a tech-lead session and flush if it's stale;
+  then clear the flushed entries. A flush must never target the plugin from a
+  consumer repo.
 - **Exception — flush immediately** when the tweak changes behavior that's active
   *right now* (e.g. a new dispatch rule that affects an in-flight specialist), or
   the user explicitly says "land this now". Correctness beats batching.
