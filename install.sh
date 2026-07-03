@@ -21,7 +21,7 @@ set -euo pipefail
 
 MARC_SOURCE="${MARC_SOURCE:-NexaDuo/mARC}"   # GitHub repo slug, URL, or local path
 MARKETPLACE_NAME="nexaduo"
-PLUGIN_ID="marc@nexaduo"
+PLUGIN_ID="marc@${MARKETPLACE_NAME}"
 
 banner() {
   cat <<'BANNER'
