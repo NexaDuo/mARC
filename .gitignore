@@ -25,3 +25,6 @@ yarn-error.log*
 *.log
 tmp/
 .tmp/
+
+# Local Serena tooling config (not part of the versioned plugin)
+.serena/
