@@ -4,6 +4,32 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-03
+
+Gate the tech-lead's self-improvement behavior by context (issue #20). The
+"capture process improvements into versioned source / buffer-flush" flow now
+distinguishes the plugin's own source repo (dogfooding) from an end-user's
+consuming repo, closing a privacy/ownership gap where the operator could edit the
+plugin or open autonomous upstream PRs from someone else's repo.
+
+### Changed
+- `skills/tech-lead/SKILL.md` — section 6 now **gates process-improvement capture
+  by context**, detected generically at runtime (the working tree contains this
+  plugin's own `harnesses/claude-code/marc/.claude-plugin/plugin.json` with
+  `name: marc`; no org/repo slug hardcoded). In the plugin source repo, plugin
+  self-edits + upstream PRs remain allowed. In **any other (consumer) repo** the
+  operator **MUST NOT** edit the plugin's skill/agent files or open an autonomous
+  upstream pull request; improvements land only in the consuming repo's
+  `AGENTS.md` / `.claude/team.config` / personal memory buffer, and genuinely
+  upstream-worthy lessons are deferred to the sanctioned opt-in upstream channel
+  (issue #22). Flush cadence updated to target the correct destination per context.
+
+### Added
+- `ci.yml` — deterministic Tier-1 "Self-improvement context-gating gate":
+  asserts the SKILL.md carries the context-detection probe and the explicit
+  prohibition on autonomous upstream PRs from a consumer repo, with a built-in
+  negative test that fails if the guard prose is removed. Zero-cost, no live model.
+
 ## [0.6.0] - 2026-07-03
 
 Dogfood refinements to the opt-in onboarding flow (`/marc:init` + the tech-lead

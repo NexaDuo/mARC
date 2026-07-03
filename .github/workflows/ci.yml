@@ -179,6 +179,54 @@ jobs:
           fi
           echo "Anti-anchoring gate: clean (zero hits)."
 
+      # 5b. Self-improvement context-gating gate (issue #20). The tech-lead skill
+      #     MUST gate its "capture process improvements into versioned source /
+      #     buffer-flush" behavior by context: plugin self-edits + upstream PRs
+      #     are legitimate ONLY in the plugin's own source repo (dogfooding); in a
+      #     consumer repo the operator MUST NOT edit the plugin or open autonomous
+      #     upstream PRs. This asserts the guard prose survives edits. Deterministic,
+      #     zero token cost — a grep over required guard phrases, no live model.
+      - name: Self-improvement context-gating gate
+        run: |
+          SKILL=harnesses/claude-code/marc/skills/tech-lead/SKILL.md
+          # Reusable check: every required guard phrase must be present in $1.
+          # Phrases are matched case-insensitively, each on its own line in the
+          # source, so a whole-file scan is unnecessary.
+          check_guard() {
+            f="$1"
+            test -f "$f" || { echo "::error::$f missing"; return 1; }
+            # (a) context detection is present and generic (runtime plugin.json probe).
+            grep -qiE 'gated by context' "$f" \
+              || { echo "::error::$f missing 'gated by context' rule"; return 1; }
+            grep -qiE '\.claude-plugin/plugin\.json' "$f" \
+              || { echo "::error::$f missing plugin.json context-detection probe"; return 1; }
+            # (b) explicit prohibition on editing the plugin from a consumer repo.
+            grep -qiE 'MUST NOT.*edit the plugin' "$f" \
+              || { echo "::error::$f missing 'MUST NOT edit the plugin' prohibition"; return 1; }
+            # (c) explicit prohibition on autonomous upstream PRs from a consumer repo.
+            grep -qiE 'autonomous upstream pull request' "$f" \
+              || { echo "::error::$f missing 'autonomous upstream pull request' prohibition"; return 1; }
+            # (d) upstream-worthy lessons deferred to the sanctioned opt-in channel.
+            grep -qiE 'issue #22' "$f" \
+              || { echo "::error::$f missing deferral to the opt-in upstream channel (issue #22)"; return 1; }
+            return 0
+          }
+
+          # POSITIVE: the shipped SKILL.md must carry every guard phrase.
+          check_guard "$SKILL" \
+            || { echo "::error::tech-lead SKILL.md failed the context-gating guard"; exit 1; }
+
+          # NEGATIVE: a copy with the upstream-PR prohibition stripped MUST fail,
+          # proving the gate actually catches regression of the guard prose.
+          tmp="$(mktemp)"
+          grep -v 'autonomous upstream pull request' "$SKILL" > "$tmp"
+          if check_guard "$tmp" > /dev/null 2>&1; then
+            echo "::error::negative test FAILED — guard passed after prohibition was removed"; rm -f "$tmp"; exit 1
+          fi
+          rm -f "$tmp"
+
+          echo "Context-gating gate: OK (detection + edit/upstream-PR prohibition + #22 deferral present; negative test caught removal)."
+
       # 6. Installer script static checks.
       - name: shellcheck + bash -n install.sh
         run: |
