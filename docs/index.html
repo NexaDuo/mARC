@@ -7,10 +7,19 @@
 <title>mARC :: Multi-Agent Relay Control</title>
 <meta name="description" content="mARC — Multi-Agent Relay Control: a Claude Code plugin that installs a cross-repo team of AI engineering agents. @techlead ops the #marc channel and convenes @dev, @sre, @design, @sec.">
 <!--
-  Single self-contained page. ALL CSS + JS inline. No external requests:
-  no CDN, no web fonts, no images, no analytics, no remote calls.
-  The only JS is a clipboard-copy handler (auditable below).
+  Single page. ALL CSS + first-party JS inline: no web fonts, no images.
+  This page loads Microsoft Clarity analytics (project xgtxocwnoz) from
+  clarity.ms — see the loader snippet below. The only first-party JS is a
+  clipboard-copy handler (auditable below).
 -->
+<!-- Microsoft Clarity (project xgtxocwnoz) — loads https://www.clarity.ms/tag/xgtxocwnoz -->
+<script type="text/javascript">
+  (function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+  })(window, document, "clarity", "script", "xgtxocwnoz");
+</script>
 <style>
   :root{
     --bg:#0b0b1a;
@@ -344,13 +353,14 @@
     <span style="flex:1"></span>
     <span>© 2026 NexaDuo</span>
   </footer>
-  <p class="signoff">*** No trackers. No analytics. No remote calls. This page is a single static file. ***</p>
+  <p class="signoff">*** One static page, styles inline. Microsoft Clarity is watching the channel for usage analytics. Everything else stays client-side. ***</p>
 
 </main>
 
 <script>
-/* Only JS on the page: copy-to-clipboard for the install commands.
-   No network, no storage, no data collection. */
+/* Only first-party JS on the page: copy-to-clipboard for the install commands.
+   This handler itself does no network, storage, or data collection —
+   analytics is handled separately by the Microsoft Clarity loader in <head>. */
 (function () {
   "use strict";
   function copyText(text) {
