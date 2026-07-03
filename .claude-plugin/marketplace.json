@@ -1,5 +1,5 @@
 {
-  "name": "marc",
+  "name": "nexaduo",
   "metadata": {
     "description": "The mARC self-marketplace — a single IRC/vaporwave-styled agent team (@techlead + engineer, sre, design, security) packaged as a portable, cross-repo Claude Code plugin."
   },
@@ -10,10 +10,7 @@
     {
       "name": "marc",
       "description": "mARC (Multi-Agent Relay Control) — IRC/vaporwave agent team: @techlead + engineer, sre, design, security specialists, packaged as a cross-repo Claude Code plugin.",
-      "source": {
-        "source": "github",
-        "repo": "NexaDuo/mARC"
-      }
+      "source": "./harnesses/claude-code/marc"
     }
   ]
 }

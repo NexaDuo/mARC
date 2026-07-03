@@ -31,5 +31,11 @@ brand layer.
 - `install.sh` — a safe, auditable installer (adds the marketplace + installs the
   plugin, prints the banner; no `curl | sh` of remote code).
 - `README.md`, `LICENSE` (MIT), `.gitignore`, `docs/team.config.example`.
+- Forward-compatible, multi-harness-ready layout: the Claude Code plugin is
+  nested under `harnesses/claude-code/marc/` (manifest, `skills/`, `agents/`,
+  `hooks/`), while the root `.claude-plugin/marketplace.json` (marketplace
+  `nexaduo`) lists it via a full `source` path. Leaders live as `skills/`,
+  specialists as a shared flat `agents/` pool, and future harnesses get their
+  own `harnesses/<harness>/` sibling. Documented in `docs/ARCHITECTURE.md`.
 
 [0.1.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.1.0

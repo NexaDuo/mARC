@@ -20,8 +20,8 @@
 set -euo pipefail
 
 MARC_SOURCE="${MARC_SOURCE:-NexaDuo/mARC}"   # GitHub repo slug, URL, or local path
-MARKETPLACE_NAME="marc"
-PLUGIN_ID="marc@marc"
+MARKETPLACE_NAME="nexaduo"
+PLUGIN_ID="marc@nexaduo"
 
 banner() {
   cat <<'BANNER'
@@ -60,7 +60,7 @@ main() {
   run claude plugin install "${PLUGIN_ID}"
 
   echo
-  echo "*** mARC installed. Open any repo and run /tech-lead to op the channel. ***"
+  echo "*** mARC installed. Open any repo and run /marc:tech-lead to op the channel. ***"
   echo "*** Update later with:  claude plugin update ${PLUGIN_ID}"
 }
 

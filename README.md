@@ -41,8 +41,10 @@ work on your GitHub Project board, then pings the right specialist to do it.
 | `@design`    | front-end            | UI screens, UX, end-to-end web flows                 |
 | `@sec`       | security (read-only) | pre-merge diff review — the mandatory merge gate     |
 
-`@techlead` is a **skill** (`/tech-lead`); `@dev`, `@sre`, `@design`, `@sec` are
-**subagents** it dispatches.
+`@techlead` is a **skill** (`/marc:tech-lead`); `@dev`, `@sre`, `@design`, `@sec`
+are **subagents** it dispatches. `@techlead` is the first of several leader
+skills — `founder`, `eng-director`, and `c-level` are the planned growth path,
+each convening the same shared specialist bench.
 
 ## Generic by design — per-repo binding lives in the consuming repo
 
@@ -64,7 +66,7 @@ each session (and a friendly note if none exists).
 
 ```
 /plugin marketplace add NexaDuo/mARC
-/plugin install marc@marc
+/plugin install marc@nexaduo
 ```
 
 Or run the auditable installer (adds the marketplace + installs the plugin, prints
@@ -74,13 +76,13 @@ the banner):
 ./install.sh
 ```
 
-After install, `@techlead` is available as `/tech-lead` in any repo, and it
+After install, `@techlead` is available as `/marc:tech-lead` in any repo, and it
 dispatches the specialist subagents on demand.
 
 ## Update
 
 ```
-claude plugin update marc@marc
+claude plugin update marc@nexaduo
 ```
 
 or, from within Claude Code:
@@ -102,14 +104,25 @@ a repo's own `.claude/` overrides the plugin, which overrides user config.
 
 ```
 .claude-plugin/
-  plugin.json          # plugin manifest (name marc, v0.1.0)
-  marketplace.json     # self-marketplace entry → github NexaDuo/mARC
-agents/                # @dev, @sre, @design, @sec subagents (genericized)
-skills/tech-lead/      # @techlead channel-operator skill (/tech-lead)
-hooks/hooks.json       # SessionStart → inject .claude/team.config
-docs/team.config.example
-install.sh             # safe, auditable installer + banner
+  marketplace.json               # marketplace "nexaduo" → lists the marc plugin
+harnesses/
+  claude-code/
+    marc/                        # THE Claude Code plugin
+      .claude-plugin/plugin.json # plugin manifest (name marc, v0.1.0)
+      skills/tech-lead/          # @techlead leader skill (/marc:tech-lead)
+      agents/                    # @dev, @sre, @design, @sec shared specialist bench
+      hooks/hooks.json           # SessionStart → inject .claude/team.config
+docs/
+  ARCHITECTURE.md                # growth model: leaders, specialists, harnesses
+  team.config.example
+install.sh                       # safe, auditable installer + banner
 ```
+
+The plugin is deliberately nested under `harnesses/claude-code/marc/` so the repo
+can grow **sideways** into other harnesses (`harnesses/cursor/…`,
+`harnesses/codex/…`) and **upward** into more leader skills (`founder`,
+`eng-director`, `c-level`) without reshuffling. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full growth model.
 
 ## License
 
