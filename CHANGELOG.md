@@ -4,6 +4,38 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-07-03
+
+Add the **opt-in upstream contribution channel** on top of the #20 context gate
+(issue #22): a two-tier self-improvement model. Tier 1 (default) keeps every
+field-lesson **local**; Tier 2 lets the operator **offer** to propose a
+generalizable lesson upstream — sanitized, human-approved, submitted as a
+fork-based PR under the user's own identity. **Never autonomous**, never
+auto-merged. Upstream contribution is an org-members pilot for now (issue #25 is
+the scheduled checkpoint to decide widening).
+
+### Added
+- `skills/tech-lead/SKILL.md` — section 6 now documents the **two-tier** model.
+  Tier 1 (local, automatic) is unchanged; Tier 2 (upstream, opt-in) is a strict
+  ordered flow: land locally first → offer (needs an explicit "yes") →
+  sanitize/generalize (send the lesson, not the raw context) → **show the human
+  the exact diff + PR body for approval** → open a fork-based PR against the
+  plugin's upstream repo (resolved at runtime, no hardcoded slug) under the user's
+  `gh` identity, labelled `field-lesson`. States the org-members pilot scope and
+  references issue #25. Prose stays generic (anti-anchoring intact).
+- `CONTRIBUTING.md` — how to contribute a field-lesson: opt-in, sanitized,
+  fork-based, pilot = org members, zero auto-merge, CI + @sec + human-maintainer
+  review required, high bar for skill/agent changes (injection surface).
+- `.github/PULL_REQUEST_TEMPLATE/field-lesson.md` — field-lesson PR template with
+  a sanitization checklist.
+- `field-lesson` GitHub label.
+
+### Changed
+- `.github/workflows/execution-eval.yml` — clarifying comment: Tier 3 (headless,
+  secret-bearing) is `workflow_dispatch`-only and therefore **never** runs on
+  `pull_request` from forks, so fork PRs (incl. field-lesson contributions) can
+  never reach `ANTHROPIC_API_KEY`. Tier 1/2 CI stays no-secret. No gate weakened.
+
 ## [0.7.0] - 2026-07-03
 
 Gate the tech-lead's self-improvement behavior by context (issue #20). The
