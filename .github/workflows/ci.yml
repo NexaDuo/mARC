@@ -312,6 +312,26 @@ jobs:
 
           echo "CHANGELOG parity gate: OK (plugin.json ${VERSION} has a '## [${VERSION}]' section; negative test rejected a missing version)."
 
+      # 9. actionlint — workflow schema + expression lint. Plain YAML parsing
+      #    (jq/yaml.safe_load) accepts a file that GitHub's stricter workflow
+      #    schema rejects at load time (a "startup_failure": no jobs ever run).
+      #    release.yml regressed exactly this way — an empty `${{ }}` expression
+      #    inside a run: block is valid YAML but an invalid Actions expression.
+      #    This gate catches that class of bug on the PR. Pinned + checksum-
+      #    verified (no curl|bash, no unpinned third-party action).
+      - name: actionlint (workflow schema + expression lint)
+        run: |
+          set -euo pipefail
+          ACTIONLINT_VERSION=1.7.7
+          ACTIONLINT_SHA256=023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSLo "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar xzf "$tarball" actionlint
+          # Lints every workflow under .github/workflows/. Non-zero on any issue.
+          ./actionlint -color
+
   # ---------------------------------------------------------------------------
   # Tier 2 — install + cross-repo. Prefer no-auth. Uses an isolated,
   # workspace-local CLAUDE_CONFIG_DIR so nothing leaks between steps/runners.

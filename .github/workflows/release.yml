@@ -46,9 +46,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # $GITHUB_REF_NAME is the tag (e.g. v0.8.0), expanded by the SHELL — not
-          # GitHub Actions `${{ }}` templating — so a tag name can never be
-          # interpolated into the workflow as code.
+          # $GITHUB_REF_NAME is the tag (e.g. v0.8.0), expanded by the SHELL, not
+          # by GitHub Actions expression templating — so a tag name can never be
+          # interpolated into the workflow as code. (Do NOT write a literal
+          # Actions expression here: inside a run: block GitHub evaluates that
+          # templating, and an empty one is a parse error → startup_failure.)
           tag="$GITHUB_REF_NAME"
           version="${tag#v}"
 
