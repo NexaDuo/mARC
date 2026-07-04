@@ -95,12 +95,21 @@ while read -r version sha; do
   git push "$REMOTE" "refs/tags/${tag}" || echo "  (tag ${tag} already on ${REMOTE})"
 
   # Idempotent release publish/update.
+  #
+  # NOTE: NO `--target` here. The tag is already created + pushed above (via the
+  # git remote, which for SSH is exempt from OAuth scopes), so it already pins
+  # the historical commit. Passing `--target <sha>` makes `gh` try to CREATE the
+  # tag ref itself over the API — and creating a ref at a commit that contains
+  # `.github/workflows/` files (true for v0.2.0+) requires the token's
+  # `workflow` OAuth scope. A plain `repo`-scoped token then fails with
+  # "workflow scope may be required". `--verify-tag` alone (tag must already
+  # exist) both asserts our push landed and needs no `workflow` scope.
   if gh release view "$tag" >/dev/null 2>&1; then
     gh release edit "$tag" --title "$tag" --notes-file "$notes"
     echo "updated release ${tag}"
   else
-    gh release create "$tag" --title "$tag" --notes-file "$notes" --target "$sha" --verify-tag
-    echo "created release ${tag} (target ${sha})"
+    gh release create "$tag" --title "$tag" --notes-file "$notes" --verify-tag
+    echo "created release ${tag} -> ${sha}"
   fi
   rm -f "$notes"
 done <<< "$MAPPING"
