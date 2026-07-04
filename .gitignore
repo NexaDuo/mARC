@@ -7,6 +7,10 @@
 # Per-repo binding is created in the CONSUMING repo, not here.
 # Ignore any stray copy so real values never land in the plugin repo.
 .claude/team.config
+# Personal, per-machine Claude Code overrides (e.g. a local ANTHROPIC_BASE_URL
+# proxy). Never commit — it would force everyone's settings. The shared
+# .claude/settings.json (enabledPlugins) IS committed; only the *.local one is not.
+.claude/settings.local.json
 
 # --- OS / editor cruft ---
 .DS_Store

@@ -48,6 +48,13 @@ than flagging the phantom changes.
   = full daemon control; a dev helper defaulting to `--dangerously-skip-permissions`.)
 - **Installer / script safety** — one-line installers and bootstrap scripts must
   not `curl|sh` unknown remote code, must be auditable, and must echo what they do.
+- **CI workflow integrity** — for `.github/workflows/*` changes: any tool downloaded
+  in a step must be version-pinned AND checksum-verified before it executes (no
+  `curl|bash`, no unpinned third-party action); triggers must not be
+  `pull_request_target` running untrusted code with secrets; `permissions:` must be
+  least-privilege. Also flag if the workflow won't load (GitHub `startup_failure` —
+  schema/expression validity, e.g. via actionlint): a review that checks only
+  logic/secrets misses a workflow that never runs.
 - **AuthZ / AuthN / CSRF** — auth checks on new routes, CSRF protection, cookie
   flags (Secure/HttpOnly/SameSite), session handling, SSL-redirect loops behind a
   reverse proxy / tunnel.

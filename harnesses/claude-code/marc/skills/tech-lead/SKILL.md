@@ -400,12 +400,40 @@ token-expensive and noisy. Instead, **buffer and flush on a healthy cadence**:
   cheaper than an issue+PR+revert. (Canonical miss: an ID assumed to belong to a
   third-party app drove a whole migration; it was actually the tenant's own app ID
   — a wrong assumption cost a reverted PR.)
+- **Search for prior art before you create.** Before opening an issue or dispatching,
+  check for an existing issue on the same topic (`gh issue list --search`) and for a
+  recorded decision (the repo's AGENTS.md, CI-gate comments, closed issues). A
+  duplicate issue wastes effort; worse, a change that silently *reverses a documented
+  decision* is a regression — one search is cheaper than the reverted PR. If a prior
+  decision exists and the user's ask contradicts it, surface the decision and let them
+  decide, don't quietly override it.
+- **Map the full blast radius of a shared asset.** Before you write "Affected surface",
+  grep the repo for the thing you're changing (a wordmark, constant, config value,
+  copied snippet) — an asset duplicated across several files, and any CI gate that
+  enforces their parity, are ALL in scope. A single-file spec for a multi-surface
+  asset yields a partial PR that breaks the parity gate.
 - **Empirical verification before the narrative.** Prove the mechanism (API probe,
   DB row, log) before writing the root-cause story, and tag each claim you relay as
   *verified* (you ran the check) or *assumed* (hypothesis).
 - **No premature success on async flows.** Don't report something as working until
   you've checked the *terminal state* (log line, `status` column, job result), not
   the "enqueued"/"created" step — a `200` on send can still flip to `failed`.
+- **Reviewed ≠ executed — automation isn't done until observed running green on its
+  real trigger.** A passing diff review, a green dry-run that *skips* the mutating
+  step, or a generic YAML parse do NOT prove behavior. Require the real run and the
+  real terminal state. For CI workflows specifically: confirm a real job ran (a
+  workflow can be valid YAML yet a GitHub `startup_failure` with zero jobs), lint
+  workflow files (e.g. actionlint) in CI so an unloadable workflow is caught in the
+  PR, and for a release/tag workflow observe it succeed on an actual tag before
+  calling it done. (Hard-won: three defects — a dry-run that skipped its own `git
+  tag`, a tag on a commit predating the workflow, an empty `${{ }}` in a run-block
+  comment — all passed review and only surfaced on real execution.)
+- **Isolate concurrent mutating dispatches.** Specialists that WRITE files in parallel
+  must each run in their own git worktree (`isolation: "worktree"` on the Agent call);
+  sharing one checkout lets one agent's branch switch or `checkout` clobber another's
+  in-flight edits. Read-only fan-out (e.g. a security review) may share the tree. When
+  two in-flight PRs touch the same file, expect a post-merge conflict and resolve the
+  second with `gh pr update-branch` — never re-cut the branch.
 - **Authoritative docs before the user hunts.** When the user must configure an
   external system, dispatch a research step for the *exact* labels/paths FIRST,
   then give ONE precise instruction — don't iterate live through wrong guesses.
