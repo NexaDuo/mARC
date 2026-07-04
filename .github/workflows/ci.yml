@@ -329,8 +329,15 @@ jobs:
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar xzf "$tarball" actionlint
-          # Lints every workflow under .github/workflows/. Non-zero on any issue.
-          ./actionlint -color
+          # Lint every workflow under .github/workflows/ for GitHub's workflow
+          # SCHEMA + EXPRESSION validity (the startup_failure class). We disable
+          # actionlint's embedded shellcheck/pyflakes integrations (-shellcheck=
+          # / -pyflakes=): those impose shell/python STYLE on run: scripts (e.g.
+          # SC2015 on the intentional `check … || { echo; exit 1; }` pattern used
+          # throughout this file) and are out of scope here — install.sh already
+          # has a dedicated shellcheck step. Expression checks (e.g. an empty
+          # Actions expression) are unaffected and still fail the gate.
+          ./actionlint -color -shellcheck= -pyflakes=
 
   # ---------------------------------------------------------------------------
   # Tier 2 — install + cross-repo. Prefer no-auth. Uses an isolated,
