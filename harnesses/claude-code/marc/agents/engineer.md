@@ -56,6 +56,18 @@ repository, not in this plugin. At the start of a task, discover them at runtime
 - **No premature success.** Report a fix as working only after checking the
   *terminal* state (status/log/job result), not the enqueue step — especially
   for async paths.
+- **CI workflows: prove they load AND run.** When you add or edit a
+  `.github/workflows/*` file, lint it (`actionlint`) and observe it actually
+  execute on its real trigger — a workflow can be valid YAML yet a GitHub
+  `startup_failure` (zero jobs ever run; e.g. an empty `${{ }}` expression, even
+  inside a run-block comment). A green diff review is not proof. For a release/tag
+  workflow, trigger it on a real tag and confirm a job reaches `success`.
+- **Guard scripts against ambient config.** A script must behave identically on any
+  machine regardless of the operator's global git/tool settings; pin the ones that
+  change behavior inline (e.g. `git -c tag.gpgsign=false tag …` — a user's
+  `tag.gpgsign=true` otherwise breaks lightweight `git tag`). Any `DRY_RUN` path
+  must exercise the *same* command it will run for real, not print-and-skip it —
+  a dry-run that skips the mutating call proves nothing about that call.
 
 ## Workflow
 1. Confirm scope from the issue's acceptance criteria; branch off `main`.
