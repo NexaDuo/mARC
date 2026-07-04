@@ -236,10 +236,14 @@ jobs:
       # 7. Wordmark parity gate: the block-letter "mARC" wordmark is a copy-paste
       #    duplicate across three surfaces (README banner, install.sh banner,
       #    docs/index.html hero). They MUST stay byte-identical so the brand mark
-      #    never drifts. (Decision on issue #11: the block glyph stays uppercase
-      #    "MARC" — ANSI Shadow is a caps-only shadow font; lowercase renders as
-      #    caps and a bespoke x-height "m" breaks the grid/shadow style. Brand
-      #    case "mARC" is carried by the aria-label + all prose/taglines.)
+      #    never drifts. (Decision on issue #11, REVISED 2026-07-04 by maintainer:
+      #    the leading glyph is now a bespoke lowercase x-height "m" (Candidate A)
+      #    rendered in the ANSI Shadow idiom (█ fills + ╗║╚═╝ edges) beside the
+      #    full-height "ARC" — m-width 11, total 38 cols, all unchanged from the
+      #    old cap-M. This REVERSES the earlier keep-uppercase call: a design pass
+      #    showed the x-height "m" stays on-grid and preserves the shadow style
+      #    without breaking it. Brand case "mARC" is still reinforced by the
+      #    aria-label + all prose/taglines.)
       - name: Wordmark parity gate
         run: |
           python3 - <<'PY'
@@ -247,8 +251,10 @@ jobs:
           FILES = ["README.md", "install.sh", "docs/index.html"]
           def block(path):
               lines = open(path, encoding="utf-8").read().split("\n")
-              # first row of the block starts (after indent) with the cap-M top "███╗"
-              start = next(i for i, l in enumerate(lines) if l.lstrip().startswith("███╗"))
+              # first row of the block is the "A" apex "█████╗": the leading
+              # lowercase "m" is blank on its top two rows, so the block's row 0
+              # is the ARC apex (the old cap-M top "███╗" no longer exists).
+              start = next(i for i, l in enumerate(lines) if l.lstrip().startswith("█████╗"))
               # normalise trailing whitespace only: rows 3-4 legitimately shorter (C is open on the right)
               return [l.rstrip() for l in lines[start:start + 6]]
           ref = block(FILES[0])
