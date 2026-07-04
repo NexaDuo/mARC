@@ -1,0 +1,69 @@
+name: Release
+
+# Tag-triggered GitHub Release surface (issue #26).
+# On push of a `vX.Y.Z` tag, extract the matching `## [X.Y.Z]` section from
+# CHANGELOG.md (the single source of truth) and publish — or, idempotently,
+# update — the GitHub Release with it. Releases are a human "what changed"
+# surface only; the update nudge (hooks/outdated-check.sh) reads plugin.json on
+# main via raw GitHub, NOT Releases, so this workflow is not update-check infra.
+#
+# Idempotency: the backfill (v0.1.0..v0.8.0) is created out-of-band by
+# scripts/backfill-releases.sh; if a tag this workflow sees already has a
+# Release, it UPDATES rather than errors — so a re-tag or a re-run never
+# double-creates or collides with the backfill.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Least privilege: creating/editing a Release needs only contents: write.
+# Nothing here reads a secret beyond the auto-provisioned GITHUB_TOKEN.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish/update Release from CHANGELOG
+    runs-on: ubuntu-latest
+    steps:
+      # Read CHANGELOG.md (the source of truth) and this extractor from the
+      # DEFAULT BRANCH, not the tagged commit. This is deliberate:
+      #   * the backfill tags (v0.1.0..v0.8.0) point at HISTORICAL commits that
+      #     predate this workflow, the extractor, and the later CHANGELOG
+      #     sections — checking out the tagged commit would break on them;
+      #   * CHANGELOG on the default branch is authoritative, so the release body
+      #     always matches it regardless of which commit a tag points at.
+      # The tag itself (repo metadata) still points at its own commit; only the
+      # release BODY is sourced from the default branch.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Publish or update the GitHub Release from the CHANGELOG (idempotent)
+        env:
+          # Standard auto-provisioned token; scoped by the job `permissions` above.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # $GITHUB_REF_NAME is the tag (e.g. v0.8.0), expanded by the SHELL — not
+          # GitHub Actions `${{ }}` templating — so a tag name can never be
+          # interpolated into the workflow as code.
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+
+          # Extract the section into a FILE. CHANGELOG text is passed to gh only
+          # via --notes-file, never on a command line, so its content can never
+          # be interpreted as shell.
+          bash scripts/changelog-section.sh "$version" CHANGELOG.md > release-notes.md
+          echo "== release notes for $tag =="
+          cat release-notes.md
+          echo "======================"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$tag" --notes-file release-notes.md
+            echo "Updated existing release $tag (idempotent path)."
+          else
+            gh release create "$tag" --title "$tag" --notes-file release-notes.md --verify-tag
+            echo "Created release $tag."
+          fi

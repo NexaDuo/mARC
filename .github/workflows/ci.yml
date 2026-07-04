@@ -275,6 +275,43 @@ jobs:
           print("\nWordmark parity gate: all three surfaces carry an identical 6-row block wordmark.")
           PY
 
+      # 8. CHANGELOG parity gate (issue #26): the shipped plugin version and the
+      #    CHANGELOG must never drift. Fail if `plugin.json` `.version` has no
+      #    matching `## [X.Y.Z]` section in CHANGELOG.md. This is the regression
+      #    guard for the release surface — a version bump that forgets its
+      #    CHANGELOG section (and therefore its Release body) is caught here on
+      #    the PR, before a tag is ever cut. Deterministic, zero token cost.
+      - name: CHANGELOG parity gate
+        run: |
+          PLUGIN=harnesses/claude-code/marc/.claude-plugin/plugin.json
+          CHANGELOG=CHANGELOG.md
+          # Reusable assertion: version $1 has a `## [$1]` section in $2.
+          check_parity() {
+            v="$1"; f="$2"
+            test -f "$f" || { echo "::error::$f missing"; return 1; }
+            # Anchor on the exact section header; the `[` is a literal, so escape
+            # it in the regex. Keep-a-Changelog header is `## [X.Y.Z] - date`.
+            grep -qE "^## \[${v}\]" "$f" \
+              || { echo "::error::$f has no '## [${v}]' section for plugin version ${v}"; return 1; }
+            return 0
+          }
+
+          VERSION="$(jq -r .version "$PLUGIN")"
+          test -n "$VERSION" && test "$VERSION" != "null" \
+            || { echo "::error::could not read .version from $PLUGIN"; exit 1; }
+
+          # POSITIVE: the shipped version must have its CHANGELOG section.
+          check_parity "$VERSION" "$CHANGELOG" \
+            || { echo "::error::CHANGELOG parity gate: plugin.json version ${VERSION} has no matching CHANGELOG section"; exit 1; }
+
+          # NEGATIVE: a version that is deliberately NOT in the CHANGELOG MUST
+          # fail, proving the gate actually catches drift.
+          if check_parity "9.9.9-nonexistent" "$CHANGELOG" > /dev/null 2>&1; then
+            echo "::error::negative test FAILED — parity gate passed for a version with no CHANGELOG section"; exit 1
+          fi
+
+          echo "CHANGELOG parity gate: OK (plugin.json ${VERSION} has a '## [${VERSION}]' section; negative test rejected a missing version)."
+
   # ---------------------------------------------------------------------------
   # Tier 2 — install + cross-repo. Prefer no-auth. Uses an isolated,
   # workspace-local CLAUDE_CONFIG_DIR so nothing leaks between steps/runners.
