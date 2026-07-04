@@ -17,9 +17,11 @@
 # Requires: gh (authenticated with contents:write), git, jq. Run from anywhere
 # in the repo. Set REMOTE (default: origin) if your push remote differs.
 #
-# DRY_RUN=1 verifies the mapping and prints what WOULD be tagged/released
-# (tag -> commit + the resolved release body) without creating or pushing
-# anything — use it to review the backfill before running it for real.
+# DRY_RUN=1 verifies the mapping AND actually exercises tag creation (in a
+# throwaway `refs/tags/dryrun-check/…` namespace that is immediately deleted),
+# then prints the resolved release body — WITHOUT creating the real tag, pushing,
+# or touching any Release. A green dry-run therefore proves `git tag` truly
+# succeeds under the caller's git config; it does not merely print the command.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -28,6 +30,16 @@ PLUGIN=harnesses/claude-code/marc/.claude-plugin/plugin.json
 REMOTE="${REMOTE:-origin}"
 DRY_RUN="${DRY_RUN:-0}"
 HERE="$(dirname "$0")"
+
+# Create tag $1 at commit $2 deterministically. `-c tag.gpgsign=false` overrides
+# any user/global `tag.gpgsign true`: without it, git turns this into a SIGNED
+# ANNOTATED tag that needs a GPG key + message and aborts with
+# `fatal: no tag message?` — the reproducibility bug this fix closes. We create
+# an ANNOTATED (`-a`) UNSIGNED tag with an explicit message (`-m`), which needs
+# no key and behaves identically on every machine.
+make_tag() {
+  git -c tag.gpgsign=false tag -a "$1" -m "mARC $1" "$2"
+}
 
 # version <space> historical commit that set it (derived: `git show <sha>:PLUGIN
 # | jq .version` is the first commit where X.Y.Z appears). Verified below.
@@ -59,7 +71,14 @@ while read -r version sha; do
   bash "${HERE}/changelog-section.sh" "$version" "$CHANGELOG" > "$notes"
 
   if [ "$DRY_RUN" = "1" ]; then
-    echo "── ${tag} -> ${sha} (verified plugin.json=${got}) ─────────────"
+    # Exercise the EXACT tag-creation codepath (make_tag) so this can never hide
+    # a signing/config bug again. Use a throwaway namespace and delete it — the
+    # real `refs/tags/${tag}` is never created and nothing is pushed.
+    probe="dryrun-check/${tag}"
+    git tag -d "$probe" >/dev/null 2>&1 || true
+    make_tag "$probe" "$sha"
+    git tag -d "$probe" >/dev/null
+    echo "── ${tag} -> ${sha} (verified plugin.json=${got}) | git tag OK ─────────────"
     echo "   release body ($(wc -l < "$notes") lines):"
     sed 's/^/   | /' "$notes"
     rm -f "$notes"
@@ -70,7 +89,7 @@ while read -r version sha; do
   if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
     echo "tag ${tag} already exists locally at $(git rev-parse "${tag}")"
   else
-    git tag "$tag" "$sha"
+    make_tag "$tag" "$sha"
     echo "created local tag ${tag} -> ${sha}"
   fi
   git push "$REMOTE" "refs/tags/${tag}" || echo "  (tag ${tag} already on ${REMOTE})"
