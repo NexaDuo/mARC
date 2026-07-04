@@ -228,4 +228,8 @@ brand layer.
   specialists as a shared flat `agents/` pool, and future harnesses get their
   own `harnesses/<harness>/` sibling. Documented in `docs/ARCHITECTURE.md`.
 
+[0.8.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.8.0
+[0.7.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.7.0
+[0.6.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.6.0
+[0.5.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.5.0
 [0.1.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.1.0
