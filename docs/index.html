@@ -175,6 +175,24 @@
   .role{color:var(--ink)}
   .desc{display:block;color:var(--dim);font-size:.9rem;margin-top:3px}
 
+  /* ---- features / channel directory (/list) ---- */
+  .chanlist .body{padding:6px 0}
+  ul.channels{list-style:none;margin:0;padding:0}
+  ul.channels li{
+    display:flex;gap:8px 14px;align-items:baseline;flex-wrap:wrap;
+    padding:13px clamp(14px,3.5vw,22px);
+    border-bottom:1px solid rgba(42,42,85,.6);
+  }
+  ul.channels li:last-child{border-bottom:0}
+  .chname{
+    flex:0 0 9.2em;min-width:0;
+    color:var(--cyan);font-weight:700;overflow-wrap:anywhere;
+  }
+  .chname::before{content:"#";color:var(--magenta);font-weight:900}
+  .chtopic{flex:1 1 240px;min-width:0;color:var(--dim);font-size:.9rem}
+  .chtopic b{color:var(--ink);font-weight:600}
+  .chtopic code{color:var(--amber)}
+
   /* ---- install / IRC exchange ---- */
   .install .body{padding:8px clamp(12px,3.5vw,22px) 20px;font-size:.94rem}
   .irc-line{padding:9px 0;border-bottom:1px dashed rgba(42,42,85,.55);}
@@ -212,6 +230,8 @@
 
   @media (max-width:560px){
     ul.names li{flex-direction:column;gap:4px}
+    ul.channels li{flex-direction:column;gap:4px}
+    ul.channels .chname{flex:0 0 auto}
     .titlebar .topic{display:none}
   }
 </style>
@@ -298,7 +318,52 @@
     </div>
   </section>
 
-  <!-- (3) INSTALL -->
+  <!-- (3) FEATURES — the /list channel directory -->
+  <h2 class="section" id="features">what's on the server</h2>
+  <section class="win chanlist" aria-labelledby="features">
+    <div class="titlebar">
+      <span class="chan">/LIST</span>
+      <span class="topic">marc.nexaduo.net · 8 channels</span>
+    </div>
+    <div class="body">
+      <ul class="channels">
+        <li>
+          <span class="chname">one-command</span><span class="tag">@techlead</span>
+          <span class="chtopic"><code>/marc:tech-lead</code> convenes the whole team — spec, board, dispatch in parallel, track to done.</span>
+        </li>
+        <li>
+          <span class="chname">every-repo</span><span class="tag">user-scope</span>
+          <span class="chtopic">install once as a user-scope plugin + self-marketplace — the team follows you into every repo you open.</span>
+        </li>
+        <li>
+          <span class="chname">the-board</span><span class="tag">source of truth</span>
+          <span class="chtopic">every demand lands as a real issue on your GitHub Project board, with an honest Status — Todo, In Progress, Blocked, Done.</span>
+        </li>
+        <li>
+          <span class="chname">zero-config</span><span class="tag">runtime</span>
+          <span class="chtopic">no hardcoded stack facts — the team discovers your repo, org, and board at runtime via <code>gh</code>.</span>
+        </li>
+        <li>
+          <span class="chname">marc-init</span><span class="tag">opt-in</span>
+          <span class="chtopic"><code>/marc:init</code> scaffolds <code>team.config</code> and prints it into every session — shows every file first, writes nothing without a yes.</span>
+        </li>
+        <li>
+          <span class="chname">merge-gate</span><span class="tag">@sec</span>
+          <span class="chtopic">read-only pre-merge diff review on every PR — blocks on high/critical findings.</span>
+        </li>
+        <li>
+          <span class="chname">lessons</span><span class="tag">two-tier</span>
+          <span class="chtopic">improvements buffer cheap, then flush into the versioned skills in one PR — the team actually learns.</span>
+        </li>
+        <li>
+          <span class="chname">install-sh</span><span class="tag">auditable</span>
+          <span class="chtopic"><code>install.sh</code> echoes every step, fetches no remote code, no <code>curl | sh</code> — read it before you run it.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- (4) INSTALL -->
   <h2 class="section" id="install">join the channel</h2>
   <section class="win install" aria-labelledby="install">
     <div class="titlebar">
@@ -347,7 +412,7 @@
     </div>
   </section>
 
-  <!-- (4) FOOTER -->
+  <!-- (5) FOOTER -->
   <footer>
     <span class="brand">mARC</span>
     <span class="links">
