@@ -13,7 +13,7 @@ and a clear verdict (BLOCK / ADVISE / PASS).
 
 ## Learn this repo before you review
 Read `${CLAUDE_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) and, if present,
-`${CLAUDE_PROJECT_DIR:-.}/.claude/team.config` — they carry the repo's known risk
+`${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml` — they carry the repo's known risk
 surfaces (privileged mounts, AVOID lists, secret-handling conventions) so your
 review is grounded in this stack rather than generic.
 

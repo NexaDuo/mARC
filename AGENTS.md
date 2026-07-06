@@ -40,7 +40,7 @@ MetaGPT, CrewAI, Claude Code Agent Teams) down to what holds for mARC:
 - **Anti-anchoring / genericization (hard gate):** everything under `harnesses/` must
   stay **stack-agnostic** — zero references to any consuming repo's stack. CI enforces
   this with a grep gate. Repo-specific facts belong in the *consuming* repo's
-  `AGENTS.md`/`.claude/team.config`, read at runtime — never hardcoded here.
+  `AGENTS.md`/`.claude/team.toml`, read at runtime — never hardcoded here.
 - **Keep this file minimal.** Record only what isn't discoverable by reading the repo.
   If agents repeat a mistake, tighten the linter/CI/test — don't grow prose here. LLMs
   anchor on whatever sits in context, including deprecated caveats.
@@ -50,7 +50,7 @@ MetaGPT, CrewAI, Claude Code Agent Teams) down to what holds for mARC:
   Never edit the plugin cache; auto-update is OFF for third-party marketplaces.
 - **Self-improvement is context-gated:** flush-to-source is allowed ONLY in this repo.
   When mARC runs *installed* in a user's repo, lessons persist **locally** (their
-  `AGENTS.md`/`team.config`/memory); product-level lessons become **opt-in,
+  `AGENTS.md`/`team.toml`/memory); product-level lessons become **opt-in,
   human-approved, sanitized** upstream PRs — never autonomous, never leaking user
   context. This machinery lives in a dedicated `@scribe` agent, not the tech-lead skill.
 - **No silent file writes** in any repo. Onboarding (`/marc:init`) is opt-in and shows
@@ -62,8 +62,8 @@ MetaGPT, CrewAI, Claude Code Agent Teams) down to what holds for mARC:
   stay strictly comment-only; the operator (`@techlead`) copies the issue comment into
   the file and lands it via a reviewed PR — never a direct commit, never a write
   carve-out for read-only agents. This binding is THIS repo's; consumer repos pin their
-  own via `team.config` (`workspace_dir=`) / their `AGENTS.md`.
-- **Zero-config is a feature:** the team must work in any repo with no `team.config`
+  own via `team.toml` (`workspace_dir`) / their `AGENTS.md`.
+- **Zero-config is a feature:** the team must work in any repo with no `team.toml`
   (runtime discovery via `gh` + session memory). Don't regress that.
 
 ## Release phases
@@ -79,7 +79,7 @@ hosted stack. Don't fake staging/prod phases. "Done" here means:
 - Validate locally with `claude plugin validate harnesses/claude-code/marc` (a benign
   `minimumVersion` "unknown field" warning is expected — don't "fix" it away).
 - The landing page (`docs/` → GitHub Pages → marc.nexaduo.com) is served DNS-only; a
-  `SessionStart` hook injects `team.config` and nudges on outdated versions.
+  `SessionStart` hook injects `team.toml` and nudges on outdated versions.
 
 ## Lessons
 - **Base freshness — branch from freshly-fetched `origin/main`.** Local `main` does NOT

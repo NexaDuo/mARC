@@ -4,6 +4,39 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-07-06
+
+The per-repo team binding moves from flat `key=value` `.claude/team.config` to
+**TOML** at `.claude/team.toml` (#51 — decided on the issue; decision record in
+`docs/marc/2026-07-06-decision-team-config-toml.md`). **Breaking change**,
+accepted while the project is early: the old file is no longer parsed by any
+component — re-run `/marc:init` (or convert by hand from
+`docs/team.toml.example`) to migrate.
+
+### Changed
+- **Binding format → TOML** (#51): native syntax highlighting (VS Code +
+  GitHub), typed values, native arrays for path lists
+  (`app_paths = ["src/", "services/"]`), and legal inline comments. Schema
+  discipline: every key name stays **unique across the whole file** so the
+  plugin's shell snippets keep extracting values with zero dependencies (no
+  `yq`/TOML CLI on consumer machines) via key-anchored `sed`.
+- **All parse/reference sites swept**: SessionStart hook, tech-lead discovery
+  block (new `toml_get` sed helper), `/marc:init` template (now emits TOML,
+  carries legacy values over and offers to delete the obsolete file), all five
+  specialist agent definitions, README/CONTRIBUTING/ARCHITECTURE/landing page.
+- **`docs/team.config.example` → `docs/team.toml.example`** (fully commented;
+  the `workspace_dir` containment rule carries over verbatim; remaining bare
+  team handles in comments backticked per the #47/#48 rule).
+- **Tier 1 CI — "team.toml schema contract"** replaces the key=value gate:
+  validates the example with `tomllib`, requires `gh_org`/`gh_repo`, enforces
+  file-wide key-name uniqueness, and proves the documented zero-dependency sed
+  extraction agrees with a real TOML parser (plus negative fixtures).
+
+### Deprecated
+- **`.claude/team.config`** (legacy): detected loudly, not parsed — the hook
+  and the tech-lead skill print a one-line migration notice pointing at
+  `/marc:init`.
+
 ## [0.10.0] - 2026-07-06
 
 Durable team artifacts get a home + a file-write policy (PEF, #46): specialist

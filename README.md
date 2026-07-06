@@ -54,14 +54,16 @@ that repo at runtime:
 
 - It reads the repo's `AGENTS.md` / `CLAUDE.md` for architecture, release phases,
   and lessons.
-- It reads that repo's **`.claude/team.config`** for the concrete bindings — gh
+- It reads that repo's **`.claude/team.toml`** for the concrete bindings — gh
   org/repo, project number, key paths, the validation command, release-phase
-  facts. See [`docs/team.config.example`](docs/team.config.example).
-- If `team.config` is absent, `@techlead` discovers the repo/project dynamically
+  facts. See [`docs/team.toml.example`](docs/team.toml.example).
+- If `team.toml` is absent, `@techlead` discovers the repo/project dynamically
   (`gh repo view`, `gh project list --owner <org>`) instead of guessing.
 
-A `SessionStart` hook prints the active `team.config` into context at the top of
-each session (and a friendly note if none exists).
+A `SessionStart` hook prints the active `team.toml` into context at the top of
+each session (and a friendly note if none exists — or a one-line deprecation
+notice if only a pre-0.11.0 `team.config` is found; re-run `/marc:init` to
+migrate).
 
 ## Install (user-scope → available in every repo)
 
@@ -110,8 +112,8 @@ pester you.
 
 ## Bind mARC to a repo (optional but recommended)
 
-Drop a `.claude/team.config` into the consuming repo (copy
-[`docs/team.config.example`](docs/team.config.example) and fill it in). This pins
+Drop a `.claude/team.toml` into the consuming repo (copy
+[`docs/team.toml.example`](docs/team.toml.example) and fill it in). This pins
 the GitHub org/repo, the Project number, the key source paths, and the validation
 command so `@techlead` and the specialists stop guessing. Precedence to remember:
 a repo's own `.claude/` overrides the plugin, which overrides user config.
@@ -127,10 +129,10 @@ harnesses/
       .claude-plugin/plugin.json # plugin manifest (name marc, v0.1.0)
       skills/tech-lead/          # @techlead leader skill (/marc:tech-lead)
       agents/                    # @dev, @sre, @design, @sec, @research shared specialist bench
-      hooks/hooks.json           # SessionStart → inject .claude/team.config
+      hooks/hooks.json           # SessionStart → inject .claude/team.toml
 docs/
   ARCHITECTURE.md                # growth model: leaders, specialists, harnesses
-  team.config.example
+  team.toml.example
 install.sh                       # safe, auditable installer + banner
 ```
 

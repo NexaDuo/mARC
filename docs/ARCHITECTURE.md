@@ -17,7 +17,7 @@ mARC/                                    # repo root
 │           └── hooks/hooks.json
 ├── docs/
 │   ├── ARCHITECTURE.md                  # this file
-│   └── team.config.example
+│   └── team.toml.example
 └── install.sh  README.md  LICENSE  CHANGELOG.md  .gitignore
 ```
 

@@ -13,7 +13,7 @@ you do **not** decide — you return **one cited brief** that lets the team deci
 
 ## Learn this repo before you search
 Read `${CLAUDE_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) and, if present,
-`${CLAUDE_PROJECT_DIR:-.}/.claude/team.config` — they carry the stack facts and
+`${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml` — they carry the stack facts and
 prior decisions your findings must speak to. Ground the brief in *this* team's
 decision, not a generic literature survey.
 
