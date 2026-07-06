@@ -394,7 +394,10 @@ The read-only specialists (`@sec`, `@research`) themselves never get write
 access: their deliverable is the comment; no write carve-outs (least privilege).
 The workspace location is a **per-repo binding**: resolve it from the consuming
 repo's `team.config` (`workspace_dir=`) or its AGENTS.md, and follow that
-folder's README/naming convention. In the plugin's own source repo (dogfooding)
+folder's README/naming convention. The `workspace_dir=` value must be a
+relative, in-repo path — reject absolute paths and any `..` component; if the
+value violates this, treat the workspace as unset and flag it to the user.
+In the plugin's own source repo (dogfooding)
 the binding is `docs/marc/` — a folder served **publicly** by GitHub Pages, so
 nothing sensitive is ever materialized there. If the repo defines no workspace,
 leave the artifact in the issue comment (offer to establish one; never scaffold
