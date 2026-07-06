@@ -416,8 +416,11 @@ token-expensive and noisy. Instead, **buffer and flush on a healthy cadence**:
 - [ ] End-to-end test in the repo's suite — OR justification why N/A
 
 ## Assignee
-@<dev|sre|design|sec>
+`@<dev|sre|design|sec|research>`
 ```
+
+(Note the backticks around the assignee handle: team handles collide with real
+GitHub usernames, so every handle in an issue/PR body must be escaped.)
 
 ---
 

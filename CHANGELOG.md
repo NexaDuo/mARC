@@ -4,6 +4,25 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-07-06
+
+Escape team handles in the tech-lead's GitHub-bound issue-body template — the
+handles collide with real GitHub usernames, and a bare mention in an issue body
+pings a stranger (#48; extends the #47 rule from prose guidance to the emitted
+template itself).
+
+### Fixed
+- **Issue-body template Assignee placeholder** in `skills/tech-lead/SKILL.md`
+  (#48): now backtick-escaped and lists all five specialists
+  (`@<dev|sre|design|sec|research>`); a note in the skill explains why.
+- **Tier 1 CI regression guard** (#48): new "Issue-template handle-escape gate"
+  step fails if the issue-body template block ever contains a bare team handle
+  outside backticks (positive + negative fixture, deterministic, zero token
+  cost).
+- **Historical hygiene** (#48, operational — no repo files): 14 existing issue
+  bodies (#1, #3, #5, #7, #9, #11, #13, #17, #22, #26, #30, #38, #39, #42)
+  sanitized in place, backtick-escaping only the bare team handles.
+
 ## [0.9.0] - 2026-07-06
 
 Add **`@research`**, the team's fifth specialist, plus the landing page's feature

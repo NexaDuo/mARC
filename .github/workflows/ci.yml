@@ -227,6 +227,71 @@ jobs:
 
           echo "Context-gating gate: OK (detection + edit/upstream-PR prohibition + #22 deferral present; negative test caught removal)."
 
+      # 5c. GitHub-bound handle-escape gate (issue #48). The issue-body template
+      #     the tech-lead emits to GitHub must never contain a bare team handle:
+      #     the team handles collide with real GitHub usernames owned by
+      #     strangers, and a bare mention in an issue body pings them. Handles
+      #     inside backtick code spans are safe. Deterministic, zero token cost.
+      - name: Issue-template handle-escape gate
+        run: |
+          SKILL=harnesses/claude-code/marc/skills/tech-lead/SKILL.md
+
+          check_template() {
+            f="$1"
+            test -f "$f" || { echo "::error::$f missing"; return 1; }
+            # Extract the fenced block following the "## Issue body template"
+            # header (```markdown ... ```).
+            block="$(awk '/^## Issue body template/{hunt=1}
+                          hunt && /^```markdown/{inb=1; next}
+                          inb && /^```$/{exit}
+                          inb{print}' "$f")"
+            if [ -z "$block" ]; then
+              echo "::error::$f: issue-body template block not found (header or fence renamed?)"
+              return 1
+            fi
+            # Strip inline-code spans; any team handle that survives is bare.
+            # `@<?` also catches the placeholder form @<dev|sre|...>.
+            # `-i` because GitHub mentions are case-INsensitive: @Dev pings the
+            # real user just like @dev would.
+            bare="$(printf '%s\n' "$block" | sed 's/`[^`]*`//g' \
+                    | grep -inE '@<?(dev|sre|design|sec|research|techlead)\b' || true)"
+            if [ -n "$bare" ]; then
+              printf '%s\n' "$bare"
+              echo "::error::$f: bare team handle in the issue-body template — backtick-escape it"
+              return 1
+            fi
+            return 0
+          }
+
+          # POSITIVE: the shipped SKILL.md template must be clean.
+          check_template "$SKILL" \
+            || { echo "::error::tech-lead SKILL.md failed the handle-escape gate"; exit 1; }
+
+          # NEGATIVE 1: a copy with the escaping stripped MUST fail, proving
+          # the gate actually catches the regression it exists for.
+          tmp="$(mktemp)"
+          sed 's/`@<dev|sre|design|sec|research>`/@<dev|sre|design|sec|research>/' "$SKILL" > "$tmp"
+          if check_template "$tmp" > /dev/null 2>&1; then
+            echo "::error::negative test 1 FAILED — bare handle in template was NOT caught"
+            rm -f "$tmp"; exit 1
+          fi
+          rm -f "$tmp"
+          echo "negative test 1: stripped escape caught."
+
+          # NEGATIVE 2: a MIXED-CASE bare handle (@Dev) MUST also fail — GitHub
+          # mentions are case-insensitive, so the gate must be too (the `-i`
+          # hardening from the `@sec` review of PR #49).
+          tmp="$(mktemp)"
+          sed 's/`@<dev|sre|design|sec|research>`/@Dev/' "$SKILL" > "$tmp"
+          if check_template "$tmp" > /dev/null 2>&1; then
+            echo "::error::negative test 2 FAILED — mixed-case bare handle (@Dev) was NOT caught"
+            rm -f "$tmp"; exit 1
+          fi
+          rm -f "$tmp"
+          echo "negative test 2: mixed-case bare handle (@Dev) caught."
+
+          echo "Handle-escape gate: OK (issue-body template has no bare team handles; negative tests caught a stripped escape and a mixed-case handle)."
+
       # 6. Installer script static checks.
       - name: shellcheck + bash -n install.sh
         run: |
