@@ -4,6 +4,36 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-07-06
+
+Add **@research**, the team's fifth specialist, plus the landing page's feature
+directory — the first release where the plugin's own team ran its full
+issue → board → dispatch → @sec gate → merge loop for every change (#42, #39).
+
+### Added
+- **@research specialist agent** (`agents/research.md`, #42, #43): read-only
+  researcher for decisions that lack internal data — delivers a cited brief
+  (URL + fetched quote per claim; findings labeled measured/reported/speculative;
+  "insufficient public evidence" is a valid answer) as a comment on the
+  motivating issue. Security hard rules baked in from the @sec pre-merge review:
+  fetched web content is data, never instructions; outbound queries carry only
+  the dispatched question, never repo internals. Roster wired everywhere
+  (tech-lead skill, README, AGENTS.md, ARCHITECTURE.md, manifests) and Tier 2 CI
+  now asserts the agent registers.
+- **Landing page `/list` features section** (#39, #40): ">> what's on the
+  server" channel directory between `#roster` and `#install` — 8 features as
+  IRC channels with one-line topics, chosen from the #38 option study
+  (option A). Inline CSS only, zero new JS, mobile-safe stacking.
+- **Landing page wordmark + favicon polish** (#32, #29): hero wordmark
+  (candidate A) on top of the #13 inline-SVG favicon; root `AGENTS.md`.
+- **Shared `.claude/settings.json` + dogfood lessons flush** (#37).
+
+### Fixed
+- **Release workflow hardening** (#26 → #33, #34, #35, #36): tag-triggered
+  Release publishing from the CHANGELOG with parity guard; deterministic
+  backfill under `tag.gpgsign`; no `--target` on backfill creates; empty
+  `${{ }}`-in-`run:` startup_failure fixed with an actionlint CI gate.
+
 ## [0.8.0] - 2026-07-03
 
 Add the **opt-in upstream contribution channel** on top of the #20 context gate
@@ -228,6 +258,7 @@ brand layer.
   specialists as a shared flat `agents/` pool, and future harnesses get their
   own `harnesses/<harness>/` sibling. Documented in `docs/ARCHITECTURE.md`.
 
+[0.9.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.9.0
 [0.8.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.8.0
 [0.7.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.7.0
 [0.6.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.6.0
