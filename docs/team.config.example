@@ -31,6 +31,18 @@ project_title=your-repo
 # Path (relative to repo root) to the file @techlead/specialists must respect.
 agents_doc=AGENTS.md
 
+# --- Team artifacts workspace (optional) ---
+# Folder (relative to repo root) where the OPERATOR materializes durable
+# specialist artifacts (research briefs, security reports, decision records)
+# from issue comments, landing them via reviewed PRs only. Read-only agents
+# (`@sec`/`@research`) never write it. The value MUST be a relative, in-repo
+# path — reject absolute paths and any `..` component; a violating value is
+# treated as unset and flagged to the user. Before choosing a path, check
+# whether it is publicly served (e.g. docs/ on GitHub Pages publishes on push)
+# — never put sensitive content in a published folder. Omit to keep artifacts
+# in issue comments only.
+workspace_dir=docs/marc
+
 # --- Key source paths (where the specialists do their work) ---
 # Comma-separated; adjust to the repo's real layout. Purely informational hints
 # that sharpen a dispatch spec — the specialists still read the tree themselves.

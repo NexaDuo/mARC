@@ -384,6 +384,25 @@ token-expensive and noisy. Instead, **buffer and flush on a healthy cadence**:
   *right now* (e.g. a new dispatch rule that affects an in-flight specialist), or
   the user explicitly says "land this now". Correctness beats batching.
 
+### 7. Materialize durable specialist artifacts (PEF file-write policy)
+When a `@sec`/`@research` deliverable posted on an issue is worth persisting
+beyond the thread (a research brief, a security report, a decision record),
+**you — the operator — materialize it**: copy the issue comment into a file in
+the repo's team-artifacts workspace (attribute the producing specialist, link
+the motivating issue) and land it **via a reviewed PR** — never a direct commit.
+The read-only specialists (`@sec`, `@research`) themselves never get write
+access: their deliverable is the comment; no write carve-outs (least privilege).
+The workspace location is a **per-repo binding**: resolve it from the consuming
+repo's `team.config` (`workspace_dir=`) or its AGENTS.md, and follow that
+folder's README/naming convention. The `workspace_dir=` value must be a
+relative, in-repo path — reject absolute paths and any `..` component; if the
+value violates this, treat the workspace as unset and flag it to the user.
+In the plugin's own source repo (dogfooding)
+the binding is `docs/marc/` — a folder served **publicly** by GitHub Pages, so
+nothing sensitive is ever materialized there. If the repo defines no workspace,
+leave the artifact in the issue comment (offer to establish one; never scaffold
+it silently).
+
 ---
 
 ## Issue body template

@@ -4,6 +4,30 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-07-06
+
+Durable team artifacts get a home + a file-write policy (PEF, #46): specialist
+deliverables worth keeping (`@research` briefs, `@sec` reports, decision
+records) are materialized by the operator into an in-repo, PR-gated workspace —
+in THIS repo, `docs/marc/`, which is **public by construction** (GitHub Pages).
+Read-only agents stay comment-only; no write carve-outs.
+
+### Added
+- **`docs/marc/` team-artifacts workspace** (#46): `README.md` documenting the
+  folder's purpose, the PUBLIC-exposure warning, what belongs there vs what
+  stays in issue comments, the `YYYY-MM-DD-<type>-<slug>.md` naming convention
+  (type ∈ `brief|secreport|decision`), and the operator-materialized, PR-gated
+  landing process. First inhabitant: the #46 `@research` brief itself
+  (`2026-07-06-brief-team-artifacts-file-write-policy.md`).
+- **Tech-lead skill step 7 — "Materialize durable specialist artifacts"**: the
+  operator copies a persist-worthy `@sec`/`@research` issue comment into the
+  repo's workspace and lands it via a reviewed PR; read-only agents never get
+  write access. The workspace location is a per-repo binding resolved from
+  `team.config`/AGENTS.md (`docs/marc/` is this repo's own binding).
+- **`workspace_dir=` key** in `docs/team.config.example` so consumer repos can
+  pin their own artifacts workspace (with a publish-exposure caveat).
+- **AGENTS.md constraint** recording the PEF convention as a durable lesson.
+
 ## [0.9.1] - 2026-07-06
 
 Escape team handles in the tech-lead's GitHub-bound issue-body template — the
