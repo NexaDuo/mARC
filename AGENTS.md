@@ -55,6 +55,14 @@ MetaGPT, CrewAI, Claude Code Agent Teams) down to what holds for mARC:
   context. This machinery lives in a dedicated `@scribe` agent, not the tech-lead skill.
 - **No silent file writes** in any repo. Onboarding (`/marc:init`) is opt-in and shows
   content before writing.
+- **Durable team artifacts (PEF, #46): `docs/marc/`, operator-materialized, PR-gated.**
+  `@research` briefs / `@sec` reports / decision records worth keeping land in
+  `docs/marc/` per its README (`YYYY-MM-DD-<type>-<slug>.md`). That folder is served
+  **publicly** by GitHub Pages — nothing sensitive goes there, ever. `@sec`/`@research`
+  stay strictly comment-only; the operator (`@techlead`) copies the issue comment into
+  the file and lands it via a reviewed PR — never a direct commit, never a write
+  carve-out for read-only agents. This binding is THIS repo's; consumer repos pin their
+  own via `team.config` (`workspace_dir=`) / their `AGENTS.md`.
 - **Zero-config is a feature:** the team must work in any repo with no `team.config`
   (runtime discovery via `gh` + session memory). Don't regress that.
 
