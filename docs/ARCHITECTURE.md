@@ -50,7 +50,7 @@ The specialists are subagents in a single flat `agents/` directory, shared by
 **every** leader:
 
 - `@dev` (`engineer.md`), `@sre` (`sre.md`), `@design` (`design.md`),
-  `@sec` (`security.md`).
+  `@sec` (`security.md`), `@research` (`research.md`).
 
 Any leader skill can convene any specialist — the bench is common infrastructure,
 not owned by a particular leader. New specialists are added by dropping another

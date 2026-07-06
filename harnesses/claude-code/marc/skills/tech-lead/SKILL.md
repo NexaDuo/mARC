@@ -6,8 +6,8 @@ description: >-
   demands discussed in the chat into well-detailed, ready-to-execute work, records
   them as the team's source of truth on the GitHub Project board (and Issues), then
   dispatches the work to the specialist subagents (@dev engineer, @sre, @design,
-  @sec security). Invoke with /tech-lead when you want to turn a discussion into
-  tracked, delegated tasks.
+  @sec security, @research researcher). Invoke with /tech-lead when you want to
+  turn a discussion into tracked, delegated tasks.
 ---
 
 # @techlead — Tech Lead / Channel Operator
@@ -22,7 +22,8 @@ turn that discussion into **tracked, sufficiently-detailed work** and then
   ├─ @dev      engineer     — app/service code, IaC, deploy scripts, schema, tests
   ├─ @sre      reliability  — deploy, observability, incidents, backups/DR, cost
   ├─ @design   front-end    — UI screens + UX, end-to-end web flows
-  └─ @sec      security     — pre-merge diff review (read-only gate)
+  ├─ @sec      security     — pre-merge diff review (read-only gate)
+  └─ @research researcher   — external evidence for decisions (read-only brief)
 ```
 
 ## Learn the consuming repo at runtime (no hardcoded stack facts)
@@ -179,6 +180,18 @@ Once an item is on the board, immediately ping the right specialist in the chann
 - `design` (@design) — UI screens and UX.
 - `security` (@sec) — review a PR diff for vulnerabilities before merge (the
   mandatory pre-merge gate; see Principles). Read-only reviewer, not an implementer.
+- `research` (@research) — fetch external evidence (benchmarks, papers,
+  post-mortems, official docs, comparable products) when a decision lacks internal
+  data and public evidence likely exists — and as the research pass BEFORE the
+  user must configure or choose an external system (the "authoritative docs before
+  the user hunts" principle, made dispatchable). Read-only: its only deliverable
+  is ONE cited brief commented on the motivating issue — no code, no PRs. Its
+  dispatch prompt MUST include: the **precise research question**, the **decision
+  at stake** (the options on the table), the **motivating issue number**, a
+  **timebox** (~8–15 sources read), and the required **output structure**
+  (TL;DR → findings with citations → implications for the decision → coverage &
+  gaps). "Insufficient public evidence" is an acceptable outcome — do not
+  re-dispatch just to force a positive answer.
 
 **Dispatch in the background by default — never block the channel on a specialist.**
 Pass `run_in_background: true` on every Agent call. You are re-invoked (notified)
@@ -264,7 +277,7 @@ fi
 - Orchestration / board / dispatch process → **this skill file**
   (`skills/tech-lead/SKILL.md`).
 - A rule specific to one discipline's execution → that **agent definition**
-  (`agents/{engineer,sre,design,security}.md`).
+  (`agents/{engineer,sre,design,security,research}.md`).
 - You MAY edit these plugin files and open a PR against the plugin's own home
   repo, and flush the buffer (below) into that versioned source.
 
@@ -435,8 +448,9 @@ token-expensive and noisy. Instead, **buffer and flush on a healthy cadence**:
   two in-flight PRs touch the same file, expect a post-merge conflict and resolve the
   second with `gh pr update-branch` — never re-cut the branch.
 - **Authoritative docs before the user hunts.** When the user must configure an
-  external system, dispatch a research step for the *exact* labels/paths FIRST,
-  then give ONE precise instruction — don't iterate live through wrong guesses.
+  external system, dispatch a research step (@research) for the *exact*
+  labels/paths FIRST, then give ONE precise instruction — don't iterate live
+  through wrong guesses.
 - **Surface silent infra failures proactively.** Broken backup crons, downed
   observability, dead file-providers should come from routine @sre audit passes,
   not from the user stumbling into them.

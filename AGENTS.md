@@ -2,7 +2,8 @@
 
 mARC (**Multi-Agent Relay Control**) is a Claude Code **plugin + self-marketplace**
 that packages a portable, cross-repo AI engineering team: `@techlead` (channel
-operator) convenes specialists `@dev`, `@sre`, `@design`, `@sec`. The team's
+operator) convenes specialists `@dev`, `@sre`, `@design`, `@sec`, `@research`. The
+team's
 *governance* travels via one plugin; each consuming repo keeps its own facts.
 
 **This repo is special: it is BOTH the product's source AND where the team dogfoods

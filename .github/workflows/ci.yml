@@ -397,11 +397,11 @@ jobs:
           echo "== assert skill + agents registered (plugin details) =="
           DETAILS="$(claude plugin details marc@nexaduo)"
           echo "$DETAILS"
-          for component in tech-lead engineer sre design security; do
+          for component in tech-lead engineer sre design security research; do
             echo "$DETAILS" | grep -qiw "$component" \
               || { echo "::error::component '$component' not registered in plugin details"; exit 1; }
           done
-          echo "In-repo: plugin + tech-lead skill + engineer/sre/design/security agents all registered."
+          echo "In-repo: plugin + tech-lead skill + engineer/sre/design/security/research agents all registered."
 
       # 8. Cross-repo proof: from a working directory OUTSIDE the mARC checkout,
       #    with its OWN fresh config dir, add the marketplace by pointing at the
@@ -426,7 +426,7 @@ jobs:
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
           DETAILS="$(claude plugin details marc@nexaduo)"
           echo "$DETAILS"
-          for component in tech-lead engineer sre design security; do
+          for component in tech-lead engineer sre design security research; do
             echo "$DETAILS" | grep -qiw "$component" \
               || { echo "::error::cross-repo: component '$component' not registered"; exit 1; }
           done
