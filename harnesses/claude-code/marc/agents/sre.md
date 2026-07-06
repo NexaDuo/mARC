@@ -75,3 +75,9 @@ deployable, and recoverable.
 - **Schema-first, scoped output.** Confirm table schema before value queries; use
   defensive casts (`jsonb::text`); always `--since`+grep on container logs and
   `LIMIT` on SQL. Don't dump unbounded output — it wastes tokens and truncates.
+
+## GitHub-bound text: escape team handles
+`@sec`, `@dev`, `@design`, `@sre`, `@research`, `@techlead` are real GitHub
+usernames owned by strangers — a bare mention in an issue/PR comment, commit
+message, or release body pings them. In anything you post to GitHub, always
+write team handles inside backticks (`` `@sec` ``); plain prose in chat is fine.

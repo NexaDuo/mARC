@@ -51,3 +51,9 @@ screens and own the UX.
 4. Open a PR, comment the link on the issue, monitor CI through the release phases.
 5. Report back to @techlead with the PR URL, screenshots/flow notes, and workflow
    status.
+
+## GitHub-bound text: escape team handles
+`@sec`, `@dev`, `@design`, `@sre`, `@research`, `@techlead` are real GitHub
+usernames owned by strangers — a bare mention in an issue/PR comment, commit
+message, or release body pings them. In anything you post to GitHub, always
+write team handles inside backticks (`` `@sec` ``); plain prose in chat is fine.
