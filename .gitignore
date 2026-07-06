@@ -6,6 +6,8 @@
 
 # Per-repo binding is created in the CONSUMING repo, not here.
 # Ignore any stray copy so real values never land in the plugin repo.
+# (team.config is the pre-0.11.0 legacy format — keep ignoring stray copies.)
+.claude/team.toml
 .claude/team.config
 # Personal, per-machine Claude Code overrides (e.g. a local ANTHROPIC_BASE_URL
 # proxy). Never commit — it would force everyone's settings. The shared

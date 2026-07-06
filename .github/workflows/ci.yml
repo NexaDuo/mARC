@@ -61,60 +61,77 @@ jobs:
           jq . .claude-plugin/marketplace.json > /dev/null
           jq . harnesses/claude-code/marc/.claude-plugin/plugin.json > /dev/null
 
-      # 3b. team.config schema contract. `/marc:init` (skills/init) prefills a
-      #     `.claude/team.config` from this canonical example, so the schema must
-      #     stay parseable as `key=value` and keep the required GitHub-binding
-      #     keys. This is a deterministic proxy for the generated file; validating
-      #     an actual /marc:init run needs a live model (Tier 3, out of CI scope).
-      - name: team.config schema contract
+      # 3b. team.toml schema contract (issue #51). `/marc:init` (skills/init)
+      #     prefills a `.claude/team.toml` from this canonical example, so it
+      #     must (a) parse as valid TOML, (b) keep the required GitHub-binding
+      #     keys, (c) keep every KEY NAME UNIQUE across the whole file — the
+      #     plugin's shell snippets extract values with ZERO dependencies (no
+      #     TOML CLI on consumer machines) via key-anchored sed, which silently
+      #     picks the wrong value if two sections reuse a name — and (d) stay
+      #     extractable by that exact sed pattern. python3/tomllib is fine HERE:
+      #     the zero-dependency rule applies to consumer machines at runtime,
+      #     not to CI runners. Deterministic, zero token cost.
+      - name: team.toml schema contract
         run: |
-          # Reusable assertion so we can also run a NEGATIVE test on a fixture.
-          # Asserts a team.config-style file is a clean key=value schema:
-          #   - every non-comment/non-blank line is `key=value`
-          #   - NO inline comment on a value line (naïve parser would eat it)
-          #   - required GitHub-binding keys present (gh_org, gh_repo)
-          # Deterministic, zero token cost — no live model run.
           check_schema() {
             f="$1"
-            test -f "$f" || { echo "::error::$f missing"; return 1; }
-            # value lines = non-blank, not starting with optional-ws then '#'.
-            vlines="$(grep -vE '^\s*(#|$)' "$f")"
-            # (a) every value line is key=value.
-            if printf '%s\n' "$vlines" | grep -vqE '^[A-Za-z_][A-Za-z0-9_]*=.*$'; then
-              printf '%s\n' "$vlines" | grep -vE '^[A-Za-z_][A-Za-z0-9_]*=.*$'
-              echo "::error::$f has a non key=value line"; return 1
-            fi
-            # (b) no inline comment on a value line: a '#' anywhere on a value
-            #     line means a comment was left inline after key=value.
-            if printf '%s\n' "$vlines" | grep -qE '#'; then
-              printf '%s\n' "$vlines" | grep -nE '#'
-              echo "::error::$f has an inline comment on a key=value line (comments must be on their own line)"; return 1
-            fi
-            # (c) required keys present.
-            for k in gh_org gh_repo; do
-              grep -qE "^${k}=" "$f" || { echo "::error::$f missing required key: $k"; return 1; }
-            done
-            return 0
+            python3 - "$f" <<'PY'
+          import sys, tomllib
+          path = sys.argv[1]
+          # (a) valid TOML.
+          try:
+              with open(path, "rb") as fh:
+                  data = tomllib.load(fh)
+          except (OSError, tomllib.TOMLDecodeError) as e:
+              print(f"::error::{path}: not valid TOML — {e}"); sys.exit(1)
+          # (c) key names unique across ALL sections (shell-extraction contract).
+          keys = [k for section in data.values() if isinstance(section, dict)
+                  for k in section]
+          dupes = sorted({k for k in keys if keys.count(k) > 1})
+          if dupes:
+              print(f"::error::{path}: key name(s) reused across sections "
+                    f"(breaks zero-dependency sed extraction): {dupes}")
+              sys.exit(1)
+          # (b) required GitHub-binding keys present.
+          gh = data.get("github", {})
+          missing = [k for k in ("gh_org", "gh_repo") if k not in gh]
+          if missing:
+              print(f"::error::{path}: missing required [github] key(s): {missing}")
+              sys.exit(1)
+          PY
           }
 
           # POSITIVE: the canonical example must pass.
-          check_schema docs/team.config.example \
-            || { echo "::error::team.config.example failed schema contract"; exit 1; }
+          check_schema docs/team.toml.example \
+            || { echo "::error::team.toml.example failed schema contract"; exit 1; }
 
-          # NEGATIVE: a fixture with an inline-comment value line MUST fail (b),
-          # proving the gate actually catches the dogfood bug it exists for.
+          # (d) The documented zero-dependency sed extraction must agree with a
+          # real TOML parser on the required keys.
+          for k in gh_org gh_repo; do
+            sed_val="$(sed -n 's/^ *'"$k"' *= *"\{0,1\}\([^"#]*\)"\{0,1\}.*/\1/p' docs/team.toml.example | sed 's/ *$//' | head -n1)"
+            py_val="$(python3 -c 'import sys, tomllib; print(tomllib.load(open("docs/team.toml.example","rb"))["github"][sys.argv[1]])' "$k")"
+            [ "$sed_val" = "$py_val" ] \
+              || { echo "::error::zero-dependency sed extraction of $k ('$sed_val') disagrees with tomllib ('$py_val')"; exit 1; }
+          done
+
+          # NEGATIVE 1: invalid TOML MUST be rejected.
           tmp="$(mktemp)"
-          printf '%s\n' \
-            '# fixture: inline comment on a value line must be rejected' \
-            'gh_org=YourOrg' \
-            'gh_repo=YourOrg/your-repo' \
-            'app_paths=infra/ # Pulumi' > "$tmp"
+          printf '%s\n' '[github]' 'gh_org = unquoted bare string' > "$tmp"
           if check_schema "$tmp" > /dev/null 2>&1; then
-            echo "::error::negative test FAILED — inline-comment fixture was NOT rejected"; rm -f "$tmp"; exit 1
+            echo "::error::negative test 1 FAILED — invalid TOML was NOT rejected"; rm -f "$tmp"; exit 1
+          fi
+
+          # NEGATIVE 2: a key name reused across sections MUST be rejected
+          # (it would silently break the sed-based extraction).
+          printf '%s\n' \
+            '[github]' 'gh_org = "YourOrg"' 'gh_repo = "YourOrg/your-repo"' \
+            '[paths]'  'gh_repo = "oops-reused-name"' > "$tmp"
+          if check_schema "$tmp" > /dev/null 2>&1; then
+            echo "::error::negative test 2 FAILED — duplicate key name across sections was NOT rejected"; rm -f "$tmp"; exit 1
           fi
           rm -f "$tmp"
 
-          echo "team.config schema contract: OK (key=value; no inline comments; gh_org/gh_repo present; negative test rejected inline comment)."
+          echo "team.toml schema contract: OK (valid TOML; gh_org/gh_repo present; key names unique file-wide; sed extraction agrees with tomllib; negative tests rejected invalid TOML + reused key name)."
 
       # 4. YAML frontmatter lint of every agent + skill file. Extracts the
       #    `---`-delimited frontmatter and yaml.safe_load()s it. This catches the

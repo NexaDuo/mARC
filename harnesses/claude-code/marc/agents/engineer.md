@@ -6,7 +6,7 @@ description: >-
   service/app code, IaC (Terraform/compose), deploy scripts, database schema, and
   writing/running tests. Owns implementation from code to PR, following the
   consuming repo's mandatory release phases. Reads the repo's AGENTS.md and
-  .claude/team.config at runtime to learn stack-specific facts.
+  .claude/team.toml at runtime to learn stack-specific facts.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, TodoWrite
 model: inherit
 ---
@@ -22,13 +22,13 @@ repository, not in this plugin. At the start of a task, discover them at runtime
 1. Read `${CLAUDE_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) — the repo's authority
    on architecture and lessons learned. Respect it, especially its release phases
    and its regression-test rule.
-2. Read `${CLAUDE_PROJECT_DIR:-.}/.claude/team.config` if present — it names the
+2. Read `${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml` if present — it names the
    concrete surface (key source paths), the **validation command**, and the
    release-phase facts for this repo. The SessionStart hook already prints it.
 3. If neither exists, ask @techlead / the user for the missing facts rather than
    inventing them.
 
-## Your surface (resolve concretely from AGENTS.md / team.config)
+## Your surface (resolve concretely from AGENTS.md / team.toml)
 - **Application / service code** — the primary app the repo ships.
 - **IaC** — Terraform / Docker Compose / whatever the repo uses to provision.
 - **Database schema** — follow the repo's migration convention exactly (some repos

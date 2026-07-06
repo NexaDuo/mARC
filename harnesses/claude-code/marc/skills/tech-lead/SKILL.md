@@ -32,20 +32,22 @@ when a session starts:
 1. Read `${CLAUDE_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) — the repo's
    authority on architecture and lessons learned. Respect it, especially its
    mandatory release phases and its regression-test rule.
-2. Read `${CLAUDE_PROJECT_DIR:-.}/.claude/team.config` if present — it pins the gh
+2. Read `${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml` if present — it pins the gh
    org/repo, project number, key source paths, the validation command, and the
    release-phase facts. The plugin's SessionStart hook already prints it into
-   context.
+   context. If only the legacy `.claude/team.config` exists, tell the user once:
+   the format moved to TOML — re-run `/marc:init` to migrate; do not parse the
+   legacy file.
 
 ### First-run offer: opt into a persistent binding (`/marc:init`)
-If **both** `AGENTS.md` **and** `.claude/team.config` are absent, this repo has no
+If **both** `AGENTS.md` **and** `.claude/team.toml` are absent, this repo has no
 persistent team binding — you are running purely on runtime discovery + session
 memory. That works (zero-config is a shipped feature), but session memory is
 **ephemeral**: next session re-discovers everything and any board/paths you
 learned are gone. Once, on this first run, **offer** to fix that:
 
 > You can pin this repo's facts with `/marc:init` — it scaffolds
-> `.claude/team.config` (and optionally a lean `AGENTS.md` skeleton) so the board,
+> `.claude/team.toml` (and optionally a lean `AGENTS.md` skeleton) so the board,
 > source paths, and validation command stay stable across sessions. It shows you
 > every file before writing and writes nothing without your explicit yes. Want me
 > to run it?
@@ -53,7 +55,7 @@ learned are gone. Once, on this first run, **offer** to fix that:
 Proceed to `/marc:init` **only on the user's confirmation**. If they decline,
 continue exactly as before — **do not** change any zero-config behavior, and do
 not re-offer every session (offer at most once unless the user asks). Never
-create `team.config`/`AGENTS.md` silently.
+create `team.toml`/`AGENTS.md` silently.
 
 ### Discover the target repo + project (mirror the dynamic Status-field pattern)
 Never hardcode a repo slug or project number. Resolve them once per session, in
@@ -61,17 +63,24 @@ this order (first hit wins), and cache the values:
 
 ```bash
 # --- ORG + REPO ---
-# 1. team.config wins if it declares them.
-CFG="${CLAUDE_PROJECT_DIR:-.}/.claude/team.config"
-GH_REPO=$( [ -f "$CFG" ] && sed -n 's/^gh_repo=//p' "$CFG" )
-GH_ORG=$(  [ -f "$CFG" ] && sed -n 's/^gh_org=//p'  "$CFG" )
+# 1. team.toml wins if it declares them. Zero-dependency TOML extraction (no
+#    yq / TOML CLI): key names are unique across the whole file by schema
+#    discipline, so a key-anchored sed is safe; the pattern tolerates optional
+#    quotes and inline comments.
+CFG="${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml"
+toml_get() { sed -n 's/^ *'"$1"' *= *"\{0,1\}\([^"#]*\)"\{0,1\}.*/\1/p' "$CFG" 2>/dev/null | sed 's/ *$//' | head -n1; }
+GH_REPO=$( [ -f "$CFG" ] && toml_get gh_repo )
+GH_ORG=$(  [ -f "$CFG" ] && toml_get gh_org  )
+# Legacy format? Break loudly, not silently — never parse the old file.
+[ ! -f "$CFG" ] && [ -f "${CLAUDE_PROJECT_DIR:-.}/.claude/team.config" ] \
+  && echo "DEPRECATED: .claude/team.config -> re-run /marc:init to migrate to .claude/team.toml"
 # 2. Else discover from the checked-out repo.
 : "${GH_REPO:=$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 : "${GH_ORG:=${GH_REPO%%/*}}"
 
 # --- PROJECT NUMBER ---
-# 1. team.config wins if it declares one (and it isn't a TODO placeholder).
-PROJ=$( [ -f "$CFG" ] && sed -n 's/^project_number=//p' "$CFG" )
+# 1. team.toml wins if it declares one (and it isn't a TODO placeholder).
+PROJ=$( [ -f "$CFG" ] && toml_get project_number )
 case "$PROJ" in TODO*|"") PROJ="" ;; esac
 # 2. Else LIST candidates (number + title) — do NOT auto-pick .projects[0].
 [ -z "$PROJ" ] && gh project list --owner "$GH_ORG" --format json \
@@ -111,7 +120,7 @@ when it has:
 - **Goal & context** — why this matters, what it unblocks.
 - **Acceptance criteria** — observable, testable conditions for "done".
 - **Affected surface** — concrete files/services/dirs, resolved from the repo's
-  AGENTS.md / team.config (never invented).
+  AGENTS.md / team.toml (never invented).
 - **Constraints** — anything from the repo's AGENTS.md that applies
   (reproducibility / no manual drift, protected data stores, tooling AVOID lists,
   config model, etc.).
@@ -310,7 +319,7 @@ targets the operator owns**:
 - A durable architectural lesson or non-negotiable for this repo →
   **this repo's `AGENTS.md`** (keep the plugin generic; never edit the plugin).
 - A team/board/dispatch convention scoped to this repo → **this repo's
-  `.claude/team.config`**.
+  `.claude/team.toml`**.
 - Anything transient → the **personal `process-improvements-buffer` memory note**.
 
 A lesson that is genuinely upstream-worthy (would improve the plugin for
@@ -320,7 +329,7 @@ plugin from a consumer repo without explicit human consent.
 
 **Tier 1 — default, local (every repo).** Exactly as above: the lesson lands in
 the local, editable targets the operator owns (this repo's `AGENTS.md` /
-`.claude/team.config` / the personal buffer). This is the **only** automatic path
+`.claude/team.toml` / the personal buffer). This is the **only** automatic path
 and where every lesson goes *first*. In a consumer repo Tier 1 is the whole story
 unless the human explicitly escalates — you still **MUST NOT** edit the plugin's
 own skill/agent files, and you still must not open any autonomous upstream PR.
@@ -374,7 +383,7 @@ token-expensive and noisy. Instead, **buffer and flush on a healthy cadence**:
   `process-improvements-buffer` memory note. One line, near-zero cost.
 - **Flush (batched, periodic):** roll the buffer into the appropriate versioned
   target — **the plugin skill/agent file only when in the plugin source repo**,
-  otherwise the **consuming repo's AGENTS.md / team.config** — in **one PR** when
+  otherwise the **consuming repo's AGENTS.md / team.toml** — in **one PR** when
   it's worth it. A natural trigger is *≥ ~3 pending items* **or** *the oldest
   entry is ≥ 3 days old* (whichever comes first), or when the user asks. Check the
   buffer's age at the **start** of a tech-lead session and flush if it's stale;
@@ -393,8 +402,8 @@ the motivating issue) and land it **via a reviewed PR** — never a direct commi
 The read-only specialists (`@sec`, `@research`) themselves never get write
 access: their deliverable is the comment; no write carve-outs (least privilege).
 The workspace location is a **per-repo binding**: resolve it from the consuming
-repo's `team.config` (`workspace_dir=`) or its AGENTS.md, and follow that
-folder's README/naming convention. The `workspace_dir=` value must be a
+repo's `team.toml` (`workspace_dir`) or its AGENTS.md, and follow that
+folder's README/naming convention. The `workspace_dir` value must be a
 relative, in-repo path — reject absolute paths and any `..` component; if the
 value violates this, treat the workspace as unset and flag it to the user.
 In the plugin's own source repo (dogfooding)

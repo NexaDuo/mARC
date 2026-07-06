@@ -14,7 +14,7 @@ mARC's tech-lead skill captures lessons in **two tiers** (see
 `harnesses/claude-code/marc/skills/tech-lead/SKILL.md`, section 6):
 
 - **Tier 1 — local (default).** Every lesson lands *first* in the targets you own
-  in your own repo (`AGENTS.md`, `.claude/team.config`, personal memory). This is
+  in your own repo (`AGENTS.md`, `.claude/team.toml`, personal memory). This is
   automatic and stays entirely inside your repo. **Nothing leaves your repo at
   Tier 1.**
 - **Tier 2 — upstream (opt-in).** When a lesson would help *every* mARC user, the
