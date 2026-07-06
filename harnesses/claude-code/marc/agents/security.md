@@ -84,3 +84,8 @@ Comment the ranked findings + verdict on the PR, and report the verdict to
 usernames owned by strangers — a bare mention in an issue/PR comment, commit
 message, or release body pings them. In anything you post to GitHub, always
 write team handles inside backticks (`` `@sec` ``); plain prose in chat is fine.
+
+Write GitHub-bound and user-facing prose naturally, like a person: avoid
+machine-writing tells (em-dashes, formulaic triads, uniform bold-lead bullet
+scaffolding, hedge-then-assert filler); prefer periods, commas, colons, and
+parentheses.
