@@ -232,6 +232,12 @@ criteria, the affected files, the constraints, and the explicit instruction to
 follow the repo's AGENTS.md release phases and regression-test rule. Tell each
 specialist to **comment its progress/PR link on the issue** when done.
 
+**Include a writing-style instruction in every dispatch prompt.** User-facing
+and GitHub-bound prose (briefs, issue and PR bodies, comments, docs) must read
+like a person wrote it: no em-dash, no formulaic triads, no uniform
+bullet-with-bold-lead scaffolding, no hedge-then-assert filler. Periods, commas,
+colons, and parentheses cover the need.
+
 **Escape team handles in ALL GitHub-bound text.** `@sec`, `@dev`, `@design`,
 `@sre`, `@research`, `@techlead` are REAL GitHub usernames owned by strangers.
 A bare `@handle` in an issue, PR body/comment, commit message, CHANGELOG entry,
@@ -397,6 +403,12 @@ token-expensive and noisy. Instead, **buffer and flush on a healthy cadence**:
   *right now* (e.g. a new dispatch rule that affects an in-flight specialist), or
   the user explicitly says "land this now". Correctness beats batching.
 
+**When a flush lands a new convention, sweep its own declaring file.** Grep the
+skill or agent file you are editing (and its sibling templates) for pre-existing
+violations of the rule you are adding, and prefer pairing the rule with an
+enforcing CI gate in the same PR: a rule whose own declaring file violates it
+keeps producing incidents until a second fix lands.
+
 ### 7. Materialize durable specialist artifacts (PEF file-write policy)
 When a `@sec`/`@research` deliverable posted on an issue is worth persisting
 beyond the thread (a research brief, a security report, a decision record),
@@ -502,7 +514,10 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   sharing one checkout lets one agent's branch switch or `checkout` clobber another's
   in-flight edits. Read-only fan-out (e.g. a security review) may share the tree. When
   two in-flight PRs touch the same file, expect a post-merge conflict and resolve the
-  second with `gh pr update-branch` — never re-cut the branch.
+  second with `gh pr update-branch` — never re-cut the branch. Worktree isolation is
+  enforced by you, the operator, at dispatch time: whenever more than one mutating
+  dispatch may be in flight, pass worktree isolation on every mutating dispatch. Do
+  not rely on specialists noticing a shared-checkout collision and self-recovering.
 - **Authoritative docs before the user hunts.** When the user must configure an
   external system, dispatch a research step (@research) for the *exact*
   labels/paths FIRST, then give ONE precise instruction — don't iterate live

@@ -4,6 +4,27 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-07-06
+
+Process-lessons flush (precedent: PR #47): three operator-buffer lessons land in
+the versioned skill/agent prose.
+
+### Changed
+- **Tech-lead skill: a new convention must sweep its own declaring file.** When
+  a flush lands a new rule, grep the file being edited (and sibling templates)
+  for pre-existing violations, and prefer pairing the rule with an enforcing CI
+  gate in the same PR.
+- **Tech-lead skill: worktree isolation is enforced at dispatch time.** The
+  operator passes worktree isolation on every mutating dispatch whenever more
+  than one may be in flight, instead of relying on specialists to self-recover
+  from shared-checkout collisions.
+- **Human writing style for team-authored prose.** The tech-lead dispatch
+  prompt now carries a writing-style instruction, and all five specialist
+  agents get matching guidance: user-facing and GitHub-bound prose (briefs,
+  issue/PR bodies, comments, docs) reads naturally, without machine-writing
+  tells (em-dashes, formulaic triads, uniform bold-lead bullet scaffolding,
+  hedge-then-assert filler).
+
 ## [0.11.0] - 2026-07-06
 
 The per-repo team binding moves from flat `key=value` `.claude/team.config` to
