@@ -68,6 +68,8 @@ this order (first hit wins), and cache the values:
 #    discipline, so a key-anchored sed is safe; the pattern tolerates optional
 #    quotes and inline comments.
 CFG="${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml"
+# toml_get: call with LITERAL key names only — the key is interpolated into the
+# sed program, so never pass dynamic/user-derived input as the argument.
 toml_get() { sed -n 's/^ *'"$1"' *= *"\{0,1\}\([^"#]*\)"\{0,1\}.*/\1/p' "$CFG" 2>/dev/null | sed 's/ *$//' | head -n1; }
 GH_REPO=$( [ -f "$CFG" ] && toml_get gh_repo )
 GH_ORG=$(  [ -f "$CFG" ] && toml_get gh_org  )
@@ -80,8 +82,10 @@ GH_ORG=$(  [ -f "$CFG" ] && toml_get gh_org  )
 
 # --- PROJECT NUMBER ---
 # 1. team.toml wins if it declares one (and it isn't a TODO placeholder).
+#    Must be strictly numeric — anything else (TODO, empty, a leading-dash
+#    value that would inject a flag into gh's positional arg) is discarded.
 PROJ=$( [ -f "$CFG" ] && toml_get project_number )
-case "$PROJ" in TODO*|"") PROJ="" ;; esac
+case "$PROJ" in *[!0-9]*|"") PROJ="" ;; esac
 # 2. Else LIST candidates (number + title) — do NOT auto-pick .projects[0].
 [ -z "$PROJ" ] && gh project list --owner "$GH_ORG" --format json \
   | jq -r '.projects[] | "\(.number)\t\(.title)"'
