@@ -12,6 +12,11 @@
    ▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘▀▘
 ```
 
+[![version](https://img.shields.io/github/v/release/NexaDuo/mARC?label=version&color=ff69b4)](https://github.com/NexaDuo/mARC/releases/latest)
+[![CI](https://github.com/NexaDuo/mARC/actions/workflows/ci.yml/badge.svg)](https://github.com/NexaDuo/mARC/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/github/license/NexaDuo/mARC?color=blueviolet)](LICENSE)
+[![site](https://img.shields.io/badge/site-marc.nexaduo.com-00e5ff)](https://marc.nexaduo.com)
+
 ```
 *** Now talking in #marc
 *** Topic: turn a discussion into tracked, delegated, shipped work
@@ -26,6 +31,20 @@ self-marketplace**, dressed in a retro/vaporwave **IRC** console aesthetic. It i
 **not** a new orchestration engine — Claude Code's Agent Teams already handle
 dispatch, parallelism, and isolation. mARC is the *package and the brand*: one
 generic team you install once, user-scope, and reuse across every repo.
+
+## Try it in two minutes
+
+Inside Claude Code:
+
+```
+/plugin marketplace add NexaDuo/mARC
+/plugin install marc@nexaduo
+/marc:tech-lead
+```
+
+That's the whole ritual: add the marketplace, install the plugin, summon the
+channel operator. Install details, updates, and per-repo binding are covered
+below.
 
 ## The metaphor — one channel, one op, a bench of specialists
 
@@ -65,15 +84,24 @@ each session (and a friendly note if none exists — or a one-line deprecation
 notice if only a pre-0.11.0 `team.config` is found; re-run `/marc:init` to
 migrate).
 
+## Receipts: this repo runs on mARC
+
+mARC is built by the team it ships. Every spec, dispatch, security review, and
+decision that produced this repo is public, so you can audit the process before
+trusting it:
+
+- the [Project board](https://github.com/orgs/NexaDuo/projects/2), where the
+  tech-lead records and tracks every task,
+- the [issues](https://github.com/NexaDuo/mARC/issues?q=is%3Aissue) and
+  [pull requests](https://github.com/NexaDuo/mARC/pulls?q=is%3Apr), with the
+  specs, findings comments, and pre-merge security reviews inline,
+- [`docs/marc/`](docs/marc/), the durable decision records and research briefs.
+
 ## Install (user-scope → available in every repo)
 
-```
-/plugin marketplace add NexaDuo/mARC
-/plugin install marc@nexaduo
-```
-
-Or run the auditable installer (adds the marketplace + installs the plugin, prints
-the banner):
+The quick-start block above is the whole install. Alternatively, run the
+auditable installer (adds the marketplace + installs the plugin, prints the
+banner):
 
 ```
 ./install.sh
@@ -112,10 +140,12 @@ pester you.
 
 ## Bind mARC to a repo (optional but recommended)
 
-Drop a `.claude/team.toml` into the consuming repo (copy
-[`docs/team.toml.example`](docs/team.toml.example) and fill it in). This pins
-the GitHub org/repo, the Project number, the key source paths, and the validation
-command so `@techlead` and the specialists stop guessing. Precedence to remember:
+Run **`/marc:init`** in the consuming repo. It scaffolds a `.claude/team.toml`
+pinning the GitHub org/repo, the Project number, the key source paths, and the
+validation command so `@techlead` and the specialists stop guessing, and it
+shows you every file before writing anything. Prefer doing it by hand? Copy
+[`docs/team.toml.example`](docs/team.toml.example) and fill it in; the result
+is the same. Precedence to remember:
 a repo's own `.claude/` overrides the plugin, which overrides user config.
 
 ## Layout
@@ -126,12 +156,15 @@ a repo's own `.claude/` overrides the plugin, which overrides user config.
 harnesses/
   claude-code/
     marc/                        # THE Claude Code plugin
-      .claude-plugin/plugin.json # plugin manifest (name marc, v0.1.0)
+      .claude-plugin/plugin.json # plugin manifest (name marc; version tracks the badge above)
       skills/tech-lead/          # @techlead leader skill (/marc:tech-lead)
+      skills/init/               # /marc:init, opt-in per-repo onboarding
       agents/                    # @dev, @sre, @design, @sec, @research shared specialist bench
       hooks/hooks.json           # SessionStart → inject .claude/team.toml
 docs/
   ARCHITECTURE.md                # growth model: leaders, specialists, harnesses
+  marc/                          # durable team artifacts: decision records, research briefs
+  posts/                         # launch post drafts + published links
   team.toml.example
 install.sh                       # safe, auditable installer + banner
 ```
