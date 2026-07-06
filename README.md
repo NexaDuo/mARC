@@ -17,7 +17,7 @@
 *** Topic: turn a discussion into tracked, delegated, shipped work
 --> @techlead has been given channel operator status
     @techlead: specialists, standby. i'll convene you when there's work.
-    @dev @sre @design @sec: ready.
+    @dev @sre @design @sec @research: ready.
 ```
 
 **mARC (Multi-Agent Relay Control)** packages a full software-delivery **agent
@@ -40,9 +40,10 @@ work on your GitHub Project board, then pings the right specialist to do it.
 | `@sre`       | reliability          | deploys, observability, incidents, backups/DR, cost  |
 | `@design`    | front-end            | UI screens, UX, end-to-end web flows                 |
 | `@sec`       | security (read-only) | pre-merge diff review — the mandatory merge gate     |
+| `@research`  | researcher (read-only) | external evidence — benchmarks, papers, docs — as a cited brief |
 
-`@techlead` is a **skill** (`/marc:tech-lead`); `@dev`, `@sre`, `@design`, `@sec`
-are **subagents** it dispatches. `@techlead` is the first of several leader
+`@techlead` is a **skill** (`/marc:tech-lead`); `@dev`, `@sre`, `@design`, `@sec`,
+`@research` are **subagents** it dispatches. `@techlead` is the first of several leader
 skills — `founder`, `eng-director`, and `c-level` are the planned growth path,
 each convening the same shared specialist bench.
 
@@ -125,7 +126,7 @@ harnesses/
     marc/                        # THE Claude Code plugin
       .claude-plugin/plugin.json # plugin manifest (name marc, v0.1.0)
       skills/tech-lead/          # @techlead leader skill (/marc:tech-lead)
-      agents/                    # @dev, @sre, @design, @sec shared specialist bench
+      agents/                    # @dev, @sre, @design, @sec, @research shared specialist bench
       hooks/hooks.json           # SessionStart → inject .claude/team.config
 docs/
   ARCHITECTURE.md                # growth model: leaders, specialists, harnesses
