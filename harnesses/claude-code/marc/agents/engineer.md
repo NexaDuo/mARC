@@ -87,3 +87,9 @@ repository, not in this plugin. At the start of a task, discover them at runtime
 - **Scope every tool output.** `SELECT` specific columns + always `LIMIT`; filter
   container logs by `--since` + a grep pattern; never dump unbounded output — it
   costs tokens and gets truncated anyway.
+
+## GitHub-bound text: escape team handles
+`@sec`, `@dev`, `@design`, `@sre`, `@research`, `@techlead` are real GitHub
+usernames owned by strangers — a bare mention in an issue/PR comment, commit
+message, or release body pings them. In anything you post to GitHub, always
+write team handles inside backticks (`` `@sec` ``); plain prose in chat is fine.

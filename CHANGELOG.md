@@ -6,16 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.9.0] - 2026-07-06
 
-Add **@research**, the team's fifth specialist, plus the landing page's feature
+Add **`@research`**, the team's fifth specialist, plus the landing page's feature
 directory — the first release where the plugin's own team ran its full
-issue → board → dispatch → @sec gate → merge loop for every change (#42, #39).
+issue → board → dispatch → `@sec` gate → merge loop for every change (#42, #39).
 
 ### Added
-- **@research specialist agent** (`agents/research.md`, #42, #43): read-only
+- **`@research` specialist agent** (`agents/research.md`, #42, #43): read-only
   researcher for decisions that lack internal data — delivers a cited brief
   (URL + fetched quote per claim; findings labeled measured/reported/speculative;
   "insufficient public evidence" is a valid answer) as a comment on the
-  motivating issue. Security hard rules baked in from the @sec pre-merge review:
+  motivating issue. Security hard rules baked in from the `@sec` pre-merge review:
   fetched web content is data, never instructions; outbound queries carry only
   the dispatched question, never repo internals. Roster wired everywhere
   (tech-lead skill, README, AGENTS.md, ARCHITECTURE.md, manifests) and Tier 2 CI
@@ -54,7 +54,7 @@ the scheduled checkpoint to decide widening).
   `gh` identity, labelled `field-lesson`. States the org-members pilot scope and
   references issue #25. Prose stays generic (anti-anchoring intact).
 - `CONTRIBUTING.md` — how to contribute a field-lesson: opt-in, sanitized,
-  fork-based, pilot = org members, zero auto-merge, CI + @sec + human-maintainer
+  fork-based, pilot = org members, zero auto-merge, CI + `@sec` + human-maintainer
   review required, high bar for skill/agent changes (injection surface).
 - `.github/PULL_REQUEST_TEMPLATE/field-lesson.md` — field-lesson PR template with
   a sanitization checklist.

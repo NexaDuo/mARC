@@ -219,6 +219,27 @@ criteria, the affected files, the constraints, and the explicit instruction to
 follow the repo's AGENTS.md release phases and regression-test rule. Tell each
 specialist to **comment its progress/PR link on the issue** when done.
 
+**Escape team handles in ALL GitHub-bound text.** `@sec`, `@dev`, `@design`,
+`@sre`, `@research`, `@techlead` are REAL GitHub usernames owned by strangers.
+A bare `@handle` in an issue, PR body/comment, commit message, CHANGELOG entry,
+or release body pings that stranger — and GitHub lists mentioned users as
+release "contributors" (a real dogfood incident: outside users were pinged and
+shown as contributors on a release). Always write team handles inside backticks
+(`` `@sec` ``) in anything that lands on GitHub, and instruct every specialist
+you dispatch to do the same in the comments/PRs they write. Chat/terminal text
+is exempt — only GitHub-bound text pings.
+
+**Reconcile the board against reality before dispatching.** At session start —
+and before dispatching any individual item — verify the item isn't ALREADY done:
+check the issue's comments/linked PRs and recent merges (`gh pr list --state
+merged`); a "Todo" item may be merged and live in production while the board
+lies (real dogfood incident: two issues sat Todo/dispatched while their PRs were
+merged and deployed — one dispatch nearly duplicated shipped work). The board is
+the source of truth for INTENT, but GitHub PRs/deploys are the source of truth
+for STATE; sync the board before acting on it, and never let a merge happen
+without the pre-merge `@sec` gate even when the work predates your session
+(recover with a retroactive review if you find one already merged).
+
 **Branch from freshly-fetched `origin/main`, always.** When you dispatch PRs in
 sequence (or merge one before another opens), instruct each specialist to cut its
 branch from the *remote* tip — `git fetch origin && git checkout -b <branch>
