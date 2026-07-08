@@ -105,7 +105,7 @@ you want the binding to persist across sessions, `/marc:init` scaffolds a
 `team.toml`, shows you every file before it writes anything, and writes nothing
 without your yes.
 
-The repo is the real landing page: **github.com/NexaDuo/mARC**. The whole
+The repo is the real landing page: **[github.com/NexaDuo/mARC](https://github.com/NexaDuo/mARC)**. The whole
 history of an AI team running itself is in there, embarrassments included.
 
 ---
@@ -177,7 +177,7 @@ command), `/marc:init` scaffolds a `team.toml`, shows you every file before
 writing, and writes nothing without your yes.
 
 The repo is the real landing page: every issue, PR, security review and decision
-record from the team running itself is public at **github.com/NexaDuo/mARC** —
+record from the team running itself is public at **[github.com/NexaDuo/mARC](https://github.com/NexaDuo/mARC)** —
 including the ones where it embarrassed us.
 
 ---
