@@ -4,6 +4,19 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2] - 2026-07-09
+
+Process-lessons flush (precedent: PR #47, #58): the release-tag operator lesson
+lands in the versioned tech-lead skill prose.
+
+### Changed
+- **Tech-lead skill: a version bump is not released until its tag is pushed and
+  the release workflow ran green.** New Principle codifies that a merged
+  manifest+CHANGELOG bump does not publish a release (the workflow is
+  tag-triggered), that tagging the merge commit and watching the release workflow
+  to green is part of "Done", and that release tags must be pushed one-per-push
+  (GitHub fires no workflow when more than three tags arrive in a single push).
+
 ## [0.11.1] - 2026-07-06
 
 Process-lessons flush (precedent: PR #47): three operator-buffer lessons land in

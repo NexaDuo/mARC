@@ -509,6 +509,19 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   calling it done. (Hard-won: three defects — a dry-run that skipped its own `git
   tag`, a tag on a commit predating the workflow, an empty `${{ }}` in a run-block
   comment — all passed review and only surfaced on real execution.)
+- **A version bump is not released until its tag is pushed and the release
+  workflow ran green.** Bumping the plugin manifest + CHANGELOG in a merged PR
+  does NOT publish a release: the release workflow is *tag-triggered*, so with no
+  tag it never fires and the GitHub Releases page silently lags the version in the
+  manifest. After merging a version-bumping PR, tag the merge commit and watch the
+  release workflow to green — that green run is part of "Done", not an optional
+  afterthought. And push release tags **one per push**: GitHub emits no push event
+  when more than three tags arrive in a single `git push`, so a batch
+  `git push origin t1 t2 t3 t4` lands every tag but fires zero workflows (tags
+  exist, releases don't). Confirm by the *published release* (terminal state), not
+  the push command's output. (Hard-won: four versions shipped in one day with
+  manifest+CHANGELOG bumps but no tags; Releases sat at the prior version until the
+  user noticed, and the batch-push recovery then fired nothing.)
 - **Isolate concurrent mutating dispatches.** Specialists that WRITE files in parallel
   must each run in their own git worktree (`isolation: "worktree"` on the Agent call);
   sharing one checkout lets one agent's branch switch or `checkout` clobber another's
