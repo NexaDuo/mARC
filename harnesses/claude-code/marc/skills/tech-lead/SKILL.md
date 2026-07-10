@@ -232,6 +232,36 @@ criteria, the affected files, the constraints, and the explicit instruction to
 follow the repo's AGENTS.md release phases and regression-test rule. Tell each
 specialist to **comment its progress/PR link on the issue** when done.
 
+**Cost discipline at dispatch time.** Specialists run long autonomous tool-loops;
+the cheapest lever on token budget is choosing the model and bounding the loop at
+dispatch, not after the spend. The rules below carry origin tags per the repo's
+rule-origin convention.
+<!-- rules:origin-required -->
+- **Model tier is `sonnet` by default; Opus is an explicit escape hatch.** Every
+  specialist runs on `model: sonnet` (pinned in each `agents/*.md`) — execution-heavy
+  roles are the whole point, and read-only roles are cheap wins too. You MAY dispatch
+  a *specific bounded item* on Opus when the reasoning genuinely needs it (say so in
+  the dispatch and keep it scoped to that item); never flip the default. (origin: #69 · 2026-07-10)
+- **Bounded dispatch — never issue an open-ended `continue`.** Every dispatch (and
+  every resume of a background agent) carries explicit stop criteria and an informal
+  tool-call budget: "if you exceed ~N calls without converging, stop and report what
+  you found and what's blocking." An unbounded "keep going" turns one stuck loop into
+  runaway spend. Pick N from the task's shape (a small fix ~20, a full implement-test-PR
+  cycle larger). (origin: #69 · 2026-07-10)
+- **Reference, don't embed — pass paths, not blobs.** In dispatch prompts, hand the
+  specialist file/image *paths* (and issue/PR numbers), never pasted file contents or
+  base64 image data. The specialist reads what it needs on its own cheap tier; pasting
+  a blob re-bills it at the operator's tier and bloats every downstream turn's context.
+  (origin: #69 · 2026-07-10)
+
+**Operator self-check — token-throughput sentinel.** Between dispatches you can spot a
+runaway loop offline (no network, zero token cost) with the bundled script
+`scripts/token_sentinel.py`: it reads a Claude Code session `.jsonl` and reports, per
+user turn, the model, tool-call count, and tokens processed, flagging turns that cross
+a call or token threshold. Run `python3 scripts/token_sentinel.py` (defaults to the
+newest session log for the current project) after a heavy run to confirm the tiering
+and bounds above are actually holding. (origin: #69 · 2026-07-10)
+
 **Include a writing-style instruction in every dispatch prompt.** User-facing
 and GitHub-bound prose (briefs, issue and PR bodies, comments, docs) must read
 like a person wrote it: no em-dash, no formulaic triads, no uniform
