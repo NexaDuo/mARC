@@ -8,7 +8,10 @@ description: >-
   .claude/team.toml at runtime to learn stack-specific facts; reuses any
   routine-audit skill the repo provides.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, TodoWrite
-model: inherit
+# Pinned to sonnet (was inherit): specialists run long autonomous tool-loops with
+# fat re-read context, so the default (often Opus) multiplied worst-case token spend.
+# The operator may still Opus-override a specific bounded item when reasoning needs it.
+model: sonnet
 ---
 
 # @sre — SRE Specialist

@@ -4,6 +4,31 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-07-10
+
+Dispatch-time token-budget guardrails (#69): three low-cost levers to bound the
+worst-case token spend of background specialist loops.
+
+### Changed
+- **Specialist agents pinned to `model: sonnet`.** All five specialists (`@dev`,
+  `@sre`, `@design`, `@sec`, `@research`) were running on the operator's default
+  tier (often the most expensive), which multiplied cost across long autonomous
+  tool-loops with fat re-read context. They now pin `sonnet` in their frontmatter;
+  the operator keeps an explicit Opus escape hatch for a specific bounded item when
+  the reasoning genuinely needs it. The `@techlead` operator model is unchanged.
+- **Tech-lead skill §4: bounded-dispatch conventions.** New origin-tagged rules
+  add the model-tier default plus Opus-override, a bounded-dispatch rule (never
+  issue an open-ended `continue`; every dispatch carries stop criteria and an
+  informal tool-call budget), and a reference-don't-embed rule (pass file/image
+  paths in dispatch prompts, never pasted blobs).
+
+### Added
+- **Token-throughput sentinel script** (`scripts/token_sentinel.py`): an offline,
+  zero-cost operator self-check that reads a Claude Code session `.jsonl` and
+  reports per user turn the model, tool-call count, and tokens processed
+  (input + cache_read + cache_creation), flagging runaway turns against
+  configurable call/token thresholds. Referenced from the tech-lead skill.
+
 ## [0.11.2] - 2026-07-09
 
 Process-lessons flush (precedent: PR #47, #58): the release-tag operator lesson
