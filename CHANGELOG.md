@@ -4,6 +4,47 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-07-12
+
+Mid-session model-switch guard (#73): a third, distinct cost guard alongside the
+runaway-loop guards of #69/#71. Switching the model mid-session invalidates the
+prompt cache — the prefix cached under model A cannot be reused by model B, so
+B's next call is a full cache-write of the whole context instead of a cheap
+cache-read, and flip-flopping repeats that cost.
+
+### Added
+- **Warn-only mid-session model-switch detection** in the shared
+  `token_sentinel.py --hook` logic. It flags a genuine MAIN-thread A->B model
+  change that carries the cache-invalidation fingerprint (a spike in
+  `cache_creation_input_tokens` with `cache_read_input_tokens` collapsing — the
+  inverse of steady state), and emits the SAME non-blocking channels as #71
+  (`hookSpecificOutput.additionalContext` + `systemMessage`, no `decision`,
+  always exit 0). The advisory names the switch (A->B) and the ~NK-token context
+  that was re-cached, and suggests escalating at a natural context break or
+  running `/compact` first. Debounced to once per genuine switch event (keyed by
+  turn + from/to) so repeated tool calls in the same turn stay silent; a later
+  flip re-arms. Re-cache write floor tunable via `MARC_MODEL_SWITCH_MIN_CACHE_WRITE`
+  (default 20000). If both the runaway (#71) and switch (#73) guards fire on one
+  tool call, their advisories merge into a single non-blocking payload.
+- **False-positive trap handled.** With #69 model tiering, specialist subagents
+  run on Sonnet while the operator runs Opus. The detector compares models ONLY
+  within the main session's linear turn sequence and ignores any transcript entry
+  marked `isSidechain: true` (a subagent/sidechain runs in a separate context and
+  cache), so a dispatch never fires a false switch warning. The first model in a
+  session is never treated as a switch.
+- **Self-test coverage** (`scripts/test_token_sentinel.py`, CI Tier 1): a
+  main-thread A->B switch with the cache-write spike warns exactly once;
+  steady-state same-model turns never warn; a subagent/sidechain on a different
+  model never warns (the false-positive trap); the initial model is never a
+  switch; a switch without the cache-write spike stays silent; the hook always
+  exits 0.
+
+### Changed
+- **Tech-lead skill: note the model-switch guard.** An origin-tagged rule records
+  that the operator should escalate to Opus at a natural context break (or
+  `/compact` first) and never flip-flop models mid-session, since each switch
+  re-writes the whole cache.
+
 ## [0.13.0] - 2026-07-12
 
 Automatic runaway-loop guard (#71): the manual token sentinel from #69 becomes

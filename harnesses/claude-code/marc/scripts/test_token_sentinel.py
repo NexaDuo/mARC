@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Self-test for the warn-only PostToolUse token-guard hook (origin: #71).
+"""Self-test for the warn-only PostToolUse token-guard hook (origin: #71, #73).
 
 Stdlib only (no pytest); run directly:  python3 test_token_sentinel.py
 
 Synthesizes fake transcript fixtures (NO real paths / names / session ids) and
 drives `token_sentinel.py --hook` as a subprocess exactly the way Claude Code
-would, asserting:
+would.
 
+Runaway-loop guard (#71):
   * the advisory fires ONCE when a turn first crosses the Opus threshold, and is
     debounced (silent) on the next tool call in the same band;
   * it re-arms and fires again at the 2N band;
@@ -14,6 +15,14 @@ would, asserting:
   * it does NOT fire for a Sonnet-only turn, however long;
   * the emitted payload is NON-BLOCKING (no `decision`, correct hookEventName);
   * the hook ALWAYS exits 0, including on empty / garbage stdin.
+
+Model-switch guard (#73):
+  (a) a MAIN-thread A->B switch WITH the cache-write spike warns exactly once;
+  (b) steady-state same-model turns never warn;
+  (c) a subagent/sidechain running a DIFFERENT model never warns (the
+      false-positive trap: separate context + cache, marked `isSidechain`);
+  (d) the initial model of a session is never treated as a switch;
+  (e) the hook ALWAYS exits 0.
 """
 from __future__ import annotations
 
@@ -53,6 +62,54 @@ def write_transcript(dirpath: str, name: str, model: str, tool_calls: int) -> st
                           "cache_creation_input_tokens": 0},
             },
         })
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in lines:
+            fh.write(json.dumps(rec) + "\n")
+    return path
+
+
+SPIKE_CW = 130_000   # full re-cache write of a big context (above the 20K floor)
+STEADY_CR = 130_000  # steady state: cache_read dominates
+STEADY_CW = 200      # steady state: tiny incremental write
+
+
+def write_multiturn(dirpath: str, name: str, turns: list[dict]) -> str:
+    """Write a synthetic transcript from a list of turn specs.
+
+    Each turn spec is a dict:
+      model      model id for the turn's assistant messages
+      cw, cr     cache_creation / cache_read on the turn's FIRST assistant msg
+      calls      number of assistant tool-call requests (default 1)
+      sidechain  if True, mark the user + assistant records `isSidechain: True`
+                 (a subagent turn — must be invisible to the switch guard)
+    """
+    path = os.path.join(dirpath, name)
+    lines: list[dict] = []
+    for t in turns:
+        side = bool(t.get("sidechain"))
+        user = {"type": "user", "message": {"role": "user", "content": "go"}}
+        if side:
+            user["isSidechain"] = True
+        lines.append(user)
+        for i in range(t.get("calls", 1)):
+            usage = {
+                "input_tokens": 10,
+                "cache_read_input_tokens": t.get("cr", 0) if i == 0 else 0,
+                "cache_creation_input_tokens": t.get("cw", 0) if i == 0 else 0,
+            }
+            rec = {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "model": t["model"],
+                    "content": [{"type": "tool_use", "id": f"t{i}",
+                                 "name": "Bash", "input": {}}],
+                    "usage": usage,
+                },
+            }
+            if side:
+                rec["isSidechain"] = True
+            lines.append(rec)
     with open(path, "w", encoding="utf-8") as fh:
         for rec in lines:
             fh.write(json.dumps(rec) + "\n")
@@ -132,6 +189,71 @@ def main() -> int:
         check(rc == 0 and out.strip() == "", "empty stdin: exit 0, silent")
         rc, out = run_hook(state_tmp, os.path.join(fixtures, "nope.jsonl"), "sess-x")
         check(rc == 0 and out.strip() == "", "missing transcript: exit 0, silent")
+
+        # ---- Model-switch guard (origin: #73) -----------------------------
+
+        # (a) MAIN-thread A->B switch WITH cache-write spike -> warns once.
+        switch = write_multiturn(fixtures, "switch.jsonl", [
+            {"model": SONNET, "cw": STEADY_CW, "cr": STEADY_CR},   # baseline A
+            {"model": OPUS, "cw": SPIKE_CW, "cr": 0},              # switch to B (spike)
+        ])
+        rc, out = run_hook(state_tmp, switch, "sess-switch")
+        check(rc == 0, "switch A->B: exit 0")
+        check(out.strip() != "", "switch A->B with spike: warns")
+        if out.strip():
+            data = parse_advisory(out)
+            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
+            check("model-switch" in ctx and SONNET in ctx and OPUS in ctx,
+                  "switch advisory names the A->B switch")
+
+        # ... and is debounced: another tool call in the SAME switch turn -> silent.
+        switch2 = write_multiturn(fixtures, "switch2.jsonl", [
+            {"model": SONNET, "cw": STEADY_CW, "cr": STEADY_CR},
+            {"model": OPUS, "cw": SPIKE_CW, "cr": 0, "calls": 2},
+        ])
+        rc, out = run_hook(state_tmp, switch2, "sess-switch")  # same session
+        check(rc == 0, "switch debounce: exit 0")
+        check(out.strip() == "", "switch A->B: warns exactly once (debounced)")
+
+        # (b) steady-state same-model turns -> no warn.
+        steady = write_multiturn(fixtures, "steady.jsonl", [
+            {"model": OPUS, "cw": STEADY_CW, "cr": STEADY_CR},
+            {"model": OPUS, "cw": STEADY_CW, "cr": STEADY_CR},
+        ])
+        rc, out = run_hook(state_tmp, steady, "sess-steady")
+        check(rc == 0, "steady-state: exit 0")
+        check(out.strip() == "", "steady-state same-model: no warn")
+
+        # (c) FALSE-POSITIVE TRAP: subagent/sidechain on a different model, with
+        #     its own cache-write spike, must NOT warn — the operator's main
+        #     thread stayed on one model the whole time.
+        subagent = write_multiturn(fixtures, "subagent.jsonl", [
+            {"model": OPUS, "cw": STEADY_CW, "cr": STEADY_CR},           # main A
+            {"model": SONNET, "cw": SPIKE_CW, "cr": 0, "sidechain": True},  # subagent B (spike)
+            {"model": OPUS, "cw": STEADY_CW, "cr": STEADY_CR},           # main A continues
+        ])
+        rc, out = run_hook(state_tmp, subagent, "sess-subagent")
+        check(rc == 0, "subagent different model: exit 0")
+        check(out.strip() == "",
+              "subagent/sidechain different model: NO warn (false-positive trap)")
+
+        # (d) initial model only -> no warn (first model is never a switch).
+        initial = write_multiturn(fixtures, "initial.jsonl", [
+            {"model": OPUS, "cw": SPIKE_CW, "cr": 0},  # even with a spike, no prior
+        ])
+        rc, out = run_hook(state_tmp, initial, "sess-initial")
+        check(rc == 0, "initial model: exit 0")
+        check(out.strip() == "", "initial model only: no warn")
+
+        # (a') a real switch whose re-cache write is BELOW the floor -> no warn
+        #      (guards against noise; steady-state cache-read stays dominant).
+        tiny = write_multiturn(fixtures, "tiny.jsonl", [
+            {"model": SONNET, "cw": STEADY_CW, "cr": STEADY_CR},
+            {"model": OPUS, "cw": STEADY_CW, "cr": STEADY_CR},  # switch but no spike
+        ])
+        rc, out = run_hook(state_tmp, tiny, "sess-tiny")
+        check(rc == 0, "sub-floor switch: exit 0")
+        check(out.strip() == "", "switch without cache-write spike: no warn")
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
