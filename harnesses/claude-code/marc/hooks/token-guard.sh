@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# mARC :: PostToolUse automatic runaway-loop guard (origin: #71)
+# mARC :: PostToolUse automatic cost guards (origin: #71, #73)
 # ---------------------------------------------------------------------------
-# Warn-only, non-blocking follow-up to the manual token sentinel (#69). While a
-# runaway tool-loop is happening on an Opus-tier model, nudge the session (once
-# per threshold band per turn) toward `/compact` or a Sonnet drop — so users who
-# never run the manual diagnostic are still protected.
+# Warn-only, non-blocking follow-up to the manual token sentinel (#69). Two
+# guards run off the same shared Python logic:
+#   * runaway-loop (#71): while a runaway tool-loop is happening on an Opus-tier
+#     model, nudge toward `/compact` or a Sonnet drop.
+#   * model-switch (#73): on a genuine main-thread mid-session model switch that
+#     re-cached the whole context (subagent/sidechain models are ignored), nudge
+#     toward switching at a natural break / `/compact` instead of flip-flopping.
+# So users who never run the manual diagnostic are still protected.
 #
 # CONTRACT: warn-only. This hook NEVER blocks, denies, or aborts a tool call.
 # Every path exits 0. The advisory is emitted as a non-blocking Claude Code

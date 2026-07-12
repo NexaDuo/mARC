@@ -13,13 +13,18 @@ Two modes share ONE counting implementation (DRY):
     per-turn table. Unchanged behaviour.
         python3 token_sentinel.py [SESSION.jsonl] [--calls N] [--tokens N]
 
-  * PostToolUse HOOK (`--hook`, origin: #71) — a warn-only, non-blocking
-    automatic runaway-loop guard. Reads the hook's stdin JSON, inspects the
-    CURRENT user turn in `transcript_path`, and if the model is Opus AND the
-    turn has crossed a consecutive-tool-call threshold, emits a non-blocking
-    advisory (Claude Code `hookSpecificOutput.additionalContext` + a top-level
-    `systemMessage`) suggesting `/compact` or a drop to Sonnet. It NEVER blocks,
-    denies, or aborts a tool call, and ALWAYS exits 0.
+  * PostToolUse HOOK (`--hook`, origin: #71, #73) — warn-only, non-blocking
+    automatic guards. Reads the hook's stdin JSON, inspects `transcript_path`,
+    and may emit a non-blocking advisory (Claude Code
+    `hookSpecificOutput.additionalContext` + a top-level `systemMessage`). It
+    NEVER blocks, denies, or aborts a tool call, and ALWAYS exits 0. Two guards:
+      - runaway-loop (#71): the CURRENT turn is on Opus AND has crossed a
+        consecutive-tool-call threshold -> suggest `/compact` or a Sonnet drop.
+      - model-switch (#73): a genuine MAIN-thread mid-session model switch
+        (A->B) carrying the cache-invalidation fingerprint (cache-write spike,
+        cache-read collapse) -> note the context was re-cached and suggest
+        switching at a natural break / `/compact`. Subagent/sidechain model
+        differences (`isSidechain`) are ignored — separate context and cache.
         <hook-json-on-stdin> | python3 token_sentinel.py --hook
 
 Usage (CLI):
@@ -56,6 +61,17 @@ import tempfile
 # the manual CLI's default --calls so the two views agree on "runaway".
 DEFAULT_HOOK_THRESHOLD = 25
 HOOK_THRESHOLD_ENV = "MARC_TOKEN_GUARD_THRESHOLD"
+
+# --- Mid-session model-switch guard (origin: #73) --------------------------
+# Switching the model mid-session invalidates the prompt cache: the prefix
+# cached under model A cannot be reused by model B, so B's first call is a full
+# cache-WRITE of the whole context (a spike in cache_creation_input_tokens) with
+# cache_read_input_tokens collapsing to ~0 — the inverse of the steady state,
+# where cache_read dominates. We only warn on a genuine MAIN-thread A->B switch
+# that carries that cache-write fingerprint; a switch whose re-cache write is
+# below this floor is too small to be worth a nudge. Override with the env var.
+DEFAULT_SWITCH_MIN_CACHE_WRITE = 20_000
+SWITCH_MIN_CACHE_WRITE_ENV = "MARC_MODEL_SWITCH_MIN_CACHE_WRITE"
 
 
 def encoded_project_dir(cwd: str) -> str:
@@ -126,12 +142,24 @@ def analyze(path: str):
       calls     total `tool_use` blocks across the turn's assistant messages
       requests  assistant API requests in the turn that made >=1 tool call
       tokens    summed usage tokens across the turn's assistant messages
+
+    Plus MAIN-THREAD-only fields for the model-switch guard (origin: #73), which
+    deliberately EXCLUDE subagent/sidechain assistant messages (`isSidechain` is
+    true): a specialist subagent runs on a different model in a SEPARATE context
+    and cache, so its model choice is never a mid-session switch of the operator's
+    thread. Counting it would fire a false warning on every dispatch.
+      main_model  last model seen in a NON-sidechain assistant message ("-" none)
+      cw          cache_creation_input_tokens of the FIRST main-thread assistant
+                  message of the turn (the re-cache write, captured once)
+      cr          cache_read_input_tokens of that same first main-thread message
     """
     turns: list[dict] = []
     current: dict | None = None
 
     def new_turn(prompt: str) -> dict:
-        t = {"prompt": prompt, "model": "-", "calls": 0, "requests": 0, "tokens": 0}
+        t = {"prompt": prompt, "model": "-", "calls": 0, "requests": 0,
+             "tokens": 0, "main_model": "-", "cw": 0, "cr": 0,
+             "_main_seen": False}
         turns.append(t)
         return t
 
@@ -161,6 +189,16 @@ def analyze(path: str):
                 usage = msg.get("usage")
                 if isinstance(usage, dict):
                     current["tokens"] += usage_tokens(usage)
+                # Main-thread-only tracking for the switch guard (origin: #73):
+                # ignore subagent/sidechain messages entirely.
+                if rec.get("isSidechain") is True:
+                    continue
+                if model:
+                    current["main_model"] = model
+                if not current["_main_seen"] and isinstance(usage, dict):
+                    current["_main_seen"] = True
+                    current["cw"] = int(usage.get("cache_creation_input_tokens", 0) or 0)
+                    current["cr"] = int(usage.get("cache_read_input_tokens", 0) or 0)
     return turns
 
 
@@ -180,12 +218,18 @@ def hook_threshold() -> int:
     return val if val > 0 else DEFAULT_HOOK_THRESHOLD
 
 
-def _state_path(session_key: str) -> str:
-    """Per-session debounce file under the system temp dir (no real paths leak)."""
+def _state_path(session_key: str, kind: str = "") -> str:
+    """Per-session debounce file under the system temp dir (no real paths leak).
+
+    `kind` namespaces independent guards into separate files so the runaway
+    guard (#71) and the model-switch guard (#73) never clobber each other's
+    debounce state. `kind=""` preserves #71's original filename exactly.
+    """
     digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
     state_dir = os.path.join(tempfile.gettempdir(), "marc-token-guard")
     os.makedirs(state_dir, exist_ok=True)
-    return os.path.join(state_dir, f"{digest}.json")
+    suffix = f"-{kind}" if kind else ""
+    return os.path.join(state_dir, f"{digest}{suffix}.json")
 
 
 def _load_state(path: str) -> dict:
@@ -254,6 +298,114 @@ def build_advisory(*, model: str, count: int, threshold: int) -> dict:
     }
 
 
+# --- Mid-session model-switch guard (origin: #73) ---------------------------
+
+def switch_min_cache_write() -> int:
+    raw = os.environ.get(SWITCH_MIN_CACHE_WRITE_ENV, "")
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_SWITCH_MIN_CACHE_WRITE
+    return val if val > 0 else DEFAULT_SWITCH_MIN_CACHE_WRITE
+
+
+def is_cache_invalidation(cw: int, cr: int, floor: int) -> bool:
+    """Cache-invalidation fingerprint: a cache-WRITE spike with cache-READ
+    collapsed. Steady state is the inverse (cache_read dominates, tiny write).
+    The absolute floor keeps small turns from tripping the guard.
+    """
+    return cw >= floor and cw > cr
+
+
+def detect_switch(turns: list[dict], floor: int):
+    """Return (from_model, to_model, turn_index, cw) for a genuine MAIN-thread
+    mid-session model switch at the latest main-thread turn, else None.
+
+    Only turns with a main-thread model (`main_model != "-"`) are considered, so
+    subagent/sidechain activity is invisible here. The FIRST such turn is the
+    baseline (never a switch). A switch is the latest main-thread turn whose
+    model differs from the previous main-thread turn AND whose first main-thread
+    call carries the cache-invalidation fingerprint.
+    """
+    main_turns = [
+        (i, t) for i, t in enumerate(turns)
+        if t.get("main_model", "-") != "-"
+    ]
+    if len(main_turns) < 2:
+        return None  # first model in a session is not a switch
+    (cur_i, cur), (_, prev) = main_turns[-1], main_turns[-2]
+    if cur["main_model"] == prev["main_model"]:
+        return None
+    if not is_cache_invalidation(cur.get("cw", 0), cur.get("cr", 0), floor):
+        return None
+    return prev["main_model"], cur["main_model"], cur_i, cur.get("cw", 0)
+
+
+def should_warn_switch(*, session_key: str, turn_index: int,
+                       from_model: str, to_model: str) -> bool:
+    """Debounce: warn ONCE per genuine switch event. A switch event is keyed by
+    its turn index plus the (from -> to) pair, so a later flip (B->A, or a new
+    A->B at a new turn) re-arms and warns again, but repeated tool calls within
+    the same switch turn stay silent.
+    """
+    path = _state_path(session_key, kind="switch")
+    state = _load_state(path)
+    if (state.get("turn") == turn_index
+            and state.get("from") == from_model
+            and state.get("to") == to_model):
+        return False
+    _save_state(path, {"turn": turn_index, "from": from_model, "to": to_model})
+    return True
+
+
+def build_switch_advisory(*, from_model: str, to_model: str, cw: int) -> dict:
+    """Non-blocking PostToolUse payload for a mid-session model switch. Same
+    channels as the runaway guard (#71): no `decision`, no exit 2.
+    """
+    approx_k = max(1, round(cw / 1000))
+    advice = (
+        f"[mARC model-switch guard] Mid-session model switch detected "
+        f"({from_model} -> {to_model}). Switching models invalidates the prompt "
+        f"cache: the ~{approx_k}K-token context was just re-cached under the new "
+        f"model as a full cache-write instead of a cheap cache-read, and every "
+        f"flip repeats that cost. This is advisory only — nothing was blocked. "
+        f"Prefer escalating at a natural context break (or `/compact` first), "
+        f"and avoid flip-flopping models turn-by-turn."
+    )
+    return {
+        "systemMessage": (
+            f"[mARC] model-switch guard: mid-session switch {from_model} -> "
+            f"{to_model} re-cached ~{approx_k}K tokens (full cache-write). "
+            f"Advisory only. Prefer a natural break or /compact before switching."
+        ),
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": advice,
+        },
+    }
+
+
+def _merge_advisories(advisories: list[dict]) -> dict | None:
+    """Combine one or more non-blocking payloads into a single PostToolUse
+    payload (a hook may only emit one JSON object). A single advisory passes
+    through unchanged, so the #71 output contract is byte-for-byte preserved.
+    """
+    advisories = [a for a in advisories if a]
+    if not advisories:
+        return None
+    if len(advisories) == 1:
+        return advisories[0]
+    return {
+        "systemMessage": "\n".join(a["systemMessage"] for a in advisories),
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": "\n\n".join(
+                a["hookSpecificOutput"]["additionalContext"] for a in advisories
+            ),
+        },
+    }
+
+
 def run_hook(stdin_text: str) -> int:
     """Warn-only PostToolUse entrypoint. ALWAYS returns 0; never raises out."""
     try:
@@ -279,12 +431,28 @@ def run_hook(stdin_text: str) -> int:
     model = current.get("model", "-")
     count = current.get("requests", 0)
     threshold = hook_threshold()
-
     session_key = str(payload.get("session_id") or transcript_path)
+
+    advisories: list[dict] = []
+
+    # Guard 1 (#71): runaway Opus tool-loop.
     if should_warn(model=model, count=count, threshold=threshold,
                    turn_index=turn_index, session_key=session_key):
-        advisory = build_advisory(model=model, count=count, threshold=threshold)
-        sys.stdout.write(json.dumps(advisory))
+        advisories.append(build_advisory(model=model, count=count,
+                                          threshold=threshold))
+
+    # Guard 2 (#73): genuine main-thread mid-session model switch.
+    switch = detect_switch(turns, switch_min_cache_write())
+    if switch is not None:
+        from_model, to_model, switch_turn, cw = switch
+        if should_warn_switch(session_key=session_key, turn_index=switch_turn,
+                              from_model=from_model, to_model=to_model):
+            advisories.append(build_switch_advisory(
+                from_model=from_model, to_model=to_model, cw=cw))
+
+    merged = _merge_advisories(advisories)
+    if merged is not None:
+        sys.stdout.write(json.dumps(merged))
     return 0
 
 

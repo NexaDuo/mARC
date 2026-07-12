@@ -270,6 +270,15 @@ logic) watches every session live: when a turn crosses the Opus tool-call thresh
 blocks, denies, or aborts a tool call and always exits 0, so it protects users who never
 open the manual diagnostic. (origin: #71 · 2026-07-12)
 
+**Escalate to Opus at a natural context break, and never flip-flop models
+mid-session.** Switching the model mid-session invalidates the prompt cache: the
+prefix cached under model A cannot be reused by model B, so the next call is a
+full cache-*write* of the whole context instead of a cheap cache-read, and every
+flip repeats that cost. If you must escalate, do it at a natural break (or
+`/compact` first) rather than toggling turn-by-turn. A warn-only `PostToolUse`
+guard flags a genuine main-thread A->B switch (it ignores subagent/sidechain
+model differences, which are separate caches). (origin: #73 · 2026-07-12)
+
 **Include a writing-style instruction in every dispatch prompt.** User-facing
 and GitHub-bound prose (briefs, issue and PR bodies, comments, docs) must read
 like a person wrote it: no em-dash, no formulaic triads, no uniform
