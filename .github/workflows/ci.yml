@@ -401,6 +401,17 @@ jobs:
       #    inside a run: block is valid YAML but an invalid Actions expression.
       #    This gate catches that class of bug on the PR. Pinned + checksum-
       #    verified (no curl|bash, no unpinned third-party action).
+      # 8b. Token-guard hook self-test (issue #71). The warn-only PostToolUse
+      #     runaway-loop guard shares ONE counting implementation with the manual
+      #     sentinel (#69); this stdlib-only test synthesizes fake transcript
+      #     fixtures (no real paths/names/session ids) and asserts the advisory
+      #     fires once past the Opus threshold, is debounced within a band and
+      #     re-arms at 2N, never fires below threshold or for Sonnet-only turns,
+      #     emits a NON-BLOCKING payload (no `decision`), and ALWAYS exits 0.
+      #     Deterministic, offline, zero token cost.
+      - name: token-guard hook self-test
+        run: python3 harnesses/claude-code/marc/scripts/test_token_sentinel.py
+
       - name: actionlint (workflow schema + expression lint)
         run: |
           set -euo pipefail

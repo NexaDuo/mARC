@@ -4,6 +4,38 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-07-12
+
+Automatic runaway-loop guard (#71): the manual token sentinel from #69 becomes
+preventive so users who never run anything manually are still protected.
+
+### Added
+- **Warn-only `PostToolUse` token-guard hook.** A new non-blocking hook
+  (`harnesses/claude-code/marc/hooks/token-guard.sh` → `token_sentinel.py --hook`)
+  watches each session live: within the current user turn it counts consecutive
+  assistant tool-call requests and the model in use, and when the model is
+  Opus-tier and the count crosses a configurable threshold
+  (`MARC_TOKEN_GUARD_THRESHOLD`, default 25) it emits a non-blocking advisory
+  nudging `/compact` or a drop to Sonnet. The advisory rides Claude Code's
+  `hookSpecificOutput.additionalContext` (for the model) plus a top-level
+  `systemMessage` (for the operator); it sets no `decision`, never exits non-zero,
+  and always exits 0 — a false positive costs one line of text, nothing more.
+  Debounced to at most once per threshold band per turn via a tiny per-session
+  temp-file state, so it never spams. Wired into `hooks/hooks.json` as a
+  `PostToolUse` block matching the existing `${CLAUDE_PLUGIN_ROOT}` script call.
+- **Shared counting logic + self-test.** `token_sentinel.py` now exposes an
+  importable per-turn counting implementation used by BOTH the manual CLI
+  (unchanged behaviour) and the new hook (DRY). A stdlib-only self-test
+  (`scripts/test_token_sentinel.py`, wired into CI Tier 1) synthesizes fake
+  transcript fixtures and asserts the advisory fires once past the Opus
+  threshold, is debounced within a band and re-arms at 2N, never fires below
+  threshold or for Sonnet-only turns, is non-blocking, and always exits 0.
+
+### Changed
+- **Tech-lead skill: note the automatic guard.** An origin-tagged rule records
+  that the warn-only guard complements the manual sentinel, so the operator need
+  not run anything for baseline runaway-loop protection.
+
 ## [0.12.0] - 2026-07-10
 
 Dispatch-time token-budget guardrails (#69): three low-cost levers to bound the
