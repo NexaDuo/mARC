@@ -262,6 +262,14 @@ a call or token threshold. Run `python3 scripts/token_sentinel.py` (defaults to 
 newest session log for the current project) after a heavy run to confirm the tiering
 and bounds above are actually holding. (origin: #69 · 2026-07-10)
 
+**An automatic guard complements the manual sentinel — you need not run anything.**
+A warn-only `PostToolUse` hook (`hooks/token-guard.sh`, sharing the sentinel's counting
+logic) watches every session live: when a turn crosses the Opus tool-call threshold
+(`MARC_TOKEN_GUARD_THRESHOLD`, default ~25) it emits a non-blocking advisory nudging
+`/compact` or a Sonnet drop, debounced to once per threshold band per turn. It NEVER
+blocks, denies, or aborts a tool call and always exits 0, so it protects users who never
+open the manual diagnostic. (origin: #71 · 2026-07-12)
+
 **Include a writing-style instruction in every dispatch prompt.** User-facing
 and GitHub-bound prose (briefs, issue and PR bodies, comments, docs) must read
 like a person wrote it: no em-dash, no formulaic triads, no uniform
