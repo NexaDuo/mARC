@@ -570,3 +570,44 @@ jobs:
               || { echo "::error::cross-repo: component '$component' not registered"; exit 1; }
           done
           echo "Cross-repo: marc@nexaduo installs and registers from outside the mARC repo."
+
+      # 9. Plugin upgrade path proof: prove that upgrading an existing installed
+      #    plugin (origin/main) to the current PR's version works successfully.
+      - name: Tier 2 — plugin upgrade path
+        env:
+          ANTHROPIC_API_KEY: ""
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/.marc-upgrade-cfg
+          MARC_CHECKOUT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+
+          # Extract the origin/main version of the repo into a temp directory
+          PREV_DIR="${{ runner.temp }}/marc-prev"
+          rm -rf "$PREV_DIR"
+          mkdir -p "$PREV_DIR"
+          git archive origin/main | tar -x -C "$PREV_DIR"
+
+          # If the old branch has a compilation script, compile it (just in case)
+          if [ -f "$PREV_DIR/scripts/compile_prompts.py" ]; then
+            python3 "$PREV_DIR/scripts/compile_prompts.py"
+          fi
+
+          echo "== Install previous version from origin/main =="
+          claude plugin marketplace add "$PREV_DIR"
+          claude plugin install marc@nexaduo
+
+          claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
+
+          echo "== Point marketplace to the current checkout and upgrade =="
+          claude plugin marketplace add "$MARC_CHECKOUT"
+          claude plugin update marc@nexaduo
+
+          echo "== Assert upgraded plugin details =="
+          DETAILS="$(claude plugin details marc@nexaduo)"
+          echo "$DETAILS"
+          for component in tech-lead engineer sre design security research; do
+            echo "$DETAILS" | grep -qiw "$component" \
+              || { echo "::error::upgrade: component '$component' not registered after upgrade"; exit 1; }
+          done
+          echo "Upgrade path: plugin successfully upgrades from main release to PR version."

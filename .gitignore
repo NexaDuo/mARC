@@ -36,7 +36,3 @@ tmp/
 .serena/
 __pycache__/
 *.pyc
-
-# Local Devcontainer Sandbox & Isolated configs (never commit)
-sandbox/
-.claude-devcontainer/
