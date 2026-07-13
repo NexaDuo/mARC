@@ -76,6 +76,15 @@ repository, not in this plugin. At the start of a task, discover them at runtime
   must exercise the *same* command it will run for real, not print-and-skip it —
   a dry-run that skips the mutating call proves nothing about that call.
   (origin: #37 · 2026-07-04)
+- **Cross-version state compatibility (release-versioned artifacts).** When a change
+  introduces or alters shared on-disk state that is NOT namespaced by version, OR
+  migrates an artifact that multiple installed versions read (config, memory, caches,
+  tmp state), treat old and new versions as running concurrently: version the state
+  path — or add a tolerant, `schema_version`-aware reader — and make migrations of
+  shared artifacts additive and reversible (supersede, never destructively rewrite or
+  delete). Keep hook entrypoints pinned via `${CLAUDE_PLUGIN_ROOT}`, never a `latest`
+  symlink. Outside this trigger (no shared un-versioned state, no shared-artifact
+  migration), add no cross-version ceremony. (origin: #78 · 2026-07-13)
 
 ## Workflow
 1. Confirm scope from the issue's acceptance criteria; branch off `main`.
