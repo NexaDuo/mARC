@@ -38,6 +38,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify compiled prompts are up-to-date
+        run: |
+          python3 scripts/compile_prompts.py
+          if ! git diff --exit-code; then
+            echo "::error::Compiled prompts are out of sync with core/ templates. Run 'python3 scripts/compile_prompts.py' and commit the changes."
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -60,6 +68,7 @@ jobs:
         run: |
           jq . .claude-plugin/marketplace.json > /dev/null
           jq . harnesses/claude-code/marc/.claude-plugin/plugin.json > /dev/null
+          jq . harnesses/antigravity/marc/plugin.json > /dev/null
 
       # 3b. team.toml schema contract (issue #51). `/marc:init` (skills/init)
       #     prefills a `.claude/team.toml` from this canonical example, so it
@@ -143,8 +152,10 @@ jobs:
           python3 - <<'PY'
           import glob, sys, yaml
           files = sorted(
-              glob.glob("harnesses/claude-code/marc/agents/*.md")
-              + glob.glob("harnesses/claude-code/marc/skills/**/SKILL.md", recursive=True)
+              glob.glob("core/agents/*.md")
+              + glob.glob("core/skills/**/SKILL.md", recursive=True)
+              + glob.glob("harnesses/*/marc/agents/*.md")
+              + glob.glob("harnesses/*/marc/skills/**/SKILL.md", recursive=True)
           )
           if not files:
               print("ERROR: no agent/skill files found — glob paths wrong?")
@@ -189,8 +200,10 @@ jobs:
       - name: Anti-anchoring grep gate
         run: |
           if grep -rniE 'nexaduo|chat-services|run-stack|middleware/|chatwoot|dify|instagram' \
-               harnesses/claude-code/marc/agents \
-               harnesses/claude-code/marc/skills; then
+               core/agents \
+               core/skills \
+               harnesses/*/marc/agents \
+               harnesses/*/marc/skills; then
             echo "::error::Anti-anchoring gate: consumer/this-repo specifics found in agent/skill role prose (see hits above)."
             exit 1
           fi
@@ -205,7 +218,7 @@ jobs:
       #     zero token cost — a grep over required guard phrases, no live model.
       - name: Self-improvement context-gating gate
         run: |
-          SKILL=harnesses/claude-code/marc/skills/tech-lead/SKILL.md
+          SKILL=core/skills/tech-lead/SKILL.md
           # Reusable check: every required guard phrase must be present in $1.
           # Phrases are matched case-insensitively, each on its own line in the
           # source, so a whole-file scan is unnecessary.
@@ -251,7 +264,7 @@ jobs:
       #     inside backtick code spans are safe. Deterministic, zero token cost.
       - name: Issue-template handle-escape gate
         run: |
-          SKILL=harnesses/claude-code/marc/skills/tech-lead/SKILL.md
+          SKILL=core/skills/tech-lead/SKILL.md
 
           check_template() {
             f="$1"
@@ -322,9 +335,9 @@ jobs:
           set -euo pipefail
           GOV=harnesses/claude-code/marc
           CHECK="$GOV/scripts/check_rule_origin.py"
-          FILES="$GOV/skills/tech-lead/SKILL.md \
-                 $GOV/agents/engineer.md $GOV/agents/sre.md $GOV/agents/design.md \
-                 $GOV/agents/security.md $GOV/agents/research.md"
+          FILES="core/skills/tech-lead/SKILL.md \
+                 core/agents/engineer.md core/agents/sre.md core/agents/design.md \
+                 core/agents/security.md core/agents/research.md"
 
           # POSITIVE: every shipped governed rule must carry an origin tag.
           # shellcheck disable=SC2086
@@ -333,8 +346,8 @@ jobs:
           # NEGATIVE: a copy with one origin tag stripped MUST fail, proving the
           # gate catches the regression it exists for.
           tmp="$(mktemp --suffix=.md)"
-          sed '0,/(origin: #[0-9][0-9]* · [0-9-][0-9-]*)/s/ *(origin: #[0-9][0-9]* · [0-9-][0-9-]*)//' \
-            "$GOV/agents/engineer.md" > "$tmp"
+          sed '0,/(origin: #[0-9][0-9]* · [0-9-][0-9-]*)/s/ *(origin: #[0-9][0-9]* · [0-9-][0-9]*)//' \
+            "core/agents/engineer.md" > "$tmp"
           if python3 "$CHECK" "$tmp" > /dev/null 2>&1; then
             echo "::error::negative test FAILED — gate passed after an origin tag was stripped"
             rm -f "$tmp"; exit 1
