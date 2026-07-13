@@ -309,6 +309,39 @@ jobs:
 
           echo "Handle-escape gate: OK (issue-body template has no bare team handles; negative tests caught a stripped escape and a mixed-case handle)."
 
+      # 5d. Rule-origin governance gate (issue #68). Durable rules — the agent
+      #     Non-negotiables, the tech-lead Principles, and the dispatch
+      #     cost-discipline rules — live inside a
+      #     `<!-- rules:origin-required --> … <!-- /rules:origin-required -->`
+      #     fence and MUST each carry an `(origin: #NN · YYYY-MM-DD)` tag, so a
+      #     rule's provenance is auditable and rules are superseded (not silently
+      #     deleted). A stdlib-only scanner enforces it; an unclosed fence also
+      #     fails. Deterministic, zero token cost.
+      - name: Rule-origin governance gate
+        run: |
+          set -euo pipefail
+          GOV=harnesses/claude-code/marc
+          CHECK="$GOV/scripts/check_rule_origin.py"
+          FILES="$GOV/skills/tech-lead/SKILL.md \
+                 $GOV/agents/engineer.md $GOV/agents/sre.md $GOV/agents/design.md \
+                 $GOV/agents/security.md $GOV/agents/research.md"
+
+          # POSITIVE: every shipped governed rule must carry an origin tag.
+          # shellcheck disable=SC2086
+          python3 "$CHECK" $FILES
+
+          # NEGATIVE: a copy with one origin tag stripped MUST fail, proving the
+          # gate catches the regression it exists for.
+          tmp="$(mktemp --suffix=.md)"
+          sed '0,/(origin: #[0-9][0-9]* · [0-9-][0-9-]*)/s/ *(origin: #[0-9][0-9]* · [0-9-][0-9-]*)//' \
+            "$GOV/agents/engineer.md" > "$tmp"
+          if python3 "$CHECK" "$tmp" > /dev/null 2>&1; then
+            echo "::error::negative test FAILED — gate passed after an origin tag was stripped"
+            rm -f "$tmp"; exit 1
+          fi
+          rm -f "$tmp"
+          echo "Rule-origin gate: OK (all governed rules tagged; negative test caught a stripped tag)."
+
       # 6. Installer script static checks.
       - name: shellcheck + bash -n install.sh
         run: |

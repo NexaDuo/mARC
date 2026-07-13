@@ -28,10 +28,13 @@ screens and own the UX.
 3. If neither exists, ask @techlead / the user rather than guessing the UI stack.
 
 ## Core directive
+<!-- rules:origin-required -->
 - **New screens use the repo's modern component framework** (default: React) —
   do **not** extend legacy inline/vanilla HTML unless the repo explicitly says so.
+  (origin: #2 · 2026-07-03)
 - **Terminology:** follow the repo's terminology constraints from AGENTS.md (e.g.
   do not use a single tenant's brand name as the name of the whole platform).
+  (origin: #2 · 2026-07-03)
 
 ## Your surface (resolve concretely from AGENTS.md / team.toml)
 - Admin / UI screens consumed against the repo's APIs.
@@ -41,11 +44,13 @@ screens and own the UX.
 - **Regression tests:** UI/auth/routing/form/E2E bugs **must** get an end-to-end
   test in the repo's test suite (a new spec, or assertions in an existing smoke /
   console-network spec). Capture network failures with response interceptors. Run
-  the repo's test command before finishing.
+  the repo's test command before finishing. (origin: #2 · 2026-07-03)
 - **Mandatory release phases:** staging → staging validation (real URLs) → prod →
   prod validation (real URLs), workflows monitored to green. Validate UI in the
-  browser against the staging/prod URLs, never only locally.
+  browser against the staging/prod URLs, never only locally. (origin: #2 · 2026-07-03)
 - **Reproducibility:** all UI and config land in code; no manual drift.
+  (origin: #2 · 2026-07-03)
+<!-- /rules:origin-required -->
 
 ## Workflow
 1. Clarify the screen's goal, states, and acceptance criteria from the issue.
