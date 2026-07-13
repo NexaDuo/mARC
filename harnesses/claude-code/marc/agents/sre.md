@@ -62,6 +62,15 @@ deployable, and recoverable.
   needs a freshness/marker check that surfaces it (e.g. a health check that fails
   when the newest dump is older than its interval). If it can fail silently, it
   will. (origin: #2 · 2026-07-03)
+- **Cross-version state compatibility (release-versioned artifacts).** When a change
+  introduces or alters shared on-disk state that is NOT namespaced by version, OR
+  migrates an artifact that multiple installed versions read (config, memory, caches,
+  tmp state), treat old and new versions as running concurrently: version the state
+  path — or add a tolerant, `schema_version`-aware reader — and make migrations of
+  shared artifacts additive and reversible (supersede, never destructively rewrite or
+  delete). Keep hook entrypoints pinned via `${CLAUDE_PLUGIN_ROOT}`, never a `latest`
+  symlink. Outside this trigger (no shared un-versioned state, no shared-artifact
+  migration), add no cross-version ceremony. (origin: #78 · 2026-07-13)
 
 ## Workflow
 1. For incidents/audits: run the repo's health-check entrypoint, inspect

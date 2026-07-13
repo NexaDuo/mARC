@@ -4,6 +4,22 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-07-13
+
+Trigger-gated cross-version compatibility Principle added to the `@dev` and `@sre`
+agent rule-sets (generalizes the "supersede, don't delete" Principle from #68).
+
+### Added
+- **`@dev` + `@sre`: cross-version state compatibility (release-versioned
+  artifacts).** New trigger-gated Principle (identical in `agents/engineer.md` and
+  `agents/sre.md`, origin `#78`): when a change introduces/alters shared on-disk
+  state not namespaced by version, OR migrates an artifact multiple installed
+  versions read (config, memory, caches, tmp state), treat old and new versions as
+  concurrent — version the state path or add a `schema_version`-aware reader, keep
+  shared-artifact migrations additive and reversible (supersede, never destructively
+  rewrite/delete), and keep hook entrypoints pinned via `${CLAUDE_PLUGIN_ROOT}`
+  rather than a `latest` symlink. Outside that trigger, no cross-version ceremony.
+
 ## [0.15.0] - 2026-07-13
 
 Rule-origin governance (#68): durable rules now carry their provenance. Every

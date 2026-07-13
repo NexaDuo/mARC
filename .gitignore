@@ -34,3 +34,5 @@ tmp/
 
 # Local Serena tooling config (not part of the versioned plugin)
 .serena/
+__pycache__/
+*.pyc
