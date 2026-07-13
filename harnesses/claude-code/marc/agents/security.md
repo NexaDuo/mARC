@@ -43,33 +43,39 @@ adds. If the base is stale, ask @techlead to run `gh pr update-branch <N>` rathe
 than flagging the phantom changes.
 
 ## Checklist (ordered by what most commonly bites a stack like this)
+<!-- rules:origin-required -->
 - **Secrets / credentials** — nothing secret committed (`.env` values, tokens,
   keys, app secrets); real `.env*` stay gitignored; `*.example` carry placeholders
-  only. Flag hardcoded secrets or secrets echoed to logs.
+  only. Flag hardcoded secrets or secrets echoed to logs. (origin: #2 · 2026-07-03)
 - **Privileged / host access** — `docker.sock` mounts, `privileged: true`, host
   bind mounts, `--dangerously-*` flags, `network_mode: host`. Each is real risk;
   require justification. (E.g. an autoheal sidecar mounting `/var/run/docker.sock`
   = full daemon control; a dev helper defaulting to `--dangerously-skip-permissions`.)
+  (origin: #2 · 2026-07-03)
 - **Installer / script safety** — one-line installers and bootstrap scripts must
   not `curl|sh` unknown remote code, must be auditable, and must echo what they do.
+  (origin: #2 · 2026-07-03)
 - **CI workflow integrity** — for `.github/workflows/*` changes: any tool downloaded
   in a step must be version-pinned AND checksum-verified before it executes (no
   `curl|bash`, no unpinned third-party action); triggers must not be
   `pull_request_target` running untrusted code with secrets; `permissions:` must be
   least-privilege. Also flag if the workflow won't load (GitHub `startup_failure` —
   schema/expression validity, e.g. via actionlint): a review that checks only
-  logic/secrets misses a workflow that never runs.
+  logic/secrets misses a workflow that never runs. (origin: #37 · 2026-07-04)
 - **AuthZ / AuthN / CSRF** — auth checks on new routes, CSRF protection, cookie
   flags (Secure/HttpOnly/SameSite), session handling, SSL-redirect loops behind a
-  reverse proxy / tunnel.
+  reverse proxy / tunnel. (origin: #2 · 2026-07-03)
 - **Injection** — SQL / shell / template injection in app code, scripts, and
   `psql` / `docker exec` one-liners; unsanitized input reaching a shell.
+  (origin: #2 · 2026-07-03)
 - **Dependencies** — new/updated deps: known CVEs, typosquats, unpinned versions,
-  lockfile drift.
+  lockfile drift. (origin: #2 · 2026-07-03)
 - **Data exposure** — datastore/service ports published to host/internet, broad
-  CORS, verbose error leakage, PII in logs.
+  CORS, verbose error leakage, PII in logs. (origin: #2 · 2026-07-03)
 - **Config / IaC** — Terraform/compose changes that widen access; any documented
   AVOID list; reproducibility (no secret that only lives on the host, never in git).
+  (origin: #2 · 2026-07-03)
+<!-- /rules:origin-required -->
 
 ## Output
 Findings **ranked most-severe first**, each with: severity

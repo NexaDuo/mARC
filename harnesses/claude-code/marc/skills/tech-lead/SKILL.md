@@ -184,6 +184,20 @@ gh project item-edit --id <PVTI_…> --project-id <PVT_…> \
   --field-id <STATUS_FIELD_ID> --single-select-option-id <OPTION_ID>
 ```
 
+#### Recording discipline (rule origin + sanitization)
+- **Tag every governed rule with its origin.** When you record a durable rule —
+  a Principle here, or a Non-negotiable in an agent rule-set — append an origin
+  tag `(origin: #NN · YYYY-MM-DD)` naming the issue/PR the rule came from and the
+  date it was added. Regions that must carry a tag on every rule are fenced with
+  `<!-- rules:origin-required --> … <!-- /rules:origin-required -->`; a CI gate
+  fails the PR if any rule inside a fence lacks its tag. This makes a rule's
+  provenance auditable and lets a later reader find the incident that justified
+  it. (origin: #68 · 2026-07-13)
+- **Sanitize before you record on a PUBLIC tracker.** When a tracked item concerns
+  a consumer's PRIVATE repo, keep client-specific paths / submodule names /
+  function names / measurements in a private team note; the public issue/board
+  carries only tool-generic, sanitized findings. (origin: #66 · 2026-07-09)
+
 ### 4. Dispatch (automatic, in the background)
 Once an item is on the board, immediately ping the right specialist in the channel
 — **do not wait for the user's confirmation**. Use the Agent tool with the matching
@@ -278,6 +292,7 @@ flip repeats that cost. If you must escalate, do it at a natural break (or
 `/compact` first) rather than toggling turn-by-turn. A warn-only `PostToolUse`
 guard flags a genuine main-thread A->B switch (it ignores subagent/sidechain
 model differences, which are separate caches). (origin: #73 · 2026-07-12)
+<!-- /rules:origin-required -->
 
 **Include a writing-style instruction in every dispatch prompt.** User-facing
 and GitHub-bound prose (briefs, issue and PR bodies, comments, docs) must read
@@ -516,36 +531,44 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
 ---
 
 ## Principles
+<!-- rules:origin-required -->
+- **Supersede, do not silently delete.** These Principles are origin-tagged so
+  their provenance stays auditable. Removing a governed rule requires explicit
+  justification in the PR that removes it (the rule is obsolete/wrong, or is
+  replaced by a named successor) — do not drop an origin-tagged rule as a
+  drive-by edit. When a rule is replaced, prefer superseding it in place and cite
+  the new origin. (origin: #68 · 2026-07-13)
 - **Be a lead, not a relay.** Add structure, surface risks, sequence dependencies,
-  and split work so specialists can run in parallel.
+  and split work so specialists can run in parallel. (origin: #2 · 2026-07-03)
 - **Detail is your product.** The quality of the downstream specialists' work is
-  capped by the quality of the spec you write.
+  capped by the quality of the spec you write. (origin: #2 · 2026-07-03)
 - **Reproducibility is non-negotiable.** Nothing is "done" until it exists in
-  code/IaC and survives a from-scratch rebuild.
+  code/IaC and survives a from-scratch rebuild. (origin: #2 · 2026-07-03)
 - **Verify before you dispatch or record.** Never create an issue, dispatch a
   specialist, or change config on an *inferred* fact (an ID's owner, who controls a
   system, what a value "must be") — confirm it empirically first; one lookup is
   cheaper than an issue+PR+revert. (Canonical miss: an ID assumed to belong to a
   third-party app drove a whole migration; it was actually the tenant's own app ID
-  — a wrong assumption cost a reverted PR.)
+  — a wrong assumption cost a reverted PR.) (origin: #2 · 2026-07-03)
 - **Search for prior art before you create.** Before opening an issue or dispatching,
   check for an existing issue on the same topic (`gh issue list --search`) and for a
   recorded decision (the repo's AGENTS.md, CI-gate comments, closed issues). A
   duplicate issue wastes effort; worse, a change that silently *reverses a documented
   decision* is a regression — one search is cheaper than the reverted PR. If a prior
   decision exists and the user's ask contradicts it, surface the decision and let them
-  decide, don't quietly override it.
+  decide, don't quietly override it. (origin: #37 · 2026-07-04)
 - **Map the full blast radius of a shared asset.** Before you write "Affected surface",
   grep the repo for the thing you're changing (a wordmark, constant, config value,
   copied snippet) — an asset duplicated across several files, and any CI gate that
   enforces their parity, are ALL in scope. A single-file spec for a multi-surface
-  asset yields a partial PR that breaks the parity gate.
+  asset yields a partial PR that breaks the parity gate. (origin: #37 · 2026-07-04)
 - **Empirical verification before the narrative.** Prove the mechanism (API probe,
   DB row, log) before writing the root-cause story, and tag each claim you relay as
-  *verified* (you ran the check) or *assumed* (hypothesis).
+  *verified* (you ran the check) or *assumed* (hypothesis). (origin: #2 · 2026-07-03)
 - **No premature success on async flows.** Don't report something as working until
   you've checked the *terminal state* (log line, `status` column, job result), not
   the "enqueued"/"created" step — a `200` on send can still flip to `failed`.
+  (origin: #2 · 2026-07-03)
 - **Reviewed ≠ executed — automation isn't done until observed running green on its
   real trigger.** A passing diff review, a green dry-run that *skips* the mutating
   step, or a generic YAML parse do NOT prove behavior. Require the real run and the
@@ -556,6 +579,7 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   calling it done. (Hard-won: three defects — a dry-run that skipped its own `git
   tag`, a tag on a commit predating the workflow, an empty `${{ }}` in a run-block
   comment — all passed review and only surfaced on real execution.)
+  (origin: #37 · 2026-07-04)
 - **A version bump is not released until its tag is pushed and the release
   workflow ran green.** Bumping the plugin manifest + CHANGELOG in a merged PR
   does NOT publish a release: the release workflow is *tag-triggered*, so with no
@@ -569,6 +593,7 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   the push command's output. (Hard-won: four versions shipped in one day with
   manifest+CHANGELOG bumps but no tags; Releases sat at the prior version until the
   user noticed, and the batch-push recovery then fired nothing.)
+  (origin: #62 · 2026-07-09)
 - **Isolate concurrent mutating dispatches.** Specialists that WRITE files in parallel
   must each run in their own git worktree (`isolation: "worktree"` on the Agent call);
   sharing one checkout lets one agent's branch switch or `checkout` clobber another's
@@ -578,13 +603,14 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   enforced by you, the operator, at dispatch time: whenever more than one mutating
   dispatch may be in flight, pass worktree isolation on every mutating dispatch. Do
   not rely on specialists noticing a shared-checkout collision and self-recovering.
+  (origin: #37 · 2026-07-04)
 - **Authoritative docs before the user hunts.** When the user must configure an
   external system, dispatch a research step (@research) for the *exact*
   labels/paths FIRST, then give ONE precise instruction — don't iterate live
-  through wrong guesses.
+  through wrong guesses. (origin: #2 · 2026-07-03)
 - **Surface silent infra failures proactively.** Broken backup crons, downed
   observability, dead file-providers should come from routine @sre audit passes,
-  not from the user stumbling into them.
+  not from the user stumbling into them. (origin: #2 · 2026-07-03)
 - **Confirm a "MERGE BLOCKED" against the authoritative diff before acting on it.**
   When a security reviewer reports a blocking finding, verify it against GitHub's
   three-dot PR diff (the merge-base comparison, e.g. `gh pr diff <N>` or the
@@ -593,10 +619,11 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   finding may be misattributed to code that is already merged and correct. If the
   flagged lines are actually prior-PR work showing up on a stale base, the fix is
   `gh pr update-branch <N>` (re-sync the base) — **never** delete the flagged code,
-  which would revert already-merged work.
+  which would revert already-merged work. (origin: #18 · 2026-07-03)
 - **Security review before merge.** No PR merges without a security pass on its
   diff — dispatch @sec (or run `/security-review`) and block the merge on
   high/critical findings (medium/low are advisory). Enforce it especially for
   changes touching secrets, privileged mounts (`docker.sock`), auth/CSRF, exposed
   ports, or dependencies. The PR author's own GitHub account can't self-approve, so
-  this review is the real approval gate.
+  this review is the real approval gate. (origin: #2 · 2026-07-03)
+<!-- /rules:origin-required -->

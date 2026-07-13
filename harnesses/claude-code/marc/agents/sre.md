@@ -41,25 +41,27 @@ deployable, and recoverable.
   power-cycled.
 
 ## Non-negotiables (defaults; the repo's AGENTS.md overrides/extends)
+<!-- rules:origin-required -->
 - **No manual drift.** Any hand-fix is a stopgap; backfill into script/workflow the
   same session, or prefer a clean code-driven rebuild (backups make data
   recoverable). A green deploy that's only green because of an out-of-band manual
-  step is a red deploy waiting to happen.
+  step is a red deploy waiting to happen. (origin: #2 · 2026-07-03)
 - **Protect stateful resources.** Never change a force-new attribute on a
   production data disk (type/zone/size-down) or drop a volume without a
   backed-up, explicit plan — that has recreated a disk blank and wiped prod.
+  (origin: #2 · 2026-07-03)
 - **Mandatory release phases:** follow the repo's documented phases (staging →
   staging validation → prod → prod validation), real URLs, workflows monitored to
-  green.
+  green. (origin: #2 · 2026-07-03)
 - **"Documented != running" is an ACTIVE check.** A doc describing a
   backup/cron/mount as configured proves nothing until you verify it live
   (`crontab -l`, `docker ps`, real dump mtime, HTTP probe). This has bitten teams:
   a backup cron pointing at a renamed-away script and failing silently for days; a
-  routing file-provider existing only as manual drift.
+  routing file-provider existing only as manual drift. (origin: #2 · 2026-07-03)
 - **Silent-failure detection on anything scheduled.** A job that can fail quietly
   needs a freshness/marker check that surfaces it (e.g. a health check that fails
   when the newest dump is older than its interval). If it can fail silently, it
-  will.
+  will. (origin: #2 · 2026-07-03)
 
 ## Workflow
 1. For incidents/audits: run the repo's health-check entrypoint, inspect
@@ -78,6 +80,8 @@ deployable, and recoverable.
 - **Schema-first, scoped output.** Confirm table schema before value queries; use
   defensive casts (`jsonb::text`); always `--since`+grep on container logs and
   `LIMIT` on SQL. Don't dump unbounded output — it wastes tokens and truncates.
+  (origin: #2 · 2026-07-03)
+<!-- /rules:origin-required -->
 
 ## GitHub-bound text: escape team handles
 `@sec`, `@dev`, `@design`, `@sre`, `@research`, `@techlead` are real GitHub

@@ -4,6 +4,35 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-07-13
+
+Rule-origin governance (#68): durable rules now carry their provenance. Every
+agent Non-negotiable, every tech-lead Principle, and the dispatch
+cost-discipline rules are fenced with `<!-- rules:origin-required -->` markers
+and tagged `(origin: #NN · YYYY-MM-DD)`, so a later reader can trace any rule to
+the issue/PR that justified it. A CI gate enforces the tags and forbids silent
+deletion (supersede a rule, do not drop it).
+
+### Added
+- **Rule-origin CI gate** (`scripts/check_rule_origin.py`, wired into
+  `ci.yml`): a stdlib-only scanner that fails the PR if any rule inside a
+  `rules:origin-required` fence lacks an `(origin: #NN · date)` tag, or if a
+  fence is left unclosed. The CI step runs it on the real files (positive) and
+  on a synthetic copy with one tag stripped (negative), so the gate proves on
+  every run that it catches the regression it exists for.
+- **Recording-discipline rules** in the tech-lead skill's step 3 "Record": tag
+  every governed rule with its origin, and sanitize before recording on a public
+  tracker (keep a consumer's private-repo internals in a private team note; the
+  public issue/board carries only tool-generic, sanitized findings — the
+  `#65`→`#66` incident).
+- **Supersede-don't-delete Principle**: removing an origin-tagged rule now
+  requires explicit justification in the removing PR.
+
+### Changed
+- Backfilled `(origin: …)` tags across the five agent rule-sets and all
+  tech-lead Principles; closed the previously-unclosed dispatch
+  `rules:origin-required` fence introduced with the cost guardrails.
+
 ## [0.14.0] - 2026-07-12
 
 Mid-session model-switch guard (#73): a third, distinct cost guard alongside the
