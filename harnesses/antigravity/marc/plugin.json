@@ -1,4 +1,5 @@
 {
+  "$schema": "./plugin.schema.json",
   "name": "marc",
   "version": "0.11.1",
   "description": "mARC (Multi-Agent Relay Control) — an IRC/vaporwave-styled agent team plugin for Google Antigravity. @techlead operator + specialist bench.",
