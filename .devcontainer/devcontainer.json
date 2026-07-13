@@ -1,0 +1,20 @@
+{
+  "name": "mARC Developer Workspace",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {},
+      "extensions": [
+        "ms-python.python",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  },
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude-devcontainer"
+  },
+  "postCreateCommand": "bash .devcontainer/setup-sandbox.sh",
+  "remoteUser": "node"
+}
