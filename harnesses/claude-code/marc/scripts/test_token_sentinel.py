@@ -23,6 +23,15 @@ Model-switch guard (#73):
       false-positive trap: separate context + cache, marked `isSidechain`);
   (d) the initial model of a session is never treated as a switch;
   (e) the hook ALWAYS exits 0.
+
+Context-size / per-turn-token guard (#81):
+  * a turn with a MODERATE call count (below the call-count band) but an
+    OVERSIZED context fires the context-size band while the call-count band
+    stays silent — the exact gap this guard closes;
+  * it fires regardless of model tier (Sonnet included, not Opus-only);
+  * it is debounced the same way as the call-count band (once per N-band);
+  * a turn below the tokens threshold never warns;
+  * the hook ALWAYS exits 0.
 """
 from __future__ import annotations
 
@@ -35,6 +44,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 SENTINEL = os.path.join(HERE, "token_sentinel.py")
 THRESHOLD = 5  # small, so fixtures stay tiny
+TOKENS_THRESHOLD = 500_000  # above the switch-guard fixtures' ~130K steady state
+                             # (origin: #81), so the two guards' fixtures don't
+                             # cross-trip each other in this shared test file.
 OPUS = "claude-opus-4-8-20260101"
 SONNET = "claude-sonnet-4-5-20250101"
 
@@ -121,6 +133,7 @@ def run_hook(env_tmp: str, transcript_path: str | None, session_id: str,
     env = dict(os.environ)
     env["TMPDIR"] = env_tmp                       # isolate the debounce state dir
     env["MARC_TOKEN_GUARD_THRESHOLD"] = str(THRESHOLD)
+    env["MARC_TOKEN_GUARD_TOKENS_THRESHOLD"] = str(TOKENS_THRESHOLD)
     if stdin_override is not None:
         stdin_text = stdin_override
     else:
@@ -254,6 +267,45 @@ def main() -> int:
         rc, out = run_hook(state_tmp, tiny, "sess-tiny")
         check(rc == 0, "sub-floor switch: exit 0")
         check(out.strip() == "", "switch without cache-write spike: no warn")
+
+        # ---- Context-size / per-turn-token guard (origin: #81) ------------
+
+        # The exact gap this guard closes: a MODERATE call count (well below
+        # the call-count band) that still drags in an OVERSIZED context. The
+        # call-count band must stay silent while the new context-size band
+        # fires. Uses Sonnet (not Opus) to prove the band is tier-independent.
+        moderate_calls = THRESHOLD - 2  # comfortably below the call-count band
+        big_ctx = write_multiturn(fixtures, "big_ctx.jsonl", [
+            {"model": SONNET, "cw": TOKENS_THRESHOLD * 2, "cr": 0,
+             "calls": moderate_calls},
+        ])
+        rc, out = run_hook(state_tmp, big_ctx, "sess-bigctx")
+        check(rc == 0, "moderate calls + oversized context: exit 0")
+        check(out.strip() != "",
+              "moderate calls + oversized context: context-size band FIRES")
+        if out.strip():
+            data = parse_advisory(out)
+            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
+            check("context-size" in ctx.lower() or "Context-size" in ctx,
+                  "context-size advisory names the guard")
+
+        # Sanity: the SAME fixture would NOT trip the call-count band on its
+        # own terms (moderate_calls < THRESHOLD, and it's Sonnet, not Opus) —
+        # confirms the two bands are independent signals, not one masking
+        # the other.
+        check(moderate_calls < THRESHOLD,
+              "fixture sanity: call count stays below the call-count band")
+
+        # Below the tokens threshold -> silent (no false positive on a small
+        # context, even with the same moderate call count).
+        small_ctx = write_multiturn(fixtures, "small_ctx.jsonl", [
+            {"model": SONNET, "cw": TOKENS_THRESHOLD // 10, "cr": 0,
+             "calls": moderate_calls},
+        ])
+        rc, out = run_hook(state_tmp, small_ctx, "sess-smallctx")
+        check(rc == 0, "moderate calls + small context: exit 0")
+        check(out.strip() == "",
+              "moderate calls + small context: no warn (below tokens threshold)")
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")

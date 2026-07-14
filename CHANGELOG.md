@@ -4,6 +4,32 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.2] - 2026-07-14
+
+Task-boundary context hygiene and a third token-guard band (#81), closing a gap
+where cost blowups happen at a moderate tool-call count carrying an oversized
+re-read context, below the runaway-loop band.
+
+### Added
+- **`@techlead`: task-boundary context-hygiene advisory.** When a discussed work
+  item is closed out and the session has actually grown, `@techlead` now says so
+  plainly and recommends `/compact` or a fresh session before the next item. The
+  skill text explains why this is advisory rather than automatic: `/compact`
+  cannot be triggered programmatically (the harness only compacts on the user's
+  manual `/compact` or its own near-limit auto-compaction; hooks are reactive and
+  can only block, never initiate).
+- **`@techlead`: delegate-execution hard rule.** New governed Principle (origin
+  `#81`, inside the origin-required fence): heavy execution (commands, tests, PR
+  mechanics) belongs on a specialist subagent, not on the operator's own main
+  thread, so the operator's context stays lean.
+- **Token-guard third band: context-size / per-turn-token.** `token_sentinel.py`
+  and `hooks/token-guard.sh` gained a warn-only guard on tokens processed in the
+  current turn, independent of model tier or call count
+  (`MARC_TOKEN_GUARD_TOKENS_THRESHOLD`, default 150000). It catches a
+  moderate-call-count turn that still drags in an oversized context, same
+  band-debounce shape as the existing call-count guard, still warn-only and
+  always exits 0.
+
 ## [0.15.1] - 2026-07-13
 
 Trigger-gated cross-version compatibility Principle added to the `@dev` and `@sre`
