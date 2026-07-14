@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# mARC :: PostToolUse automatic cost guards (origin: #71, #73)
+# mARC :: PostToolUse automatic cost guards (origin: #71, #73, #81)
 # ---------------------------------------------------------------------------
-# Warn-only, non-blocking follow-up to the manual token sentinel (#69). Two
+# Warn-only, non-blocking follow-up to the manual token sentinel (#69). Three
 # guards run off the same shared Python logic:
 #   * runaway-loop (#71): while a runaway tool-loop is happening on an Opus-tier
 #     model, nudge toward `/compact` or a Sonnet drop.
 #   * model-switch (#73): on a genuine main-thread mid-session model switch that
 #     re-cached the whole context (subagent/sidechain models are ignored), nudge
 #     toward switching at a natural break / `/compact` instead of flip-flopping.
+#   * context-size (#81): a turn's tokens-processed crosses a threshold on any
+#     model tier, independent of call count — catches a moderate-call-count
+#     turn that still dragged in an oversized re-read context.
 # So users who never run the manual diagnostic are still protected.
 #
 # CONTRACT: warn-only. This hook NEVER blocks, denies, or aborts a tool call.

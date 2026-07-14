@@ -13,11 +13,11 @@ Two modes share ONE counting implementation (DRY):
     per-turn table. Unchanged behaviour.
         python3 token_sentinel.py [SESSION.jsonl] [--calls N] [--tokens N]
 
-  * PostToolUse HOOK (`--hook`, origin: #71, #73) — warn-only, non-blocking
+  * PostToolUse HOOK (`--hook`, origin: #71, #73, #81) — warn-only, non-blocking
     automatic guards. Reads the hook's stdin JSON, inspects `transcript_path`,
     and may emit a non-blocking advisory (Claude Code
     `hookSpecificOutput.additionalContext` + a top-level `systemMessage`). It
-    NEVER blocks, denies, or aborts a tool call, and ALWAYS exits 0. Two guards:
+    NEVER blocks, denies, or aborts a tool call, and ALWAYS exits 0. Three guards:
       - runaway-loop (#71): the CURRENT turn is on Opus AND has crossed a
         consecutive-tool-call threshold -> suggest `/compact` or a Sonnet drop.
       - model-switch (#73): a genuine MAIN-thread mid-session model switch
@@ -25,6 +25,10 @@ Two modes share ONE counting implementation (DRY):
         cache-read collapse) -> note the context was re-cached and suggest
         switching at a natural break / `/compact`. Subagent/sidechain model
         differences (`isSidechain`) are ignored — separate context and cache.
+      - context-size (#81): the CURRENT turn's tokens-processed has crossed a
+        threshold regardless of model tier or call count -> catches the case a
+        MODERATE call count still drags in an oversized re-read context, below
+        the runaway-loop band. Suggest `/compact` or a fresh session.
         <hook-json-on-stdin> | python3 token_sentinel.py --hook
 
 Usage (CLI):
@@ -36,7 +40,11 @@ Usage (CLI):
 
     Thresholds (override with flags):
       --calls N       flag a turn with more than N assistant tool calls  (default 25)
-      --tokens N      flag a turn processing more than N tokens           (default 300000)
+      --tokens N      flag a turn processing more than N tokens           (default 150000)
+
+    Env vars (shared with the hook, see below):
+      MARC_TOKEN_GUARD_THRESHOLD          call-count band (default 25)
+      MARC_TOKEN_GUARD_TOKENS_THRESHOLD   context-size / per-turn-token band (default 150000)
 
 The per-turn token metric sums, over every assistant message in the turn,
 `usage.input_tokens + usage.cache_read_input_tokens +
@@ -61,6 +69,20 @@ import tempfile
 # the manual CLI's default --calls so the two views agree on "runaway".
 DEFAULT_HOOK_THRESHOLD = 25
 HOOK_THRESHOLD_ENV = "MARC_TOKEN_GUARD_THRESHOLD"
+
+# --- Context-size / per-turn-token guard (origin: #81) ----------------------
+# The call-count band above misses the case where a MODERATE number of tool
+# calls (below the call-count threshold) still drags in an oversized context —
+# a handful of large file reads or a big re-read can blow the token budget
+# without ever crossing the call-count band. This band watches tokens
+# processed in the CURRENT turn (input + cache_read + cache_creation, same
+# metric the manual CLI already reports) independent of model tier: a large
+# re-read costs real money on any tier, not just Opus. Override with the env
+# var; a turn that reaches N warns once, then again at 2N, 3N, ... (same band
+# debounce as the call-count guard, in its own state file so the two guards
+# never clobber each other).
+DEFAULT_HOOK_TOKENS_THRESHOLD = 150_000
+HOOK_TOKENS_THRESHOLD_ENV = "MARC_TOKEN_GUARD_TOKENS_THRESHOLD"
 
 # --- Mid-session model-switch guard (origin: #73) --------------------------
 # Switching the model mid-session invalidates the prompt cache: the prefix
@@ -218,6 +240,15 @@ def hook_threshold() -> int:
     return val if val > 0 else DEFAULT_HOOK_THRESHOLD
 
 
+def hook_tokens_threshold() -> int:
+    raw = os.environ.get(HOOK_TOKENS_THRESHOLD_ENV, "")
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_HOOK_TOKENS_THRESHOLD
+    return val if val > 0 else DEFAULT_HOOK_TOKENS_THRESHOLD
+
+
 def _state_path(session_key: str, kind: str = "") -> str:
     """Per-session debounce file under the system temp dir (no real paths leak).
 
@@ -290,6 +321,56 @@ def build_advisory(*, model: str, count: int, threshold: int) -> dict:
         "systemMessage": (
             f"[mARC] token-guard: {count} consecutive Opus tool calls this turn "
             f"(>{threshold}). Advisory only. Consider /compact or Sonnet."
+        ),
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": advice,
+        },
+    }
+
+
+# --- Context-size / per-turn-token guard (origin: #81) ----------------------
+
+def should_warn_tokens(*, tokens: int, threshold: int, turn_index: int,
+                       session_key: str) -> bool:
+    """Debounced band check on tokens processed this turn, independent of
+    model tier or call count — catches a moderate-call-count turn that still
+    dragged in an oversized context. Same band-debounce shape as `should_warn`,
+    a separate state file (`kind="tokens"`) so the two guards never clobber
+    each other's memory.
+    """
+    band = tokens // threshold  # 0 below N, 1 in [N,2N), 2 in [2N,3N), ...
+    if band < 1:
+        return False
+    state_path = _state_path(session_key, kind="tokens")
+    state = _load_state(state_path)
+    same_turn = state.get("turn") == turn_index
+    warned_band = state.get("band", 0) if same_turn else 0
+    if band <= warned_band:
+        return False
+    _save_state(state_path, {"turn": turn_index, "band": band})
+    return True
+
+
+def build_tokens_advisory(*, model: str, tokens: int, threshold: int) -> dict:
+    """Non-blocking PostToolUse payload for the context-size / per-turn-token
+    band (same channels as the other guards: no `decision`, no exit 2).
+    """
+    approx_k = max(1, round(tokens / 1000))
+    threshold_k = max(1, round(threshold / 1000))
+    advice = (
+        f"[mARC token-guard] Context-size guard: this turn has processed "
+        f"~{approx_k}K tokens ({model}), past the {threshold_k}K-token threshold, "
+        f"even though the tool-call count may still be low. A moderate call "
+        f"count can still carry an oversized re-read context, and that costs "
+        f"real money regardless of model tier. This is advisory only — nothing "
+        f"was blocked. Consider `/compact` to shrink context before continuing, "
+        f"or starting a fresh session for the next task."
+    )
+    return {
+        "systemMessage": (
+            f"[mARC] token-guard: ~{approx_k}K tokens processed this turn "
+            f"(>{threshold_k}K). Advisory only. Consider /compact."
         ),
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
@@ -430,7 +511,9 @@ def run_hook(stdin_text: str) -> int:
     current = turns[turn_index]
     model = current.get("model", "-")
     count = current.get("requests", 0)
+    tokens = current.get("tokens", 0)
     threshold = hook_threshold()
+    tokens_threshold = hook_tokens_threshold()
     session_key = str(payload.get("session_id") or transcript_path)
 
     advisories: list[dict] = []
@@ -450,6 +533,14 @@ def run_hook(stdin_text: str) -> int:
             advisories.append(build_switch_advisory(
                 from_model=from_model, to_model=to_model, cw=cw))
 
+    # Guard 3 (#81): context-size / per-turn-token band, independent of the
+    # call-count band above — catches a moderate-call-count turn with an
+    # oversized re-read context.
+    if should_warn_tokens(tokens=tokens, threshold=tokens_threshold,
+                          turn_index=turn_index, session_key=session_key):
+        advisories.append(build_tokens_advisory(
+            model=model, tokens=tokens, threshold=tokens_threshold))
+
     merged = _merge_advisories(advisories)
     if merged is not None:
         sys.stdout.write(json.dumps(merged))
@@ -459,8 +550,10 @@ def run_hook(stdin_text: str) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Per-turn token/tool-call sentinel for Claude Code logs.")
     ap.add_argument("session", nargs="?", help="path to a session .jsonl (default: newest for this project)")
-    ap.add_argument("--calls", type=int, default=25, help="flag turns above this tool-call count")
-    ap.add_argument("--tokens", type=int, default=300_000, help="flag turns above this token count")
+    ap.add_argument("--calls", type=int, default=DEFAULT_HOOK_THRESHOLD,
+                    help="flag turns above this tool-call count")
+    ap.add_argument("--tokens", type=int, default=DEFAULT_HOOK_TOKENS_THRESHOLD,
+                    help="flag turns above this token count (context-size signal, origin: #81)")
     ap.add_argument("--hook", action="store_true",
                     help="run as a warn-only PostToolUse hook (reads hook JSON on stdin; always exits 0)")
     args = ap.parse_args(argv)
@@ -482,17 +575,29 @@ def main(argv=None) -> int:
 
     turns = analyze(path)
     print(f"session: {path}")
-    print(f"turns:   {len(turns)}   thresholds: >{args.calls} calls, >{args.tokens} tokens\n")
-    print(f"{'#':>3}  {'model':<28} {'calls':>6} {'tokens':>12}  flag  prompt")
+    print(f"turns:   {len(turns)}   thresholds: >{args.calls} calls, >{args.tokens} tokens "
+          f"(context-size signal, origin: #81)\n")
+    print(f"{'#':>3}  {'model':<28} {'calls':>6} {'tokens':>12}  {'flag':<14} prompt")
     flagged = 0
     total_tokens = 0
     for i, t in enumerate(turns, 1):
         total_tokens += t["tokens"]
-        runaway = t["calls"] > args.calls or t["tokens"] > args.tokens
-        flag = "RUNAWAY" if runaway else ""
-        if runaway:
+        over_calls = t["calls"] > args.calls
+        over_tokens = t["tokens"] > args.tokens
+        # Distinct flags so a manual audit can see WHICH signal tripped: a
+        # moderate call count with an oversized context (CONTEXT-SIZE) is a
+        # different failure mode than a long tool-call loop (RUNAWAY-CALLS).
+        if over_calls and over_tokens:
+            flag = "RUNAWAY+CTX"
+        elif over_calls:
+            flag = "RUNAWAY"
+        elif over_tokens:
+            flag = "CONTEXT-SIZE"
+        else:
+            flag = ""
+        if over_calls or over_tokens:
             flagged += 1
-        print(f"{i:>3}  {t['model']:<28} {t['calls']:>6} {t['tokens']:>12}  {flag:<7} {t['prompt']}")
+        print(f"{i:>3}  {t['model']:<28} {t['calls']:>6} {t['tokens']:>12}  {flag:<14} {t['prompt']}")
     print(f"\ntotal tokens processed: {total_tokens}   flagged turns: {flagged}")
     return 1 if flagged else 0
 
