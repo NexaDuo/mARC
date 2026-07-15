@@ -218,7 +218,15 @@ jobs:
       #     zero token cost — a grep over required guard phrases, no live model.
       - name: Self-improvement context-gating gate
         run: |
-          SKILL=core/skills/tech-lead/SKILL.md
+          # This gate asserts a concrete runtime probe (a literal path a
+          # plugin.json context-detection check greps for), not just prose
+          # shape, so it targets the COMPILED Claude Code output, where
+          # `{{ plugin_manifest_path }}` has been substituted with the real
+          # `.claude-plugin/plugin.json` path. core/skills/tech-lead/SKILL.md
+          # is the harness-neutral template and carries the placeholder token
+          # by design; the format/anti-anchoring/rule-origin gates elsewhere
+          # in this workflow still assert against core/ prose directly.
+          SKILL=harnesses/claude-code/marc/skills/tech-lead/SKILL.md
           # Reusable check: every required guard phrase must be present in $1.
           # Phrases are matched case-insensitively, each on its own line in the
           # source, so a whole-file scan is unnecessary.
@@ -581,6 +589,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$CLAUDE_CONFIG_DIR"
+
+          # This job's checkout is shallow (fetch-depth: 1) and only fetches the
+          # PR ref, so origin/main does not exist in the object database yet.
+          # Fetch just that ref (no credentials needed, it's the same public
+          # remote already configured by actions/checkout) before archiving it.
+          # This intentionally keeps the credential-free `git archive` approach
+          # from the PR (chosen so fork PRs never need a credentialed clone)
+          # instead of switching to `git clone`.
+          git fetch --depth=1 origin main
 
           # Extract the origin/main version of the repo into a temp directory
           PREV_DIR="${{ runner.temp }}/marc-prev"
