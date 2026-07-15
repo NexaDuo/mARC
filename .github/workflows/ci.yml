@@ -574,6 +574,47 @@ jobs:
           done
           echo "In-repo: plugin + tech-lead skill + engineer/sre/design/security/research agents all registered."
 
+      - name: Tier 2 — Antigravity harness install + component registration
+        env:
+          ANTIGRAVITY_API_KEY: ${{ secrets.ANTIGRAVITY_API_KEY }}
+          HOME: ${{ github.workspace }}/.agy-home
+        run: |
+          set -euo pipefail
+          if [ -z "${ANTIGRAVITY_API_KEY:-}" ]; then
+            echo "ANTIGRAVITY_API_KEY is absent. Skipping Antigravity harness tests cleanly."
+            exit 0
+          fi
+
+          echo "Installing Google Antigravity CLI..."
+          pip3 install --break-system-packages google-antigravity==0.1.6
+
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "Installing mARC plugin..."
+          agy plugin install harnesses/antigravity/marc
+
+          echo "Asserting plugin registration..."
+          agy plugin list | jq -e '.imports[] | select(.name=="marc")' > /dev/null
+
+          echo "Asserting all six components are registered..."
+          CONFIG_DIR="$HOME/.gemini/config/plugins/marc"
+
+          # Assert specialist agents
+          for component in engineer sre design security research; do
+            test -f "$CONFIG_DIR/agents/$component.md" || {
+              echo "::error::Agent component '$component' not found in config directory"
+              exit 1
+            }
+          done
+
+          # Assert tech-lead skill
+          test -f "$CONFIG_DIR/skills/tech-lead/SKILL.md" || {
+            echo "::error::Skill component 'tech-lead' not found in config directory"
+            exit 1
+          }
+
+          echo "Antigravity harness check: OK (plugin installed, and all six components registered successfully)."
+
       # 8. Cross-repo proof: from a working directory OUTSIDE the mARC checkout,
       #    with its OWN fresh config dir, add the marketplace by pointing at the
       #    mARC checkout path and prove registration there. This is the whole
