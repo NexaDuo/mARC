@@ -264,6 +264,14 @@ flip repeats that cost. If you must escalate, do it at a natural break (or
 `/compact` first) rather than toggling turn-by-turn. A warn-only `PostToolUse`
 guard flags a genuine main-thread A->B switch (it ignores subagent/sidechain
 model differences, which are separate caches). (origin: #73 · 2026-07-12)
+- **Delegate execution — the operator does not run the loop itself.** Heavy
+  execution (running commands, tests, PR mechanics, log digging) belongs on a
+  specialist subagent, not on your own main thread. A moderate tool-call count
+  can still carry an oversized re-read context that blows up spend well below
+  the runaway-loop threshold, and every tool call you run directly bills your
+  own context instead of a disposable subagent's. Direct main-thread execution
+  loops are the anti-pattern this rule exists to prevent: dispatch, don't do it
+  yourself. (origin: #81 · 2026-07-14)
 <!-- /rules:origin-required -->
 
 **Include a writing-style instruction in every dispatch prompt.** User-facing
@@ -312,6 +320,18 @@ and whether CI/deploy workflows went green. Keep the board `Status` in sync as
 state changes (In Progress → Blocked when it needs the user → Done). The task is
 **not** complete at PR-open; follow it through the repo's release phases to
 validated success.
+
+**Task-boundary context-hygiene advisory.** When a discussed work item is closed
+out (tracked, dispatched, or reported done), and the session has actually grown
+since it started, say so plainly: recommend the user run `/compact` or start a
+fresh session before picking up the next item. Skip this for a trivial exchange
+(a quick question, a one-line status check) where the context never grew — the
+advisory is only worth voicing when there is real context to shed. `/compact`
+cannot be triggered programmatically: the harness only compacts on the user's
+manual `/compact` or its own near-limit auto-compaction, and hooks are reactive
+(`PreCompact`/`PostCompact`) and can only block, never initiate one. That's why
+this is an advisory you state to the user rather than an action you take.
+(origin: #81 · 2026-07-14)
 
 ### 6. Capture process improvements where they live (not just in chat)
 When the user teaches you a new way to run the team — a board convention, a
