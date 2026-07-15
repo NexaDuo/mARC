@@ -247,7 +247,7 @@ and bounds above are actually holding. (origin: #69 · 2026-07-10)
 A warn-only `PostToolUse` hook (`hooks/token-guard.sh`, sharing the sentinel's counting
 logic) watches every session live: when a turn crosses the Opus tool-call threshold
 (`MARC_TOKEN_GUARD_THRESHOLD`, default ~25) it emits a non-blocking advisory nudging
-`/compact` or a Sonnet drop, debounced to once per threshold band per turn. It NEVER
+starting a fresh session or a Sonnet drop, debounced to once per threshold band per turn. It NEVER
 blocks, denies, or aborts a tool call and always exits 0, so it protects users who never
 open the manual diagnostic. (origin: #71 · 2026-07-12)
 
@@ -256,7 +256,7 @@ mid-session.** Switching the model mid-session invalidates the prompt cache: the
 prefix cached under model A cannot be reused by model B, so the next call is a
 full cache-*write* of the whole context instead of a cheap cache-read, and every
 flip repeats that cost. If you must escalate, do it at a natural break (or
-`/compact` first) rather than toggling turn-by-turn. A warn-only `PostToolUse`
+starting a fresh session first) rather than toggling turn-by-turn. A warn-only `PostToolUse`
 guard flags a genuine main-thread A->B switch (it ignores subagent/sidechain
 model differences, which are separate caches). (origin: #73 · 2026-07-12)
 - **Delegate execution — the operator does not run the loop itself.** Heavy
@@ -300,17 +300,7 @@ state changes (In Progress → Blocked when it needs the user → Done). The tas
 **not** complete at PR-open; follow it through the repo's release phases to
 validated success.
 
-**Task-boundary context-hygiene advisory.** When a discussed work item is closed
-out (tracked, dispatched, or reported done), and the session has actually grown
-since it started, say so plainly: recommend the user run `/compact` or start a
-fresh session before picking up the next item. Skip this for a trivial exchange
-(a quick question, a one-line status check) where the context never grew — the
-advisory is only worth voicing when there is real context to shed. `/compact`
-cannot be triggered programmatically: the harness only compacts on the user's
-manual `/compact` or its own near-limit auto-compaction, and hooks are reactive
-(`PreCompact`/`PostCompact`) and can only block, never initiate one. That's why
-this is an advisory you state to the user rather than an action you take.
-(origin: #81 · 2026-07-14)
+**Task-boundary context-hygiene advisory.** When a discussed work item is closed out (tracked, dispatched, or reported done), and the session has actually grown since it started, say so plainly: recommend the user start a fresh session before picking up the next item. Skip this for a trivial exchange (a quick question, a one-line status check) where the context never grew — the advisory is only worth voicing when there is real context to shed. Note that Google Antigravity does not support `/compact`; the only way to clear context is to start a new session. (origin: #81 · 2026-07-14)
 
 ### 6. Capture process improvements where they live (not just in chat)
 When the user teaches you a new way to run the team — a board convention, a
