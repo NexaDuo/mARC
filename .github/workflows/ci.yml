@@ -448,6 +448,30 @@ jobs:
 
           echo "CHANGELOG parity gate: OK (plugin.json ${VERSION} has a '## [${VERSION}]' section; negative test rejected a missing version)."
 
+      # 8a. Harness version-parity gate: the Claude Code and Google Antigravity
+      #     manifests ship in lockstep (same version each release), so fail if
+      #     their `.version` fields ever drift apart. Deterministic, zero token
+      #     cost, mirrors the CHANGELOG parity gate above.
+      - name: Harness version-parity gate
+        run: |
+          CC_PLUGIN=harnesses/claude-code/marc/.claude-plugin/plugin.json
+          AGY_PLUGIN=harnesses/antigravity/marc/plugin.json
+
+          CC_VERSION="$(jq -r .version "$CC_PLUGIN")"
+          AGY_VERSION="$(jq -r .version "$AGY_PLUGIN")"
+
+          test -n "$CC_VERSION" && test "$CC_VERSION" != "null" \
+            || { echo "::error::could not read .version from $CC_PLUGIN"; exit 1; }
+          test -n "$AGY_VERSION" && test "$AGY_VERSION" != "null" \
+            || { echo "::error::could not read .version from $AGY_PLUGIN"; exit 1; }
+
+          if [ "$CC_VERSION" != "$AGY_VERSION" ]; then
+            echo "::error::Harness version-parity gate: $CC_PLUGIN is ${CC_VERSION} but $AGY_PLUGIN is ${AGY_VERSION}, both harnesses must ship at the same version."
+            exit 1
+          fi
+
+          echo "Harness version-parity gate: OK (both harnesses at ${CC_VERSION})."
+
       # 9. actionlint — workflow schema + expression lint. Plain YAML parsing
       #    (jq/yaml.safe_load) accepts a file that GitHub's stricter workflow
       #    schema rejects at load time (a "startup_failure": no jobs ever run).
