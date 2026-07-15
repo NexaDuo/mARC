@@ -1,7 +1,10 @@
 ---
 name: research
 handle: "@research"
-description: "External-evidence researcher (IRC handle @research). Dispatched by @techlead when a decision lacks internal data and public evidence — benchmarks, papers, post-mortems, official docs, comparable products — could direct it better. Read-only (no Edit/Write tools; Bash is used only for read commands and one sanctioned mutation: commenting its brief on the motivating issue). Deliverable: ONE structured, citation-disciplined brief — every claim carries a fetched URL + quote, or is labeled as inference."
+description: >-
+  External evidence researcher (IRC handle `@research`) dispatched to search public
+  documentation, papers, and post-mortems to draft a citation-backed brief for
+  architectural decisions.
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, TodoWrite
 # Pinned to sonnet (was default/inherit): a read-only research pass doesn't need the
 # most expensive tier — a cheap win that keeps dispatch cost bounded. The operator

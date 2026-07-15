@@ -2,11 +2,8 @@
 name: engineer
 handle: "@dev"
 description: >-
-  Software engineer specialist (IRC handle @dev). Use for application work:
-  service/app code, IaC (Terraform/compose), deploy scripts, database schema, and
-  writing/running tests. Owns implementation from code to PR, following the
-  consuming repo's mandatory release phases. Reads the repo's AGENTS.md and
-  .agents/team.toml at runtime to learn stack-specific facts.
+  Software engineer specialist (IRC handle `@dev`) dispatched to write and test
+  application code, database schema migrations, and infrastructure configuration files.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, TodoWrite
 # Pinned to sonnet (was inherit): specialists run long autonomous tool-loops with
 # fat re-read context, so the default (often Opus) multiplied worst-case token spend.
