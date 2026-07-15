@@ -8,7 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Dual-harness template compilation (#80): mARC's prompts now compile from a
 single `core/` source into each supported harness, and Google Antigravity
-joins Claude Code as a second supported harness.
+joins Claude Code as a second supported harness. Both harnesses ship at this
+same 0.16.0 version, and going forward they version in lockstep.
 
 ### Added
 - **`core/` as the single source of truth for agent prompts.** Prompt templates
@@ -32,13 +33,10 @@ joins Claude Code as a second supported harness.
 - **CI: upgrade-path check.** `ci.yml` installs the plugin as it exists on
   `origin/main`, then upgrades it to the current PR's version, and fails if the
   upgrade doesn't complete cleanly.
-
-### Notes
-- The Google Antigravity harness's own `plugin.json` version is intentionally
-  left unchanged in this release. It versions independently of the mARC
-  project release number, isn't yet installable or tested end to end, and a
-  follow-up issue tracks the decision on whether it should share the project's
-  semver going forward.
+- **CI: harness version-parity gate.** `ci.yml` now compares the `.version`
+  field of the Claude Code and Google Antigravity manifests and fails the
+  build if they ever drift apart, keeping the two harnesses' releases in
+  lockstep going forward.
 
 ## [0.15.2] - 2026-07-14
 
