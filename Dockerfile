@@ -25,7 +25,7 @@ RUN type -p curl >/dev/null || (apt-get update && apt-get install curl -y) \
 RUN npm install -g @anthropic-ai/claude-code@2.1.200
 
 # Install Google Antigravity Python SDK & CLI
-RUN pip3 install --break-system-packages google-antigravity
+RUN pip3 install --break-system-packages google-antigravity==0.1.6
 
 # Set the workspace directory
 WORKDIR /workspace
