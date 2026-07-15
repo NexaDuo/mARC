@@ -455,42 +455,33 @@
 
       <div id="panel-antigravity" class="tab-panel" role="tabpanel" aria-labelledby="tab-antigravity">
         <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 1) · install Python library</span>
+          <span class="meta"><span class="you">you</span> (step 1) · install the official CLI tool</span>
           <div class="cmd">
             <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-pip">pip3 install google-antigravity==0.1.6</code>
-            <button class="copy" type="button" id="copy-btn-agy-pip" data-copy="cmd-agy-pip" aria-label="Copy: pip install google-antigravity">copy</button>
+            <code id="cmd-agy-install">bash &lt;(curl -fsSL https://antigravity.google/cli/install.sh)</code>
+            <button class="copy" type="button" id="copy-btn-agy-install" data-copy="cmd-agy-install" aria-label="Copy: install official Antigravity CLI">copy</button>
           </div>
         </div>
 
         <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 2) · install the agy CLI tool</span>
+          <span class="meta"><span class="you">you</span> (step 2) · install the mARC plugin</span>
           <div class="cmd">
             <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-cli">curl -sSL https://antigravity.google/cli/install.sh | bash</code>
-            <button class="copy" type="button" id="copy-btn-agy-cli" data-copy="cmd-agy-cli" aria-label="Copy: install agy CLI">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 3) · update your search path</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-path">export PATH="$HOME/.local/bin:$PATH"</code>
-            <button class="copy" type="button" id="copy-btn-agy-path" data-copy="cmd-agy-path" aria-label="Copy: update PATH">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 4) · install the mARC plugin</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-plugin">agy plugin install harnesses/antigravity/marc</code>
+            <code id="cmd-agy-plugin">agy plugin install NexaDuo/mARC:harnesses/antigravity/marc</code>
             <button class="copy" type="button" id="copy-btn-agy-plugin" data-copy="cmd-agy-plugin" aria-label="Copy: install mARC plugin on Antigravity">copy</button>
           </div>
         </div>
 
-        <p class="note">This registers the mARC plugin on the Google Antigravity harness. The agent team runs locally in your environment, utilizing the configured workspace directory.</p>
+        <div class="irc-line">
+          <span class="meta"><span class="who">@techlead</span> has joined · start the team</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="cmd-agy-invoke">agy /marc:tech-lead</code>
+            <button class="copy" type="button" id="copy-btn-agy-invoke" data-copy="cmd-agy-invoke" aria-label="Copy: start mARC team with agy">copy</button>
+          </div>
+        </div>
+
+        <p class="note">The Antigravity CLI binary installs to <code>~/.local/bin/agy</code>. Make sure <code>~/.local/bin</code> is in your search path (<code>$PATH</code>). Once installed, you can start the team with <code>agy /marc:tech-lead</code>.</p>
       </div>
 
     </div>

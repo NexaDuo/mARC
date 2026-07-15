@@ -41,13 +41,11 @@ Run these commands inside Claude Code to add the marketplace, install the plugin
 
 ### Google Antigravity
 
-Run these commands in your terminal to install the Google Antigravity CLI, configure your path, install the plugin, and start:
+Run these commands in your terminal to install the Google Antigravity CLI, install the plugin, and start:
 
 ```bash
-pip3 install google-antigravity==0.1.6
-curl -sSL https://antigravity.google/cli/install.sh | bash
-export PATH="$HOME/.local/bin:$PATH"
-agy plugin install harnesses/antigravity/marc
+bash <(curl -fsSL https://antigravity.google/cli/install.sh)
+agy plugin install NexaDuo/mARC:harnesses/antigravity/marc
 agy /marc:tech-lead
 ```
 
@@ -114,7 +112,7 @@ Or run these commands inside Claude Code:
 For Google Antigravity, you can update by re-running the installation command:
 
 ```bash
-agy plugin install harnesses/antigravity/marc
+agy plugin install NexaDuo/mARC:harnesses/antigravity/marc
 ```
 
 **Update notifications:** mARC ships a `SessionStart` hook that checks whether your installed version is behind the version on `main` once per session. If a new major or minor version is available, it prints a one-line update reminder. This check is silent and does not block the session if you are offline or if the check times out.
