@@ -588,6 +588,9 @@ jobs:
           echo "Installing Google Antigravity CLI..."
           pip3 install --break-system-packages google-antigravity==0.1.6
 
+          echo "Bootstrapping Antigravity CLI binary..."
+          curl -sSL https://antigravity.google/cli/install.sh | bash
+
           export PATH="$HOME/.local/bin:$PATH"
 
           echo "Installing mARC plugin..."
