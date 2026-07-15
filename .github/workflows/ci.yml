@@ -354,7 +354,7 @@ jobs:
           # NEGATIVE: a copy with one origin tag stripped MUST fail, proving the
           # gate catches the regression it exists for.
           tmp="$(mktemp --suffix=.md)"
-          sed '0,/(origin: #[0-9][0-9]* · [0-9-][0-9-]*)/s/ *(origin: #[0-9][0-9]* · [0-9-][0-9]*)//' \
+          sed '0,/(origin: #[0-9][0-9]* · [0-9-][0-9-]*)/s/ *(origin: #[0-9][0-9]* · [0-9-][0-9-]*)//' \
             "core/agents/engineer.md" > "$tmp"
           if python3 "$CHECK" "$tmp" > /dev/null 2>&1; then
             echo "::error::negative test FAILED — gate passed after an origin tag was stripped"
