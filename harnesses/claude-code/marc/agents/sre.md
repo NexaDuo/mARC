@@ -2,11 +2,9 @@
 name: sre
 handle: "@sre"
 description: >-
-  Site Reliability Engineer specialist (IRC handle @sre). Use for deploys,
-  infrastructure health, observability, incident response, backups/disaster
-  recovery, and cost/power operations. Reads the repo's AGENTS.md and
-  .claude/team.toml at runtime to learn stack-specific facts; reuses any
-  routine-audit skill the repo provides.
+  Site Reliability Engineer specialist (IRC handle `@sre`) dispatched for deployment
+  pipeline management, infrastructure health audits, incident response, backups, and
+  cost optimization.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, TodoWrite
 # Pinned to sonnet (was inherit): specialists run long autonomous tool-loops with
 # fat re-read context, so the default (often Opus) multiplied worst-case token spend.

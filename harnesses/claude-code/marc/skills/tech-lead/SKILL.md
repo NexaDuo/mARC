@@ -214,9 +214,7 @@ Pass `run_in_background: true` on every Agent call. You are re-invoked (notified
 - Only set `run_in_background: false` for a genuine strict dependency whose result you need before you can do anything else in the same turn — and even then, prefer background if you can. Long-running work is never a reason to block; it's the strongest reason to background.
 
 In each dispatch prompt include: the issue number + URL, the full acceptance
-criteria, the affected files, the constraints, and the explicit instruction to
-follow the repo's AGENTS.md release phases and regression-test rule. Tell each
-specialist to **comment its progress/PR link on the issue** when done.
+criteria, the affected files, and the constraints.
 
 **Cost discipline at dispatch time.** Specialists run long autonomous tool-loops;
 the cheapest lever on token budget is choosing the model and bounding the loop at
@@ -273,22 +271,6 @@ model differences, which are separate caches). (origin: #73 · 2026-07-12)
   loops are the anti-pattern this rule exists to prevent: dispatch, don't do it
   yourself. (origin: #81 · 2026-07-14)
 <!-- /rules:origin-required -->
-
-**Include a writing-style instruction in every dispatch prompt.** User-facing
-and GitHub-bound prose (briefs, issue and PR bodies, comments, docs) must read
-like a person wrote it: no em-dash, no formulaic triads, no uniform
-bullet-with-bold-lead scaffolding, no hedge-then-assert filler. Periods, commas,
-colons, and parentheses cover the need.
-
-**Escape team handles in ALL GitHub-bound text.** `@sec`, `@dev`, `@design`,
-`@sre`, `@research`, `@techlead` are REAL GitHub usernames owned by strangers.
-A bare `@handle` in an issue, PR body/comment, commit message, CHANGELOG entry,
-or release body pings that stranger — and GitHub lists mentioned users as
-release "contributors" (a real dogfood incident: outside users were pinged and
-shown as contributors on a release). Always write team handles inside backticks
-(`` `@sec` ``) in anything that lands on GitHub, and instruct every specialist
-you dispatch to do the same in the comments/PRs they write. Chat/terminal text
-is exempt — only GitHub-bound text pings.
 
 **Reconcile the board against reality before dispatching.** At session start —
 and before dispatching any individual item — verify the item isn't ALREADY done:
@@ -386,59 +368,7 @@ targets the operator owns**:
   `.claude/team.toml`**.
 - Anything transient → the **personal `process-improvements-buffer` memory note**.
 
-A lesson that is genuinely upstream-worthy (would improve the plugin for
-*everyone*) is **NEVER** acted on autonomously. What you may do depends on
-context — this is the **two-tier** model. Both tiers are opt-in; neither edits the
-plugin from a consumer repo without explicit human consent.
-
-**Tier 1 — default, local (every repo).** Exactly as above: the lesson lands in
-the local, editable targets the operator owns (this repo's `AGENTS.md` /
-`.claude/team.toml` / the personal buffer). This is the **only** automatic path
-and where every lesson goes *first*. In a consumer repo Tier 1 is the whole story
-unless the human explicitly escalates — you still **MUST NOT** edit the plugin's
-own skill/agent files, and you still must not open any autonomous upstream PR.
-
-**Tier 2 — opt-in upstream contribution (the sanctioned channel, issue #22).**
-When a lesson looks *generalizable to the product* — it would help every mARC
-user, not just this repo — you may **OFFER** to propose it upstream. This is an
-explicit, consented escalation: **nothing leaves the user's repo without their
-approval.** Run the flow in order, never skipping a step:
-
-1. **Land it locally first (Tier 1).** The lesson is captured locally regardless
-   of whether it ever goes upstream. Upstream is additive, never a replacement.
-2. **Offer, don't act.** Surface a one-line offer, e.g. *"This looks generally
-   useful — want me to propose it upstream to the mARC plugin as a field-lesson
-   PR?"* Do nothing further without an explicit **"yes"** from the human.
-3. **On explicit yes: sanitize + generalize.** Produce the change as a
-   *generalized* diff against the plugin's skill/agent prose plus a PR body —
-   **send the lesson, not the raw context.** Scrub every local specific: repo /
-   org / user names and slugs, absolute paths, hostnames, IDs, secrets, and any
-   consumer-repo domain detail. If it can't be generalized without leaking local
-   context, it is **not** upstream-worthy — keep it Tier 1 only.
-4. **Show the human the exact artifacts for approval.** Display the full diff and
-   the full PR body and get explicit approval of *that text* before anything is
-   submitted. No blind submit — the human approves the exact bytes that leave the
-   repo.
-5. **Submit as the human, via a fork-based PR.** Only after approval, open a
-   **fork-based** pull request against the plugin's upstream repo under the
-   **user's own `gh` identity** (`gh repo fork` → branch → `gh pr create`),
-   labelled `field-lesson`. Resolve the upstream repo **at runtime** (reuse the
-   context-detection above / `gh` — do **not** hardcode any org/repo slug here).
-   The PR is a *proposal*: reviewed by CI, @sec, and a human maintainer, and
-   **never** auto-merged.
-
-This is **never autonomous** at any step — the offer needs a yes, the submit needs
-approval of the exact diff + body. It stays consistent with the fail-closed gate
-above: in a consumer repo the upstream path is *only* this human-approved opt-in
-offer, never an autonomous upstream pull request. In the plugin source repo
-(dogfooding) the same lesson is just an ordinary in-repo edit + PR (above).
-
-**Who may contribute — org-members pilot.** For now the upstream channel is a
-**pilot open to mARC org members only.** The skill cannot verify org membership,
-so it does not enforce eligibility — it sets expectation: if you are not an org
-member, keep the lesson **local (Tier 1)** and, if you wish, share it as an issue.
-Widening the pilot to anyone-via-fork is a scheduled decision — see **issue #25**
-(checkpoint ~2026-07-17).
+For proposing generalizable, product-level process improvements upstream (the two-tier model, opt-in contribution flow, and pilot guidelines tracked in issue #22), refer to the companion guide in [upstream-contribution.md](references/upstream-contribution.md).
 
 **Don't pay the full cost every interaction (applies to whichever target above).**
 Editing a versioned file + opening/merging a PR for each tiny tweak is

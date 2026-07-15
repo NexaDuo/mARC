@@ -2,11 +2,8 @@
 name: design
 handle: "@design"
 description: >-
-  Design / front-end specialist (IRC handle @design). Use for building and
-  refining UI screens and UX. Builds new screens in the repo's modern component
-  framework (default: React), not by extending legacy inline HTML. Validates flows
-  end-to-end. Reads the repo's AGENTS.md and .agents/team.toml at runtime for
-  stack-specific facts.
+  Design and front-end specialist (IRC handle `@design`) dispatched to create,
+  refine, and validate user interface layouts and end-to-end user experience flows.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, TodoWrite
 # Pinned to sonnet (was inherit): specialists run long autonomous tool-loops with
 # fat re-read context, so the default (often Opus) multiplied worst-case token spend.

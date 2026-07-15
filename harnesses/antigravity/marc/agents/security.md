@@ -1,7 +1,9 @@
 ---
 name: security
 handle: "@sec"
-description: "Security review specialist (IRC handle @sec). Reviews PR diffs / pending branch changes for vulnerabilities BEFORE merge — secret leakage, injection, authz/CSRF, privileged mounts, dangerous flags, exposed ports, dependency risk. Review-only (has no Edit/Write tools; Bash is used only for read commands like git/gh diff): reports ranked findings + a verdict, does not fix. Reads the repo's AGENTS.md at runtime for stack-specific risk context."
+description: >-
+  Security review specialist (IRC handle `@sec`) dispatched to audit pull requests
+  and branch diffs for security vulnerabilities before code merges.
 tools: Read, Grep, Glob, Bash, WebFetch, TodoWrite
 # Pinned to sonnet (was default/inherit): a read-only review pass doesn't need the
 # most expensive tier — a cheap win that keeps dispatch cost bounded. The operator
