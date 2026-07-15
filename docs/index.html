@@ -5,19 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
 <title>mARC :: Multi-Agent Relay Control</title>
-<meta name="description" content="mARC — Multi-Agent Relay Control: a Claude Code plugin that installs a cross-repo team of AI engineering agents. @techlead ops the #marc channel and convenes @dev, @sre, @design, @sec.">
-<!-- Favicon: the #marc channel sigil, inline SVG (data: URI) — self-contained,
-     zero network, pure vector shapes (no script / no external refs). -->
+<meta name="description" content="mARC: Multi-Agent Relay Control. Install a cross-repo team of AI engineering agents for Claude Code or Google Antigravity. @techlead ops the channel and convenes @dev, @sre, @design, and @sec.">
+<!-- Favicon: the #marc channel sigil, inline SVG (data: URI), which is self-contained,
+     zero network, pure vector shapes (no script or external refs). -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' role='img' aria-label='mARC channel mark'%3E%3Crect x='1' y='1' width='30' height='30' rx='7' fill='%230b0b1a' stroke='%23b892ff' stroke-width='1.5'/%3E%3Cg transform='translate(2.2,0) skewX(-8)'%3E%3Crect x='11.4' y='7' width='3' height='18' rx='1.2' fill='%235ef1ff'/%3E%3Crect x='17.4' y='7' width='3' height='18' rx='1.2' fill='%235ef1ff'/%3E%3Crect x='8' y='12' width='16' height='3' rx='1.2' fill='%23ff6ac1'/%3E%3Crect x='8' y='18' width='16' height='3' rx='1.2' fill='%23ff6ac1'/%3E%3C/g%3E%3C/svg%3E">
 <!--
   Single page. ALL CSS + first-party JS inline: no web fonts, no raster images,
-  no image requests — the only graphic is the favicon above, an inline-SVG
+  no image requests, since the only graphic is the favicon above, an inline-SVG
   data: URI baked into <head> (pure vector, zero network).
   This page loads Microsoft Clarity analytics (project xgtxocwnoz) from
-  clarity.ms — see the loader snippet below. The only first-party JS is a
+  clarity.ms, as configured in the loader snippet below. The only first-party JS is a
   clipboard-copy handler (auditable below).
 -->
-<!-- Microsoft Clarity (project xgtxocwnoz) — loads https://www.clarity.ms/tag/xgtxocwnoz -->
+<!-- Microsoft Clarity (project xgtxocwnoz), loads https://www.clarity.ms/tag/xgtxocwnoz -->
 <script type="text/javascript">
   (function(c,l,a,r,i,t,y){
     c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
@@ -31,8 +31,8 @@
     --bg2:#12122b;
     --panel:#13132e;
     --panel2:#181840;
-    --ink:#e9e9fb;          /* body text — AA on --bg */
-    --dim:#a9a9d6;          /* muted text — AA on --bg/--panel */
+    --ink:#e9e9fb;          /* body text, AA on --bg */
+    --dim:#a9a9d6;          /* muted text, AA on --bg/--panel */
     --cyan:#5ef1ff;
     --magenta:#ff6ac1;
     --violet:#b892ff;
@@ -58,7 +58,7 @@
     min-height:100vh;
     -webkit-font-smoothing:antialiased;
   }
-  /* CRT scanline overlay — subtle, non-flashing, pointer-transparent */
+  /* CRT scanline overlay: subtle, non-flashing, pointer-transparent */
   body::before{
     content:"";
     position:fixed;
@@ -218,6 +218,43 @@
   .note{color:var(--dim);font-size:.85rem;margin:14px 0 0}
   .note code{color:var(--amber)}
 
+  /* ---- install tabs ---- */
+  .install-tabs{
+    display:flex;
+    flex-wrap:wrap;
+    background:rgba(0,0,0,.2);
+    border-bottom:1px solid var(--line);
+  }
+  .tab-btn{
+    font-family:var(--mono);
+    font-size:.85rem;
+    font-weight:700;
+    padding:10px 20px;
+    background:transparent;
+    border:none;
+    border-right:1px solid var(--line);
+    color:var(--dim);
+    cursor:pointer;
+    transition:background .2s, color .2s;
+    outline:none;
+  }
+  .tab-btn:hover, .tab-btn:focus-visible{
+    color:#fff;
+    background:rgba(255,255,255,.05);
+  }
+  .tab-btn.active{
+    color:var(--cyan);
+    background:var(--panel2);
+    border-bottom:2px solid var(--cyan);
+    margin-bottom:-1px;
+  }
+  .tab-panel{
+    display:none;
+  }
+  .tab-panel.active{
+    display:block;
+  }
+
   /* ---- footer ---- */
   footer{
     margin-top:52px;padding-top:22px;border-top:1px solid var(--line);
@@ -256,11 +293,11 @@
         ╚═╝ ╚═╝ ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝  ╚═════╝
    ▄▖▄▖▄▖▄▖ multi · agent · relay · control ▄▖▄▖▄▖▄▖<span class="cursor" aria-hidden="true">_</span></h1>
 
-      <p class="pitch"><b>Multi-Agent Relay Control</b> — a Claude Code plugin that ops a whole engineering team in your channel.</p>
-      <p class="sub">Install a cross-repo team of AI engineering agents as a Claude Code plugin + self-marketplace. Type <code>/marc:tech-lead</code> and <b class="nick">@techlead</b> convenes the specialists it needs — <b>@dev</b>, <b>@sre</b>, <b>@design</b>, <b>@sec</b> — like an IRC op inviting the room.</p>
+      <p class="pitch"><b>Multi-Agent Relay Control</b> is a plugin for Claude Code or Google Antigravity that runs a complete team of AI engineering agents in your terminal.</p>
+      <p class="sub">You can install the cross-repo team of agents as a user-level plugin. Once installed, running <code>/marc:tech-lead</code> brings in the coordinator, who automatically dispatches specialized agents like <b class="nick">@dev</b>, <b class="nick">@sre</b>, <b class="nick">@design</b>, and <b class="nick">@sec</b> to handle coding, infrastructure setups, and pre-merge audits.</p>
       <div class="cta">
-        <a class="btn primary" href="#install">▶ /join #marc</a>
-        <a class="btn" href="https://github.com/NexaDuo/mARC" target="_blank" rel="noopener noreferrer">view source ↗</a>
+        <a class="btn primary" id="hero-cta-join" href="#install">▶ /join #marc</a>
+        <a class="btn" id="hero-cta-github" href="https://github.com/NexaDuo/mARC" target="_blank" rel="noopener noreferrer">view source ↗</a>
       </div>
     </div>
   </section>
@@ -287,7 +324,7 @@
           <span>
             <span class="nick">@dev</span><span class="tag">engineering</span>
             <span class="role">Feature work, refactors, tests.</span>
-            <span class="desc">Ships code across repos — implementation, bug fixes, and the regression tests that keep them fixed.</span>
+            <span class="desc">Ships code across repos, including implementation, bug fixes, and the regression tests that keep them fixed.</span>
           </span>
         </li>
         <li class="voice">
@@ -295,7 +332,7 @@
           <span>
             <span class="nick">@sre</span><span class="tag">reliability</span>
             <span class="role">Infra, deploys, observability.</span>
-            <span class="desc">Owns runtime health — pipelines, containers, logs/metrics, and self-healing diagnostics.</span>
+            <span class="desc">Owns runtime health, which includes pipelines, containers, logs/metrics, and self-healing diagnostics.</span>
           </span>
         </li>
         <li class="voice">
@@ -303,7 +340,7 @@
           <span>
             <span class="nick">@design</span><span class="tag">front-end</span>
             <span class="role">UI, UX, and the screens.</span>
-            <span class="desc">Builds the user-facing surfaces and flows, wired to real APIs — with the tests to guard them.</span>
+            <span class="desc">Builds the user-facing surfaces and flows, wired to real APIs, backed by the tests to guard them.</span>
           </span>
         </li>
         <li class="voice">
@@ -311,14 +348,14 @@
           <span>
             <span class="nick">@sec</span><span class="tag">security</span>
             <span class="role">Review &amp; the merge gate.</span>
-            <span class="desc">Audits changes before they land — the pre-merge security pass that guards the tree.</span>
+            <span class="desc">Audits changes before they land, serving as the pre-merge security pass that guards the tree.</span>
           </span>
         </li>
       </ul>
     </div>
   </section>
 
-  <!-- (3) FEATURES — the /list channel directory -->
+  <!-- (3) FEATURES: the /list channel directory -->
   <h2 class="section" id="features">what's on the server</h2>
   <section class="win chanlist" aria-labelledby="features">
     <div class="titlebar">
@@ -329,35 +366,35 @@
       <ul class="channels">
         <li>
           <span class="chname">one-command</span><span class="tag">@techlead</span>
-          <span class="chtopic"><code>/marc:tech-lead</code> convenes the whole team — spec, board, dispatch in parallel, track to done.</span>
+          <span class="chtopic">Running <code>/marc:tech-lead</code> handles the entire lifecycle, including spec validation, project board updates, parallel task execution, and final tracking.</span>
         </li>
         <li>
           <span class="chname">every-repo</span><span class="tag">user-scope</span>
-          <span class="chtopic">install once as a user-scope plugin + self-marketplace — the team follows you into every repo you open.</span>
+          <span class="chtopic">You install the team once as a user-scope plugin. The agents will follow you automatically into any workspace you open.</span>
         </li>
         <li>
-          <span class="chname">the-board</span><span class="tag">source of truth</span>
-          <span class="chtopic">every demand lands as a real issue on your GitHub Project board, with an honest Status — Todo, In Progress, Blocked, Done.</span>
+          <span class="chname">the-board</span><span class="tag">board sync</span>
+          <span class="chtopic">Every task maps directly to an issue on your GitHub project board, tracking status categories like todo, in progress, blocked, and done.</span>
         </li>
         <li>
           <span class="chname">zero-config</span><span class="tag">runtime</span>
-          <span class="chtopic">no hardcoded stack facts — the team discovers your repo, org, and board at runtime via <code>gh</code>.</span>
+          <span class="chtopic">No hardcoded configuration is required. The team finds your repo, organization, and project board at runtime using the <code>gh</code> CLI.</span>
         </li>
         <li>
           <span class="chname">marc-init</span><span class="tag">opt-in</span>
-          <span class="chtopic"><code>/marc:init</code> scaffolds <code>team.toml</code> and prints it into every session — shows every file first, writes nothing without a yes.</span>
+          <span class="chtopic">Run <code>/marc:init</code> to scaffold your local configuration. The command writes <code>.agents/team.toml</code> on Google Antigravity, or <code>.claude/team.toml</code> on Claude Code. It prints the planned content first so you can review it.</span>
         </li>
         <li>
           <span class="chname">merge-gate</span><span class="tag">@sec</span>
-          <span class="chtopic">read-only pre-merge diff review on every PR — blocks on high/critical findings.</span>
+          <span class="chtopic">A read-only pre-merge diff review runs on every pull request, flagging high or critical security concerns before they land.</span>
         </li>
         <li>
           <span class="chname">lessons</span><span class="tag">two-tier</span>
-          <span class="chtopic">improvements buffer cheap, then flush into the versioned skills in one PR — the team actually learns.</span>
+          <span class="chtopic">Self-improvement details accumulate in local memory buffers before flushing into versioned skills through a standard pull request.</span>
         </li>
         <li>
           <span class="chname">install-sh</span><span class="tag">auditable</span>
-          <span class="chtopic"><code>install.sh</code> echoes every step, fetches no remote code, no <code>curl | sh</code> — read it before you run it.</span>
+          <span class="chtopic">The install script runs completely locally. It outputs every command before running, uses no remote downloads, and relies on built-in plugin mechanisms.</span>
         </li>
       </ul>
     </div>
@@ -368,47 +405,94 @@
   <section class="win install" aria-labelledby="install">
     <div class="titlebar">
       <span class="chan">#marc</span>
-      <span class="topic">paste these into Claude Code</span>
+      <span class="topic" id="install-topic">paste these into Claude Code</span>
+    </div>
+    <div class="install-tabs" role="tablist">
+      <button class="tab-btn active" id="tab-claude" role="tab" aria-selected="true" aria-controls="panel-claude" data-topic="paste these into Claude Code">Claude Code</button>
+      <button class="tab-btn" id="tab-antigravity" role="tab" aria-selected="false" aria-controls="panel-antigravity" data-topic="setup commands for Google Antigravity">Google Antigravity</button>
     </div>
     <div class="body">
 
-      <div class="irc-line">
-        <span class="meta"><span class="you">you</span> — step 1 · add the marketplace</span>
-        <div class="cmd">
-          <span class="prompt" aria-hidden="true">&gt;</span>
-          <code id="cmd-mkt">/plugin marketplace add NexaDuo/mARC</code>
-          <button class="copy" type="button" data-copy="cmd-mkt" aria-label="Copy: add the mARC marketplace">copy</button>
+      <div id="panel-claude" class="tab-panel active" role="tabpanel" aria-labelledby="tab-claude">
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 1) · add the marketplace</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">&gt;</span>
+            <code id="cmd-mkt">/plugin marketplace add NexaDuo/mARC</code>
+            <button class="copy" type="button" id="copy-btn-mkt" data-copy="cmd-mkt" aria-label="Copy: add the mARC marketplace">copy</button>
+          </div>
         </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 2) · install the plugin (user scope)</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">&gt;</span>
+            <code id="cmd-install">/plugin install marc@nexaduo</code>
+            <button class="copy" type="button" id="copy-btn-install" data-copy="cmd-install" aria-label="Copy: install the marc plugin">copy</button>
+          </div>
+        </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="who">@techlead</span> has joined · op the channel with</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">&gt;</span>
+            <code id="cmd-invoke">/marc:tech-lead</code>
+            <button class="copy" type="button" id="copy-btn-invoke" data-copy="cmd-invoke" aria-label="Copy: invoke the tech-lead skill">copy</button>
+          </div>
+        </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="you">shell</span> · prefer a terminal? clone and install</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="cmd-shell">git clone https://github.com/NexaDuo/mARC && cd mARC && ./install.sh</code>
+            <button class="copy" type="button" id="copy-btn-shell" data-copy="cmd-shell" aria-label="Copy: clone and run install.sh">copy</button>
+          </div>
+        </div>
+
+        <p class="note">The shell path runs the repo's own <a href="https://github.com/NexaDuo/mARC/blob/main/install.sh" target="_blank" rel="noopener noreferrer"><code>install.sh</code></a>. It echoes every command before running it, fetches no remote code, and uses only Claude Code's built-in plugin mechanism. Read it before you run it.</p>
       </div>
 
-      <div class="irc-line">
-        <span class="meta"><span class="you">you</span> — step 2 · install the plugin (user scope)</span>
-        <div class="cmd">
-          <span class="prompt" aria-hidden="true">&gt;</span>
-          <code id="cmd-install">/plugin install marc@nexaduo</code>
-          <button class="copy" type="button" data-copy="cmd-install" aria-label="Copy: install the marc plugin">copy</button>
+      <div id="panel-antigravity" class="tab-panel" role="tabpanel" aria-labelledby="tab-antigravity">
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 1) · install Python library</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="cmd-agy-pip">pip3 install google-antigravity==0.1.6</code>
+            <button class="copy" type="button" id="copy-btn-agy-pip" data-copy="cmd-agy-pip" aria-label="Copy: pip install google-antigravity">copy</button>
+          </div>
         </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 2) · install the agy CLI tool</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="cmd-agy-cli">curl -sSL https://antigravity.google/cli/install.sh | bash</code>
+            <button class="copy" type="button" id="copy-btn-agy-cli" data-copy="cmd-agy-cli" aria-label="Copy: install agy CLI">copy</button>
+          </div>
+        </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 3) · update your search path</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="cmd-agy-path">export PATH="$HOME/.local/bin:$PATH"</code>
+            <button class="copy" type="button" id="copy-btn-agy-path" data-copy="cmd-agy-path" aria-label="Copy: update PATH">copy</button>
+          </div>
+        </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 4) · install the mARC plugin</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="cmd-agy-plugin">agy plugin install harnesses/antigravity/marc</code>
+            <button class="copy" type="button" id="copy-btn-agy-plugin" data-copy="cmd-agy-plugin" aria-label="Copy: install mARC plugin on Antigravity">copy</button>
+          </div>
+        </div>
+
+        <p class="note">This registers the mARC plugin on the Google Antigravity harness. The agent team runs locally in your environment, utilizing the configured workspace directory.</p>
       </div>
 
-      <div class="irc-line">
-        <span class="meta"><span class="who">@techlead</span> — has joined · op the channel with</span>
-        <div class="cmd">
-          <span class="prompt" aria-hidden="true">&gt;</span>
-          <code id="cmd-invoke">/marc:tech-lead</code>
-          <button class="copy" type="button" data-copy="cmd-invoke" aria-label="Copy: invoke the tech-lead skill">copy</button>
-        </div>
-      </div>
-
-      <div class="irc-line">
-        <span class="meta"><span class="you">shell</span> — prefer a terminal? the auditable one-liner (no <code>curl | sh</code>)</span>
-        <div class="cmd">
-          <span class="prompt" aria-hidden="true">$</span>
-          <code id="cmd-shell">git clone https://github.com/NexaDuo/mARC &amp;&amp; cd mARC &amp;&amp; ./install.sh</code>
-          <button class="copy" type="button" data-copy="cmd-shell" aria-label="Copy: clone and run install.sh">copy</button>
-        </div>
-      </div>
-
-      <p class="note">The shell path runs the repo's own <a href="https://github.com/NexaDuo/mARC/blob/main/install.sh" target="_blank" rel="noopener noreferrer"><code>install.sh</code></a> — it echoes every command before running it, fetches no remote code, and uses only Claude Code's built-in plugin mechanism. Read it before you run it.</p>
     </div>
   </section>
 
@@ -416,21 +500,21 @@
   <footer>
     <span class="brand">mARC</span>
     <span class="links">
-      <a href="https://github.com/NexaDuo/mARC" target="_blank" rel="noopener noreferrer">repository ↗</a>
-      <a href="https://github.com/NexaDuo/mARC#readme" target="_blank" rel="noopener noreferrer">README ↗</a>
-      <a href="https://github.com/NexaDuo/mARC/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License ↗</a>
+      <a href="https://github.com/NexaDuo/mARC" id="footer-link-repo" target="_blank" rel="noopener noreferrer">repository ↗</a>
+      <a href="https://github.com/NexaDuo/mARC#readme" id="footer-link-readme" target="_blank" rel="noopener noreferrer">README ↗</a>
+      <a href="https://github.com/NexaDuo/mARC/blob/main/LICENSE" id="footer-link-license" target="_blank" rel="noopener noreferrer">MIT License ↗</a>
     </span>
     <span style="flex:1"></span>
     <span>© 2026 NexaDuo</span>
   </footer>
-  <p class="signoff">*** One static page, styles inline. Microsoft Clarity logs this web page only — the mARC plugin and agents ship no analytics or telemetry. Everything else stays client-side. ***</p>
+  <p class="signoff">*** One static page, styles inline. Microsoft Clarity logs this web page only, and the mARC plugin and agents ship no analytics or telemetry. Everything else stays client-side. ***</p>
 
 </main>
 
 <script>
 /* Only first-party JS on the page: copy-to-clipboard for the install commands.
-   This handler itself does no network, storage, or data collection —
-   analytics is handled separately by the Microsoft Clarity loader in <head>. */
+   This handler itself does no network, storage, or data collection,
+   since analytics is handled separately by the Microsoft Clarity loader in <head>. */
 (function () {
   "use strict";
   function copyText(text) {
@@ -472,6 +556,36 @@
       }).catch(function () {
         btn.textContent = "select & copy";
       });
+    });
+  });
+
+  // Tab switching logic
+  document.querySelectorAll(".tab-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var targetId = btn.getAttribute("aria-controls");
+      var container = btn.closest(".install");
+      if (!container) return;
+
+      container.querySelectorAll(".tab-btn").forEach(function (t) {
+        t.classList.remove("active");
+        t.setAttribute("aria-selected", "false");
+      });
+      btn.classList.add("active");
+      btn.setAttribute("aria-selected", "true");
+
+      container.querySelectorAll(".tab-panel").forEach(function (p) {
+        p.classList.remove("active");
+      });
+      var panel = document.getElementById(targetId);
+      if (panel) {
+        panel.classList.add("active");
+      }
+
+      var topicText = btn.getAttribute("data-topic") || "installing mARC";
+      var topicEl = document.getElementById("install-topic");
+      if (topicEl) {
+        topicEl.textContent = topicText;
+      }
     });
   });
 })();
