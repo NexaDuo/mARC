@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Antigravity Plugin Manifest",
+  "description": "Schema for Antigravity CLI plugin manifest files (plugin.json)",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path or URL to the JSON schema this manifest validates against."
+    },
+    "name": {
+      "type": "string",
+      "description": "The unique, machine-readable name of the plugin. Must contain only alphanumeric characters, hyphens, and underscores.",
+      "pattern": "^[a-zA-Z0-9-_]+$"
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version of the plugin (e.g. 1.2.3).",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string",
+      "description": "A brief human-readable description of the plugin's purpose and capabilities."
+    },
+    "author": {
+      "type": "object",
+      "description": "The plugin author, as an object.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Author or organization name."
+        },
+        "email": {
+          "type": "string",
+          "description": "Author contact email."
+        },
+        "url": {
+          "type": "string",
+          "description": "Author or organization URL."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX license identifier (e.g. MIT)."
+    },
+    "homepage": {
+      "type": "string",
+      "description": "URL to the plugin's homepage."
+    },
+    "repository": {
+      "type": "string",
+      "description": "URL to the plugin's source repository."
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "additionalProperties": false
+}

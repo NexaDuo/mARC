@@ -1,0 +1,10 @@
+{
+  "harness_name": "Google Antigravity",
+  "config_dir": ".agents",
+  "project_dir_env": "AGY_PROJECT_DIR",
+  "plugin_root_env": "AGY_PLUGIN_ROOT",
+  "plugin_manifest_path": "harnesses/antigravity/marc/plugin.json",
+  "plugin_list_command": "agy plugin list",
+  "dispatch_instructions": "Once an item is on the board, immediately ping the right specialist in the channel — do not wait for the user's confirmation. Use the invoke_subagent tool to spawn the specialist. Set the following fields:\n- `TypeName`: `research` for research, or `self` for developer, sre, design, security tasks.\n- `Role`: the specialist's role (e.g. `engineer` for @dev, `sre` for @sre, `design` for @design, `security` for @sec, `research` for @research).\n- `Prompt`: the detailed prompt for the specialist.\n- `Workspace`: `inherit` (or `share` if you want to isolate parallel writing tasks, similar to worktrees).\n\nDispatch in the background by default — never block the channel on a specialist. The invoke_subagent tool spawns the subagent concurrently. You are re-invoked (notified) when a background agent finishes. Specialists' work can be slow, so you must stay responsive to the user while work runs. Concretely:\n- Fire the dispatch using invoke_subagent, then keep the channel live.\n- Launch independent items in parallel.\n- Dependent work stays sequenced, but sequence it via invoke_subagent dispatch and waiting for notifications, not by blocking synchronously.",
+  "isolation_instructions": "using Workspace='share' in the invoke_subagent call"
+}

@@ -29,25 +29,25 @@ turn that discussion into **tracked, sufficiently-detailed work** and then
 ## Learn the consuming repo at runtime (no hardcoded stack facts)
 mARC is a portable plugin: it carries **no** repo-specific facts. Discover them
 when a session starts:
-1. Read `${CLAUDE_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) — the repo's
+1. Read `${AGY_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) — the repo's
    authority on architecture and lessons learned. Respect it, especially its
    mandatory release phases and its regression-test rule.
-2. Read `${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml` if present — it pins the gh
+2. Read `${AGY_PROJECT_DIR:-.}/.agents/team.toml` if present — it pins the gh
    org/repo, project number, key source paths, the validation command, and the
    release-phase facts. The plugin's SessionStart hook already prints it into
-   context. If only the legacy `.claude/team.config` exists, tell the user once:
+   context. If only the legacy `.agents/team.config` exists, tell the user once:
    the format moved to TOML — re-run `/marc:init` to migrate; do not parse the
    legacy file.
 
 ### First-run offer: opt into a persistent binding (`/marc:init`)
-If **both** `AGENTS.md` **and** `.claude/team.toml` are absent, this repo has no
+If **both** `AGENTS.md` **and** `.agents/team.toml` are absent, this repo has no
 persistent team binding — you are running purely on runtime discovery + session
 memory. That works (zero-config is a shipped feature), but session memory is
 **ephemeral**: next session re-discovers everything and any board/paths you
 learned are gone. Once, on this first run, **offer** to fix that:
 
 > You can pin this repo's facts with `/marc:init` — it scaffolds
-> `.claude/team.toml` (and optionally a lean `AGENTS.md` skeleton) so the board,
+> `.agents/team.toml` (and optionally a lean `AGENTS.md` skeleton) so the board,
 > source paths, and validation command stay stable across sessions. It shows you
 > every file before writing and writes nothing without your explicit yes. Want me
 > to run it?
@@ -67,15 +67,15 @@ this order (first hit wins), and cache the values:
 #    yq / TOML CLI): key names are unique across the whole file by schema
 #    discipline, so a key-anchored sed is safe; the pattern tolerates optional
 #    quotes and inline comments.
-CFG="${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml"
+CFG="${AGY_PROJECT_DIR:-.}/.agents/team.toml"
 # toml_get: call with LITERAL key names only — the key is interpolated into the
 # sed program, so never pass dynamic/user-derived input as the argument.
 toml_get() { sed -n 's/^ *'"$1"' *= *"\{0,1\}\([^"#]*\)"\{0,1\}.*/\1/p' "$CFG" 2>/dev/null | sed 's/ *$//' | head -n1; }
 GH_REPO=$( [ -f "$CFG" ] && toml_get gh_repo )
 GH_ORG=$(  [ -f "$CFG" ] && toml_get gh_org  )
 # Legacy format? Break loudly, not silently — never parse the old file.
-[ ! -f "$CFG" ] && [ -f "${CLAUDE_PROJECT_DIR:-.}/.claude/team.config" ] \
-  && echo "DEPRECATED: .claude/team.config -> re-run /marc:init to migrate to .claude/team.toml"
+[ ! -f "$CFG" ] && [ -f "${AGY_PROJECT_DIR:-.}/.agents/team.config" ] \
+  && echo "DEPRECATED: .agents/team.config -> re-run /marc:init to migrate to .agents/team.toml"
 # 2. Else discover from the checked-out repo.
 : "${GH_REPO:=$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 : "${GH_ORG:=${GH_REPO%%/*}}"
@@ -199,19 +199,16 @@ gh project item-edit --id <PVTI_…> --project-id <PVT_…> \
   carries only tool-generic, sanitized findings. (origin: #66 · 2026-07-09)
 
 ### 4. Dispatch (automatic, in the background)
-Once an item is on the board, immediately ping the right specialist in the channel — do not wait for the user's confirmation. Use the Agent tool with the matching subagent_type:
-- `engineer` (@dev) — app/service code, IaC, deploy scripts, schema, tests, PRs.
-- `sre` (@sre) — deploy, observability, infra health, incident response.
-- `design` (@design) — UI screens and UX.
-- `security` (@sec) — review a PR diff for vulnerabilities before merge (the mandatory pre-merge gate; see Principles). Read-only reviewer, not an implementer.
-- `research` (@research) — fetch external evidence (benchmarks, papers, post-mortems, official docs, comparable products) when a decision lacks internal data and public evidence likely exists — and as the research pass BEFORE the user must configure or choose an external system (the "authoritative docs before the user hunts" principle, made dispatchable). Read-only: its only deliverable is ONE cited brief commented on the motivating issue — no code, no PRs. Its dispatch prompt MUST include: the **precise research question**, the **decision at stake** (the options on the table), the **motivating issue number**, a **timebox** (~8–15 sources read), and the required **output structure** (TL;DR → findings with citations → implications for the decision → coverage & gaps). "Insufficient public evidence" is an acceptable outcome — do not re-dispatch just to force a positive answer.
+Once an item is on the board, immediately ping the right specialist in the channel — do not wait for the user's confirmation. Use the invoke_subagent tool to spawn the specialist. Set the following fields:
+- `TypeName`: `research` for research, or `self` for developer, sre, design, security tasks.
+- `Role`: the specialist's role (e.g. `engineer` for @dev, `sre` for @sre, `design` for @design, `security` for @sec, `research` for @research).
+- `Prompt`: the detailed prompt for the specialist.
+- `Workspace`: `inherit` (or `share` if you want to isolate parallel writing tasks, similar to worktrees).
 
-**Dispatch in the background by default — never block the channel on a specialist.**
-Pass `run_in_background: true` on every Agent call. You are re-invoked (notified) when a background agent finishes, and you can resume or continue a running agent by its id. Specialists' work can be slow (a full implement-test-PR cycle, a design pass, a review), so a synchronous dispatch would freeze the main conversation until the subagent returns — the operator must stay responsive to the user while work runs. Concretely:
-- "Don't wait for confirmation" ≠ "block on the subagent." The first means you don't pause for the user to say "go" before dispatching; it does not mean you sit synchronously inside the subagent until it returns. Fire the dispatch, then keep the channel live.
-- Launch independent items in parallel — multiple background Agent calls in one message (fan-out). They run concurrently; you collect each one as it completes.
-- Dependent work (implement → review → merge) stays sequenced, but sequence it via background dispatch + the notification/track loop (step 5), not by blocking synchronously. Kick off the next stage when the prior one reports back.
-- Only set `run_in_background: false` for a genuine strict dependency whose result you need before you can do anything else in the same turn — and even then, prefer background if you can. Long-running work is never a reason to block; it's the strongest reason to background.
+Dispatch in the background by default — never block the channel on a specialist. The invoke_subagent tool spawns the subagent concurrently. You are re-invoked (notified) when a background agent finishes. Specialists' work can be slow, so you must stay responsive to the user while work runs. Concretely:
+- Fire the dispatch using invoke_subagent, then keep the channel live.
+- Launch independent items in parallel.
+- Dependent work stays sequenced, but sequence it via invoke_subagent dispatch and waiting for notifications, not by blocking synchronously.
 
 In each dispatch prompt include: the issue number + URL, the full acceptance
 criteria, the affected files, the constraints, and the explicit instruction to
@@ -346,20 +343,20 @@ the `agents/*.md`) or opening a pull request against the plugin's home repo is
 **only** legitimate when the current working repo *is* the plugin's source repo
 (dogfooding). In an end-user's repo those same edits are a privacy/ownership
 violation and are also futile — the running plugin files live in a read-only
-cache (e.g., `~/.claude/plugins/...` or equivalent) that is a no-op to edit and is overwritten
+cache (e.g., `~/.agents/plugins/...` or equivalent) that is a no-op to edit and is overwritten
 on the next update.
 
 **Context detection — resolve this at runtime, generically (do NOT hardcode any
 org/user/repo slug).** You are in the **plugin source repo** when the current
 working tree contains this plugin's own definition — i.e. a file at
-`harnesses/claude-code/marc/.claude-plugin/plugin.json` whose `name` is `marc`
+`harnesses/antigravity/marc/plugin.json` whose `name` is `marc`
 (the repo whose `plugin.json` declares *this* plugin). Optionally cross-check that
 the discovered `gh` repo is that same plugin's home. If that file is not present
 in the working tree, treat the repo as an **end-user (consumer) repo**.
 
 ```bash
 # Are we inside the mARC plugin's own source repo? (generic, slug-free)
-PLUGIN_MANIFEST="${CLAUDE_PROJECT_DIR:-.}/harnesses/claude-code/marc/.claude-plugin/plugin.json"
+PLUGIN_MANIFEST="${AGY_PROJECT_DIR:-.}/harnesses/antigravity/marc/plugin.json"
 if [ -f "$PLUGIN_MANIFEST" ] && [ "$(jq -r .name "$PLUGIN_MANIFEST" 2>/dev/null)" = "marc" ]; then
   IN_PLUGIN_SOURCE_REPO=1   # dogfooding: plugin self-edits + upstream PRs allowed
 else
@@ -383,7 +380,7 @@ targets the operator owns**:
 - A durable architectural lesson or non-negotiable for this repo →
   **this repo's `AGENTS.md`** (keep the plugin generic; never edit the plugin).
 - A team/board/dispatch convention scoped to this repo → **this repo's
-  `.claude/team.toml`**.
+  `.agents/team.toml`**.
 - Anything transient → the **personal `process-improvements-buffer` memory note**.
 
 A lesson that is genuinely upstream-worthy (would improve the plugin for
@@ -393,7 +390,7 @@ plugin from a consumer repo without explicit human consent.
 
 **Tier 1 — default, local (every repo).** Exactly as above: the lesson lands in
 the local, editable targets the operator owns (this repo's `AGENTS.md` /
-`.claude/team.toml` / the personal buffer). This is the **only** automatic path
+`.agents/team.toml` / the personal buffer). This is the **only** automatic path
 and where every lesson goes *first*. In a consumer repo Tier 1 is the whole story
 unless the human explicitly escalates — you still **MUST NOT** edit the plugin's
 own skill/agent files, and you still must not open any autonomous upstream PR.
@@ -447,7 +444,7 @@ token-expensive and noisy. Instead, **buffer and flush on a healthy cadence**:
   `process-improvements-buffer` memory note. One line, near-zero cost.
 - **Flush (batched, periodic):** roll the buffer into the appropriate versioned
   target — **the plugin skill/agent file only when in the plugin source repo**,
-  otherwise the **consuming repo's AGENTS.md / .claude/team.toml** — in **one PR** when
+  otherwise the **consuming repo's AGENTS.md / .agents/team.toml** — in **one PR** when
   it's worth it. A natural trigger is *≥ ~3 pending items* **or** *the oldest
   entry is ≥ 3 days old* (whichever comes first), or when the user asks. Check the
   buffer's age at the **start** of a tech-lead session and flush if it's stale;
@@ -587,7 +584,7 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   user noticed, and the batch-push recovery then fired nothing.)
   (origin: #62 · 2026-07-09)
 - **Isolate concurrent mutating dispatches.** Specialists that WRITE files in parallel
-  must each run in their own git worktree (using isolation: 'worktree' on the Agent call);
+  must each run in their own git worktree (using Workspace='share' in the invoke_subagent call);
   sharing one checkout lets one agent's branch switch or `checkout` clobber another's
   in-flight edits. Read-only fan-out (e.g. a security review) may share the tree. When
   two in-flight PRs touch the same file, expect a post-merge conflict and resolve the

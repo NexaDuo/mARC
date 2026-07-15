@@ -38,6 +38,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify compiled prompts are up-to-date
+        run: |
+          python3 scripts/compile_prompts.py
+          if ! git diff --exit-code; then
+            echo "::error::Compiled prompts are out of sync with core/ templates. Run 'python3 scripts/compile_prompts.py' and commit the changes."
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -60,6 +68,7 @@ jobs:
         run: |
           jq . .claude-plugin/marketplace.json > /dev/null
           jq . harnesses/claude-code/marc/.claude-plugin/plugin.json > /dev/null
+          jq . harnesses/antigravity/marc/plugin.json > /dev/null
 
       # 3b. team.toml schema contract (issue #51). `/marc:init` (skills/init)
       #     prefills a `.claude/team.toml` from this canonical example, so it
@@ -143,8 +152,10 @@ jobs:
           python3 - <<'PY'
           import glob, sys, yaml
           files = sorted(
-              glob.glob("harnesses/claude-code/marc/agents/*.md")
-              + glob.glob("harnesses/claude-code/marc/skills/**/SKILL.md", recursive=True)
+              glob.glob("core/agents/*.md")
+              + glob.glob("core/skills/**/SKILL.md", recursive=True)
+              + glob.glob("harnesses/*/marc/agents/*.md")
+              + glob.glob("harnesses/*/marc/skills/**/SKILL.md", recursive=True)
           )
           if not files:
               print("ERROR: no agent/skill files found — glob paths wrong?")
@@ -189,8 +200,10 @@ jobs:
       - name: Anti-anchoring grep gate
         run: |
           if grep -rniE 'nexaduo|chat-services|run-stack|middleware/|chatwoot|dify|instagram' \
-               harnesses/claude-code/marc/agents \
-               harnesses/claude-code/marc/skills; then
+               core/agents \
+               core/skills \
+               harnesses/*/marc/agents \
+               harnesses/*/marc/skills; then
             echo "::error::Anti-anchoring gate: consumer/this-repo specifics found in agent/skill role prose (see hits above)."
             exit 1
           fi
@@ -205,6 +218,14 @@ jobs:
       #     zero token cost — a grep over required guard phrases, no live model.
       - name: Self-improvement context-gating gate
         run: |
+          # This gate asserts a concrete runtime probe (a literal path a
+          # plugin.json context-detection check greps for), not just prose
+          # shape, so it targets the COMPILED Claude Code output, where
+          # `{{ plugin_manifest_path }}` has been substituted with the real
+          # `.claude-plugin/plugin.json` path. core/skills/tech-lead/SKILL.md
+          # is the harness-neutral template and carries the placeholder token
+          # by design; the format/anti-anchoring/rule-origin gates elsewhere
+          # in this workflow still assert against core/ prose directly.
           SKILL=harnesses/claude-code/marc/skills/tech-lead/SKILL.md
           # Reusable check: every required guard phrase must be present in $1.
           # Phrases are matched case-insensitively, each on its own line in the
@@ -251,7 +272,7 @@ jobs:
       #     inside backtick code spans are safe. Deterministic, zero token cost.
       - name: Issue-template handle-escape gate
         run: |
-          SKILL=harnesses/claude-code/marc/skills/tech-lead/SKILL.md
+          SKILL=core/skills/tech-lead/SKILL.md
 
           check_template() {
             f="$1"
@@ -322,9 +343,9 @@ jobs:
           set -euo pipefail
           GOV=harnesses/claude-code/marc
           CHECK="$GOV/scripts/check_rule_origin.py"
-          FILES="$GOV/skills/tech-lead/SKILL.md \
-                 $GOV/agents/engineer.md $GOV/agents/sre.md $GOV/agents/design.md \
-                 $GOV/agents/security.md $GOV/agents/research.md"
+          FILES="core/skills/tech-lead/SKILL.md \
+                 core/agents/engineer.md core/agents/sre.md core/agents/design.md \
+                 core/agents/security.md core/agents/research.md"
 
           # POSITIVE: every shipped governed rule must carry an origin tag.
           # shellcheck disable=SC2086
@@ -334,7 +355,7 @@ jobs:
           # gate catches the regression it exists for.
           tmp="$(mktemp --suffix=.md)"
           sed '0,/(origin: #[0-9][0-9]* · [0-9-][0-9-]*)/s/ *(origin: #[0-9][0-9]* · [0-9-][0-9-]*)//' \
-            "$GOV/agents/engineer.md" > "$tmp"
+            "core/agents/engineer.md" > "$tmp"
           if python3 "$CHECK" "$tmp" > /dev/null 2>&1; then
             echo "::error::negative test FAILED — gate passed after an origin tag was stripped"
             rm -f "$tmp"; exit 1
@@ -557,3 +578,53 @@ jobs:
               || { echo "::error::cross-repo: component '$component' not registered"; exit 1; }
           done
           echo "Cross-repo: marc@nexaduo installs and registers from outside the mARC repo."
+
+      # 9. Plugin upgrade path proof: prove that upgrading an existing installed
+      #    plugin (origin/main) to the current PR's version works successfully.
+      - name: Tier 2 — plugin upgrade path
+        env:
+          ANTHROPIC_API_KEY: ""
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/.marc-upgrade-cfg
+          MARC_CHECKOUT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+
+          # This job's checkout is shallow (fetch-depth: 1) and only fetches the
+          # PR ref, so origin/main does not exist in the object database yet.
+          # Fetch just that ref (no credentials needed, it's the same public
+          # remote already configured by actions/checkout) before archiving it.
+          # This intentionally keeps the credential-free `git archive` approach
+          # from the PR (chosen so fork PRs never need a credentialed clone)
+          # instead of switching to `git clone`.
+          git fetch --depth=1 origin main
+
+          # Extract the origin/main version of the repo into a temp directory
+          PREV_DIR="${{ runner.temp }}/marc-prev"
+          rm -rf "$PREV_DIR"
+          mkdir -p "$PREV_DIR"
+          git archive origin/main | tar -x -C "$PREV_DIR"
+
+          # If the old branch has a compilation script, compile it (just in case)
+          if [ -f "$PREV_DIR/scripts/compile_prompts.py" ]; then
+            python3 "$PREV_DIR/scripts/compile_prompts.py"
+          fi
+
+          echo "== Install previous version from origin/main =="
+          claude plugin marketplace add "$PREV_DIR"
+          claude plugin install marc@nexaduo
+
+          claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
+
+          echo "== Point marketplace to the current checkout and upgrade =="
+          claude plugin marketplace add "$MARC_CHECKOUT"
+          claude plugin update marc@nexaduo
+
+          echo "== Assert upgraded plugin details =="
+          DETAILS="$(claude plugin details marc@nexaduo)"
+          echo "$DETAILS"
+          for component in tech-lead engineer sre design security research; do
+            echo "$DETAILS" | grep -qiw "$component" \
+              || { echo "::error::upgrade: component '$component' not registered after upgrade"; exit 1; }
+          done
+          echo "Upgrade path: plugin successfully upgrades from main release to PR version."
