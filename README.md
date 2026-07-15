@@ -20,21 +20,18 @@
 ```
 *** Now talking in #marc
 *** Topic: turn a discussion into tracked, delegated, shipped work
---> @techlead has been given channel operator status
-    @techlead: specialists, standby. i'll convene you when there's work.
-    @dev @sre @design @sec @research: ready.
+--> `@techlead` has been given channel operator status
+    `@techlead`: specialists, standby. i'll convene you when there's work.
+    `@dev` `@sre` `@design` `@sec` `@research`: ready.
 ```
 
-**mARC (Multi-Agent Relay Control)** packages a full software-delivery **agent
-team** as a portable [Claude Code](https://claude.com/claude-code) **plugin +
-self-marketplace**, dressed in a retro/vaporwave **IRC** console aesthetic. It is
-**not** a new orchestration engine — Claude Code's Agent Teams already handle
-dispatch, parallelism, and isolation. mARC is the *package and the brand*: one
-generic team you install once, user-scope, and reuse across every repo.
+**mARC (Multi-Agent Relay Control)** packages a full software-delivery agent team, dressed in a retro/vaporwave **IRC** console aesthetic. Rather than building separate agent systems for every platform, mARC defines a single core team in `core/` and compiles it into plugins for different developer tools, which we call **harnesses**. Currently, mARC supports both Claude Code and Google Antigravity as first-class harnesses. It relies on the host tool to run and isolate subagents, providing a consistent team that you install once and reuse across your projects.
 
 ## Try it in two minutes
 
-Inside Claude Code:
+### Claude Code
+
+Run these commands inside Claude Code to add the marketplace, install the plugin, and start:
 
 ```
 /plugin marketplace add NexaDuo/mARC
@@ -42,143 +39,131 @@ Inside Claude Code:
 /marc:tech-lead
 ```
 
-That's the whole ritual: add the marketplace, install the plugin, summon the
-channel operator. Install details, updates, and per-repo binding are covered
-below.
+### Google Antigravity
 
-## The metaphor — one channel, one op, a bench of specialists
+Run these commands in your terminal to install the Google Antigravity CLI, configure your path, install the plugin, and start:
 
-Think of your project as an IRC channel. **`@techlead`** holds channel-operator
-status: it listens to the discussion, compiles it into well-specified, tracked
-work on your GitHub Project board, then pings the right specialist to do it.
+```bash
+pip3 install google-antigravity==0.1.6
+curl -sSL https://antigravity.google/cli/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+agy plugin install harnesses/antigravity/marc
+agy /marc:tech-lead
+```
+
+## The metaphor: one channel, one op, a bench of specialists
+
+Think of your project as an IRC channel. **`@techlead`** holds channel-operator status. It listens to the discussion, compiles it into well-specified, tracked work on your GitHub Project board, and then pings the right specialist to do it.
 
 | handle       | role                 | pings for                                            |
 |--------------|----------------------|------------------------------------------------------|
 | `@techlead`  | channel operator     | convene, spec, record on the board, dispatch, track  |
 | `@dev`       | engineer             | app/service code, IaC, deploy scripts, schema, tests |
 | `@sre`       | reliability          | deploys, observability, incidents, backups/DR, cost  |
-| `@design`    | front-end            | UI screens, UX, end-to-end web flows                 |
-| `@sec`       | security (read-only) | pre-merge diff review — the mandatory merge gate     |
-| `@research`  | researcher (read-only) | external evidence — benchmarks, papers, docs — as a cited brief |
+| `@design`    | front-end            | UI screens and overall web flows                     |
+| `@sec`       | security (read-only) | pre-merge diff review, which is the mandatory merge gate |
+| `@research`  | researcher (read-only) | external evidence (such as benchmarks or documentation) as a cited brief |
 
-`@techlead` is a **skill** (`/marc:tech-lead`); `@dev`, `@sre`, `@design`, `@sec`,
-`@research` are **subagents** it dispatches. `@techlead` is the first of several leader
-skills — `founder`, `eng-director`, and `c-level` are the planned growth path,
-each convening the same shared specialist bench.
+`@techlead` is a skill (`/marc:tech-lead`), while `@dev`, `@sre`, `@design`, `@sec`, and `@research` are subagents that it dispatches. `@techlead` is the first of several planned leader skills, including `founder` and `eng-director`, which will convene the same shared specialist bench.
 
-## Generic by design — per-repo binding lives in the consuming repo
+## Generic by design: repository configuration
 
-The team carries **no** hardcoded stack facts. When it runs in a repo, it learns
-that repo at runtime:
+The team carries no hardcoded stack facts. When running in a repository, the agents discover details dynamically at runtime:
 
-- It reads the repo's `AGENTS.md` / `CLAUDE.md` for architecture, release phases,
-  and lessons.
-- It reads that repo's **`.claude/team.toml`** for the concrete bindings — gh
-  org/repo, project number, key paths, the validation command, release-phase
-  facts. See [`docs/team.toml.example`](docs/team.toml.example).
-- If `team.toml` is absent, `@techlead` discovers the repo/project dynamically
-  (`gh repo view`, `gh project list --owner <org>`) instead of guessing.
+- They read the repository's `AGENTS.md` or `CLAUDE.md` to learn about the architecture and any lessons from previous issues.
+- They check the repository configuration file (either `.claude/team.toml` or `.agents/team.toml`) for settings like the GitHub organization, repository name, project number, source paths, and validation commands. See [`docs/team.toml.example`](docs/team.toml.example) for an example.
+- If the configuration file is missing, `@techlead` automatically queries GitHub using `gh` commands to locate the correct repository and project board.
 
-A `SessionStart` hook prints the active `team.toml` into context at the top of
-each session (and a friendly note if none exists — or a one-line deprecation
-notice if only a pre-0.11.0 `team.config` is found; re-run `/marc:init` to
-migrate).
+A `SessionStart` hook outputs the active `team.toml` configuration into the context at the beginning of each session. If the configuration is missing, it prints a friendly note. If it finds a legacy `team.config` file, it prompts you to migrate by running `/marc:init`.
 
 ## Receipts: this repo runs on mARC
 
-mARC is built by the team it ships. Every spec, dispatch, security review, and
-decision that produced this repo is public, so you can audit the process before
-trusting it:
+mARC is built by the team it ships. Every spec, dispatch, security review, and decision that produced this repo is public, so you can audit the process before trusting it:
 
-- the [Project board](https://github.com/orgs/NexaDuo/projects/2), where the
-  tech-lead records and tracks every task,
-- the [issues](https://github.com/NexaDuo/mARC/issues?q=is%3Aissue) and
-  [pull requests](https://github.com/NexaDuo/mARC/pulls?q=is%3Apr), with the
-  specs, findings comments, and pre-merge security reviews inline,
+- the [Project board](https://github.com/orgs/NexaDuo/projects/2), where `@techlead` records and tracks every task,
+- the [issues](https://github.com/NexaDuo/mARC/issues?q=is%3Aissue) and [pull requests](https://github.com/NexaDuo/mARC/pulls?q=is%3Apr), with inline spec details and security reviews,
 - [`docs/marc/`](docs/marc/), the durable decision records and research briefs.
 
-## Install (user-scope → available in every repo)
+## Install (user-scope)
 
-The quick-start block above is the whole install. Alternatively, run the
-auditable installer (adds the marketplace + installs the plugin, prints the
-banner):
+The quick-start blocks above cover the full installation. If you are using Claude Code, you can also run the installer script. This script adds the marketplace and installs the plugin.
 
-```
+```bash
 ./install.sh
 ```
 
-After install, `@techlead` is available as `/marc:tech-lead` in any repo, and it
-dispatches the specialist subagents on demand.
+After installation, `@techlead` is available as `/marc:tech-lead` (or `agy /marc:tech-lead` under Google Antigravity) in any repository, and it dispatches the specialist subagents on demand.
 
 ## Update
 
-**Recommended: enable auto-update for the `nexaduo` marketplace.** With auto-update
-on, Claude Code pulls new plugin versions for you and you never drift behind — this
-is the primary, drift-free path. Manage it from `/plugin` → the `nexaduo`
-marketplace → enable auto-update.
+For Claude Code, enabling auto-update for the `nexaduo` marketplace is recommended. When auto-update is active, Claude Code pulls new plugin versions automatically. You can manage this setting by going to `/plugin` and finding the `nexaduo` marketplace.
 
-To update manually at any time:
+To update Claude Code manually at any time:
 
 ```
 claude plugin update marc@nexaduo
 ```
 
-or, from within Claude Code:
+Or run these commands inside Claude Code:
 
 ```
 /plugin marketplace update nexaduo
 /reload-plugins
 ```
 
-**Safety net (for auto-update-off users):** mARC ships a `SessionStart` hook that,
-once per session, checks whether your installed version is behind the version on
-`main` and, if so, prints a single one-line nudge with the update command. It is
-warn-only — it makes a short, timeout-bounded network check and degrades to a silent
-no-op when offline, rate-limited, or tooling is missing; it never blocks or slows a
-session. It only nudges on a minor/major difference, so routine patch releases won't
-pester you.
+For Google Antigravity, you can update by re-running the installation command:
+
+```bash
+agy plugin install harnesses/antigravity/marc
+```
+
+**Update notifications:** mARC ships a `SessionStart` hook that checks whether your installed version is behind the version on `main` once per session. If a new major or minor version is available, it prints a one-line update reminder. This check is silent and does not block the session if you are offline or if the check times out.
 
 ## Bind mARC to a repo (optional but recommended)
 
-Run **`/marc:init`** in the consuming repo. It scaffolds a `.claude/team.toml`
-pinning the GitHub org/repo, the Project number, the key source paths, and the
-validation command so `@techlead` and the specialists stop guessing, and it
-shows you every file before writing anything. Prefer doing it by hand? Copy
-[`docs/team.toml.example`](docs/team.toml.example) and fill it in; the result
-is the same. Precedence to remember:
-a repo's own `.claude/` overrides the plugin, which overrides user config.
+Run **`/marc:init`** in the consuming repo. It scaffolds the repository configuration (either `.claude/team.toml` for Claude Code or `.agents/team.toml` for Google Antigravity). This config pins the GitHub org and repo, the Project number, key source paths, and the validation command so `@techlead` and the specialists do not have to guess. It shows you every file before writing anything. If you prefer to set it up by hand, copy [`docs/team.toml.example`](docs/team.toml.example) and fill it in. Note that a repository's local `.claude/` or `.agents/` configuration folder overrides the plugin, which in turn overrides user config.
+
+## Harness Architecture & Compatibility
+
+To support multiple host tools, mARC uses a harness-based architecture. A single core team of agents is defined under `core/` and compiled into platform-specific plugins located in the `harnesses/` directory.
+
+Currently, mARC supports two first-class harnesses: Claude Code (plugin under `harnesses/claude-code/marc/`) and Google Antigravity (plugin under `harnesses/antigravity/marc/`).
+
+Because each host tool provides different agent execution APIs, the subagent dispatch mechanism varies between harnesses. Claude Code uses the native `Agent` tool to dispatch subagents, whereas Google Antigravity uses the `invoke_subagent` tool.
+
+The leader skill `@techlead` dynamically inspects the available tools and maps its requests to the appropriate dispatch tool. For a detailed breakdown of tool schemas and configuration mappings, refer to [COMPATIBILITY.md](harnesses/antigravity/marc/COMPATIBILITY.md).
 
 ## Layout
 
 ```
-.claude-plugin/
-  marketplace.json               # marketplace "nexaduo" → lists the marc plugin
+core/                            # core specialist agent templates and leader skills
 harnesses/
   claude-code/
-    marc/                        # THE Claude Code plugin
-      .claude-plugin/plugin.json # plugin manifest (name marc; version tracks the badge above)
-      skills/tech-lead/          # @techlead leader skill (/marc:tech-lead)
-      skills/init/               # /marc:init, opt-in per-repo onboarding
-      agents/                    # @dev, @sre, @design, @sec, @research shared specialist bench
-      hooks/hooks.json           # SessionStart → inject .claude/team.toml
+    marc/                        # compiled Claude Code plugin
+      .claude-plugin/plugin.json # plugin manifest
+      skills/tech-lead/          # `@techlead` leader skill (/marc:tech-lead)
+      skills/init/               # `/marc:init`, opt-in per-repo onboarding
+      agents/                    # `@dev`, `@sre`, `@design`, `@sec`, `@research` shared specialist bench
+      hooks/hooks.json           # SessionStart hook to inject `.claude/team.toml`
+  antigravity/
+    marc/                        # compiled Google Antigravity plugin
+      plugin.json                # plugin manifest
+      skills/                    # symlinked leader skills (e.g. `/marc:tech-lead`, `/marc:init`)
+      agents/                    # symlinked specialist agents
+      COMPATIBILITY.md           # compatibility tracker for Google Antigravity
 docs/
-  ARCHITECTURE.md                # growth model: leaders, specialists, harnesses
-  marc/                          # durable team artifacts: decision records, research briefs
-  posts/                         # launch post drafts + published links
+  ARCHITECTURE.md                # growth model covering the different roles and harnesses
+  marc/                          # durable team artifacts like decision records and research briefs
   team.toml.example
-install.sh                       # safe, auditable installer + banner
+install.sh                       # installer for Claude Code
 ```
 
-The plugin is deliberately nested under `harnesses/claude-code/marc/` so the repo
-can grow **sideways** into other harnesses (`harnesses/cursor/…`,
-`harnesses/codex/…`) and **upward** into more leader skills (`founder`,
-`eng-director`, `c-level`) without reshuffling. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full growth model.
+The plugin is structured so that the core logic under `core/` compiles into platform-specific configurations in the `harnesses/` directory. This allows the project to grow sideways into new harnesses or upward into new leader skills like `founder` and `eng-director` without restructuring the repository. Detailed growth plans are documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
 
 ```
-*** @techlead sets mode +v on your next idea
+*** `@techlead` sets mode +v on your next idea
 ```
