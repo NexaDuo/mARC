@@ -4,6 +4,42 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-07-15
+
+Dual-harness template compilation (#80): mARC's prompts now compile from a
+single `core/` source into each supported harness, and Google Antigravity
+joins Claude Code as a second supported harness.
+
+### Added
+- **`core/` as the single source of truth for agent prompts.** Prompt templates
+  for `@techlead` and the specialist bench now live once under `core/`, with
+  `{{ placeholder }}` tokens for anything that differs per harness (config
+  directory, project/plugin-root environment variables, the subagent dispatch
+  mechanism, `plugin.json` path, and so on).
+- **`scripts/compile_prompts.py`.** Reads each harness's `compile.json` and
+  compiles the `core/` templates into that harness's `marc/` tree, substituting
+  its placeholders. Both harnesses compile from the same source, so a prompt
+  change made once in `core/` lands correctly in each.
+- **Google Antigravity harness support.** A new `harnesses/antigravity/marc/`
+  tree with its own `plugin.json` and `compile.json`, compiled from the same
+  `core/` templates as the Claude Code plugin, using Antigravity's own
+  environment variables and dispatch conventions (`invoke_subagent` instead of
+  the Agent tool).
+- **CI: compile-drift check.** `ci.yml` now re-runs `compile_prompts.py` and
+  fails the build if the compiled output in either harness differs from what's
+  committed, so a `core/` template edit can never ship out of sync with the
+  harnesses that consume it.
+- **CI: upgrade-path check.** `ci.yml` installs the plugin as it exists on
+  `origin/main`, then upgrades it to the current PR's version, and fails if the
+  upgrade doesn't complete cleanly.
+
+### Notes
+- The Google Antigravity harness's own `plugin.json` version is intentionally
+  left unchanged in this release. It versions independently of the mARC
+  project release number, isn't yet installable or tested end to end, and a
+  follow-up issue tracks the decision on whether it should share the project's
+  semver going forward.
+
 ## [0.15.2] - 2026-07-14
 
 Task-boundary context hygiene and a third token-guard band (#81), closing a gap
