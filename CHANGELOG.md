@@ -4,6 +4,11 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-07-15
+
+### Fixed
+- **Token-guard cache-read reweight.** The automatic context-size cost guard now weights discounted prompt-cache reads at roughly 0.1x and labels whether a turn is cache-read-dominated vs generation-dominated, so it stops firing false positives on normal large-context sessions (#100).
+
 ## [0.16.1] - 2026-07-15
 
 Harness setup alignment and documentation fixes.
