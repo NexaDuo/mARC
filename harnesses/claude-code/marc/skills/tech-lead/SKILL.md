@@ -202,7 +202,7 @@ Once an item is on the board, immediately ping the right specialist in the chann
 - `engineer` (@dev) — app/service code, IaC, deploy scripts, schema, tests, PRs.
 - `sre` (@sre) — deploy, observability, infra health, incident response.
 - `design` (@design) — UI screens and UX.
-- `security` (@sec) — review a PR diff for vulnerabilities before merge (the mandatory pre-merge gate; see Principles). Read-only reviewer, not an implementer.
+- `security` (@sec) — review a PR diff for vulnerabilities before merge (the mandatory pre-merge gate; see Principles). Read-only reviewer, not an implementer. The dispatch prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @sec review`, so a later reader (or a grep) can verify a review actually happened without trusting a paraphrase. (origin: #105 · 2026-07-16)
 - `research` (@research) — fetch external evidence (benchmarks, papers, post-mortems, official docs, comparable products) when a decision lacks internal data and public evidence likely exists — and as the research pass BEFORE the user must configure or choose an external system (the "authoritative docs before the user hunts" principle, made dispatchable). Read-only: its only deliverable is ONE cited brief commented on the motivating issue — no code, no PRs. Its dispatch prompt MUST include: the **precise research question**, the **decision at stake** (the options on the table), the **motivating issue number**, a **timebox** (~8–15 sources read), and the required **output structure** (TL;DR → findings with citations → implications for the decision → coverage & gaps). "Insufficient public evidence" is an acceptable outcome — do not re-dispatch just to force a positive answer.
 
 **Dispatch in the background by default — never block the channel on a specialist.**
@@ -322,6 +322,18 @@ and whether CI/deploy workflows went green. Keep the board `Status` in sync as
 state changes (In Progress → Blocked when it needs the user → Done). The task is
 **not** complete at PR-open; follow it through the repo's release phases to
 validated success.
+
+**Merge handoff requires the proof, not the assertion.** When you hand a
+merge/release decision to `@sre` (or act on it yourself), pass the verifiable
+`@sec` record — the comment URL of the `## @sec review` marker, or a grep
+recipe (`gh pr view <n> --comments | grep -A5 '## @sec review'`) — never a
+bare "APPROVED" restated from memory. Single-account nuance: this repo's PR
+author can't self-approve, so GitHub's `reviewDecision` on these PRs is
+**always empty** — that is expected, not a signal the review is missing. The
+marked `## @sec review` comment plus your own judgment on its verdict IS the
+gate; do not re-block a merge on an empty `reviewDecision`, and don't let a
+future `@sre` do so either — point them at the comment, not the API field.
+(origin: #105 · 2026-07-16)
 
 **Task-boundary context-hygiene advisory.** When a discussed work item is closed out (tracked, dispatched, or reported done), and the session has actually grown since it started, say so plainly: recommend the user run `/compact` or start a fresh session before picking up the next item. Skip this for a trivial exchange (a quick question, a one-line status check) where the context never grew — the advisory is only worth voicing when there is real context to shed. `/compact` cannot be triggered programmatically: the harness only compacts on the user's manual `/compact` or its own near-limit auto-compaction, and hooks are reactive (`PreCompact`/`PostCompact`) and can only block, never initiate one. That's why this is an advisory you state to the user rather than an action you take. (origin: #81 · 2026-07-14)
 
@@ -535,7 +547,14 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   enforced by you, the operator, at dispatch time: whenever more than one mutating
   dispatch may be in flight, pass worktree isolation on every mutating dispatch. Do
   not rely on specialists noticing a shared-checkout collision and self-recovering.
-  (origin: #37 · 2026-07-04)
+  Worktree isolation is recommended for ANY mutating, PR-writing dispatch — even a
+  lone one, not only when a collision is possible: a shared checkout once swept
+  unrelated untracked files (left behind by other work in the same tree) into a
+  commit. Complementing the worktree, every mutating dispatch prompt must also
+  require **explicit-path staging**: the specialist stages the specific files it
+  changed (`git add <path> <path> ...`), never `git add -A`/`git add .`, so stray
+  untracked files in a shared or dirty tree can't ride along into the commit.
+  (origin: #37 · 2026-07-04) (origin: #79 · 2026-07-13)
 - **Authoritative docs before the user hunts.** When the user must configure an
   external system, dispatch a research step (@research) for the *exact*
   labels/paths FIRST, then give ONE precise instruction — don't iterate live

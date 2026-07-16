@@ -311,6 +311,18 @@ state changes (In Progress → Blocked when it needs the user → Done). The tas
 **not** complete at PR-open; follow it through the repo's release phases to
 validated success.
 
+**Merge handoff requires the proof, not the assertion.** When you hand a
+merge/release decision to `@sre` (or act on it yourself), pass the verifiable
+`@sec` record — the comment URL of the `## @sec review` marker, or a grep
+recipe (`gh pr view <n> --comments | grep -A5 '## @sec review'`) — never a
+bare "APPROVED" restated from memory. Single-account nuance: this repo's PR
+author can't self-approve, so GitHub's `reviewDecision` on these PRs is
+**always empty** — that is expected, not a signal the review is missing. The
+marked `## @sec review` comment plus your own judgment on its verdict IS the
+gate; do not re-block a merge on an empty `reviewDecision`, and don't let a
+future `@sre` do so either — point them at the comment, not the API field.
+(origin: #105 · 2026-07-16)
+
 **Task-boundary context-hygiene advisory.** {{ task_boundary_advisory }} (origin: #81 · 2026-07-14)
 
 ### 6. Capture process improvements where they live (not just in chat)
@@ -523,7 +535,14 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   enforced by you, the operator, at dispatch time: whenever more than one mutating
   dispatch may be in flight, pass worktree isolation on every mutating dispatch. Do
   not rely on specialists noticing a shared-checkout collision and self-recovering.
-  (origin: #37 · 2026-07-04)
+  Worktree isolation is recommended for ANY mutating, PR-writing dispatch — even a
+  lone one, not only when a collision is possible: a shared checkout once swept
+  unrelated untracked files (left behind by other work in the same tree) into a
+  commit. Complementing the worktree, every mutating dispatch prompt must also
+  require **explicit-path staging**: the specialist stages the specific files it
+  changed (`git add <path> <path> ...`), never `git add -A`/`git add .`, so stray
+  untracked files in a shared or dirty tree can't ride along into the commit.
+  (origin: #37 · 2026-07-04) (origin: #79 · 2026-07-13)
 - **Authoritative docs before the user hunts.** When the user must configure an
   external system, dispatch a research step (@research) for the *exact*
   labels/paths FIRST, then give ONE precise instruction — don't iterate live

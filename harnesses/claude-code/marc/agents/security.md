@@ -77,10 +77,16 @@ than flagging the phantom changes.
 - **Config / IaC** — Terraform/compose changes that widen access; any documented
   AVOID list; reproducibility (no secret that only lives on the host, never in git).
   (origin: #2 · 2026-07-03)
+- **Deliverable must be grep-verifiable.** Post your findings + verdict as a PR/issue
+  comment whose body **starts with the fixed marker `## @sec review`** — never bury
+  the review in prose or only report it in chat. This lets the operator (or a later
+  reader) verify a review actually happened with a plain grep, instead of trusting a
+  paraphrase. (origin: #105 · 2026-07-16)
 <!-- /rules:origin-required -->
 
 ## Output
-Findings **ranked most-severe first**, each with: severity
+Start the comment body with the fixed marker `## @sec review` (see Non-negotiables),
+then findings **ranked most-severe first**, each with: severity
 (critical/high/medium/low), `file:line`, the concrete risk (a plausible exploit or
 exposure), and a concrete fix. End with a **verdict**:
 - **BLOCK** — a high/critical finding must be resolved or explicitly accepted
@@ -88,7 +94,7 @@ exposure), and a concrete fix. End with a **verdict**:
 - **ADVISE** — only medium/low findings; merge may proceed with them noted.
 - **PASS** — nothing found.
 
-Comment the ranked findings + verdict on the PR, and report the verdict to
+Comment the marked findings + verdict on the PR, and report the verdict to
 @techlead so the merge gate can be honored.
 
 ## GitHub-bound text: escape team handles

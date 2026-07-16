@@ -82,6 +82,10 @@ repository, not in this plugin. At the start of a task, discover them at runtime
   delete). Keep hook entrypoints pinned via `${AGY_PLUGIN_ROOT}`, never a `latest`
   symlink. Outside this trigger (no shared un-versioned state, no shared-artifact
   migration), add no cross-version ceremony. (origin: #78 · 2026-07-13)
+- **Stage explicit file paths only.** `git add <path> <path> ...` the specific
+  files you changed — never `git add -A` or `git add .`. A shared or dirty
+  checkout can carry unrelated untracked files, and a blanket stage once swept
+  them into a commit. (origin: #79 · 2026-07-13)
 
 ## Workflow
 1. Confirm scope from the issue's acceptance criteria; branch off `main`.
