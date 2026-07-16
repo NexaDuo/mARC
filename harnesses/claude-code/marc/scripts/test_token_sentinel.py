@@ -307,6 +307,42 @@ def main() -> int:
         check(out.strip() == "",
               "moderate calls + small context: no warn (below tokens threshold)")
 
+        # ---- Cache-read weighting (origin: #100) ---------------------------
+        #
+        # Two turns with the IDENTICAL raw token size (input + cache_read +
+        # cache_creation), one cache-read-dominated (a re-read of already-
+        # cached context, cheap) and one generation/cache-creation-dominated
+        # (fresh tokens, expensive). Before #100 both flat-summed to the same
+        # number and both fired identically -- that flat sum is exactly the
+        # false-positive shape reported live (a large-skill session reloading
+        # cached context tripped the band on tokens billed at ~1/10th rate).
+        # After #100 they must diverge: only the generation-dominated turn
+        # should still cross the (weighted) threshold.
+        raw_size = TOKENS_THRESHOLD * 2  # 1,000,000: well above the flat-sum
+                                          # threshold either way pre-#100
+        cache_heavy = write_multiturn(fixtures, "cache_heavy.jsonl", [
+            {"model": SONNET, "cw": 0, "cr": raw_size, "calls": moderate_calls},
+        ])
+        rc, out = run_hook(state_tmp, cache_heavy, "sess-cacheheavy")
+        check(rc == 0, "cache-read-dominated, large raw size: exit 0")
+        check(out.strip() == "",
+              "cache-read-dominated turn (raw size far past threshold): "
+              "weighted measure stays under threshold, no warn")
+
+        gen_heavy = write_multiturn(fixtures, "gen_heavy.jsonl", [
+            {"model": SONNET, "cw": raw_size, "cr": 0, "calls": moderate_calls},
+        ])
+        rc, out = run_hook(state_tmp, gen_heavy, "sess-genheavy")
+        check(rc == 0, "generation-dominated, SAME raw size: exit 0")
+        check(out.strip() != "",
+              "generation-dominated turn (identical raw size to the "
+              "cache-read case above): weighted measure crosses threshold, warns")
+        if out.strip():
+            data = parse_advisory(out)
+            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
+            check("generation-dominated" in ctx,
+                  "generation-dominated advisory names the dominant token type")
+
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
         for m in _failures:
