@@ -4,6 +4,16 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.9] - 2026-07-16
+
+### Changed
+- **Tech-lead `SKILL.md` token diet (#114, #117).** Core source shrunk 35.8KB →
+  15.7KB (−56%): inline bash recipes replaced with references to the bundled
+  scripts that already implement them, rationale prose compressed to single-line
+  rules, and every origin-tagged governed rule preserved (superseded in place
+  where it was merged into a tighter form, never dropped). Compiled harness
+  outputs (Claude Code + Antigravity) regenerated from the diet source.
+
 ## [0.16.8] - 2026-07-16
 
 ### Added
