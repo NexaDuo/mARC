@@ -1,0 +1,45 @@
+name: Release Gate
+
+# Version/release drift gate (issue #75).
+#
+# Catches a `plugin.json` `version` bump that never got a matching pushed
+# `vX.Y.Z` tag + published GitHub Release, instead of relying on operator
+# discipline — this repo has already shipped two releases by hand in one day
+# (0.16.4, 0.16.5) purely because a human remembered to tag+release.
+#
+# Why SCHEDULED, not on push/PR: the tag + Release are created by the
+# operator AFTER a version-bump PR merges to main, so an on-push/PR check
+# would always fail on the merge commit itself — the tag/release literally
+# cannot exist yet at that point, making the check permanently red (or
+# requiring it to be skipped, which defeats the purpose). A daily scheduled
+# run instead catches REAL drift — a bump that has stayed un-released for a
+# full day — without ever being red-by-construction. `workflow_dispatch` is
+# kept for on-demand manual runs (e.g. right after a merge, to check sooner).
+#
+# Decision logic lives in a pure, offline-unit-tested function
+# (harnesses/claude-code/marc/scripts/release_gate.py::is_released, covered by
+# test_release_gate.py — wired into ci.yml's Tier-1 self-tests). This workflow
+# is a thin invocation of that script using the real `git`/`gh` state.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    name: plugin.json version has a matching tag + published release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Assert plugin.json version has a pushed tag + published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 harnesses/claude-code/marc/scripts/release_gate.py
