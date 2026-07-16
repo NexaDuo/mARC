@@ -201,7 +201,7 @@ signal to fix the board state, not to move on.
 Once an item is on the board, immediately ping the right specialist in the channel — do not wait for the user's confirmation. Use the invoke_subagent tool to spawn the specialist. Set the following fields:
 - `TypeName`: `research` for research, or `self` for developer, sre, design, security tasks.
 - `Role`: the specialist's role (e.g. `engineer` for @dev, `sre` for @sre, `design` for @design, `security` for @sec, `research` for @research).
-- `Prompt`: the detailed prompt for the specialist.
+- `Prompt`: the detailed prompt for the specialist. For `security` (@sec) dispatches, the prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @sec review`, so a later reader (or a grep) can verify a review actually happened without trusting a paraphrase. (origin: #105 · 2026-07-16)
 - `Workspace`: `inherit` (or `share` if you want to isolate parallel writing tasks, similar to worktrees).
 
 Dispatch in the background by default — never block the channel on a specialist. The invoke_subagent tool spawns the subagent concurrently. You are re-invoked (notified) when a background agent finishes. Specialists' work can be slow, so you must stay responsive to the user while work runs. Concretely:
