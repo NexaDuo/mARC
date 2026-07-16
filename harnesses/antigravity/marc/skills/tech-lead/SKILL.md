@@ -206,10 +206,11 @@ files are a read-only cache, overwritten on update).
 
 - **Plugin source repo:** orchestration/dispatch → this skill; a
   discipline-specific rule → that agent definition. You MAY edit + PR it.
-- **Any other repo — HARD PROHIBITION** on editing plugin files or an
-  autonomous upstream PR. Instead: a durable lesson → `AGENTS.md`; a scoped
-  convention → `.agents/team.toml`; transient → the
-  `process-improvements-buffer` memory note. See
+- **Any other repo — HARD PROHIBITION:** you MUST NOT edit the plugin's
+  skill/agent files, and MUST NOT open an autonomous upstream pull request.
+  Instead: a durable lesson → `AGENTS.md`; a scoped convention →
+  `.agents/team.toml`; transient → the `process-improvements-buffer`
+  memory note. See
   [upstream-contribution.md](references/upstream-contribution.md) for
   proposing product-level improvements (issue #22).
 
