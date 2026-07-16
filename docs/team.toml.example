@@ -33,6 +33,13 @@ project_number = 42
 # Optional: the Project's title, to disambiguate when the org has several.
 project_title = "your-repo"
 
+# --- Board provider (optional) ---
+[board]
+# Which backend `scripts/board_reconcile.py` normalizes against. Defaults to
+# "github" when omitted. A future Azure DevOps / Jira provider plugs in here
+# without changing the normalized digest contract downstream tooling reads.
+provider = "github"
+
 # --- Architecture authority ---
 [architecture]
 # Path (relative to repo root) to the file `@techlead`/specialists must respect.
