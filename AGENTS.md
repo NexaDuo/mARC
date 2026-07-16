@@ -19,6 +19,9 @@ context where that is allowed (see Constraints).
 - Nesting under `harnesses/<harness>/` reserves the namespace for future non–Claude-Code
   harnesses. The growth model is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) —
   don't duplicate it here.
+- **`core/` is the editable source; `harnesses/*/marc/` (skills, agents) is compiled
+  output — never hand-edit it.** Run `scripts/compile_prompts.py` to regenerate from
+  `core/` + each harness's `compile.json`, and commit the regenerated files.
 
 ## Operating principles
 These distill a comparative study of agent-orchestration frameworks (OpenHands,
