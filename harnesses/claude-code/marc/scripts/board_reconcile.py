@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Board operator script (origin: #103, extended #105).
+"""Board operator script (origin: #103, extended #105, #113).
 
 ONE-call replacement for the `@techlead` skill's hand-rolled `gh` board
-sequences. Two subcommands:
+sequences. Three subcommands:
 
   * `reconcile`   — replaces the `gh issue list` / `gh pr list` /
                     `gh release view` / `git fetch` reconciliation snippets.
@@ -20,12 +20,26 @@ sequences. Two subcommands:
                     `item-list` / `item-edit` sequence the skill embedded for
                     moving a board item's Status. One call: issue number +
                     target status name in, the item's Status field mutated.
+  * `create`      — replaces the `gh issue create` / `gh project item-add` /
+                    set-status sequence the skill hand-rolled to file a new
+                    tracked issue. One call: title (+ body/labels) in, an
+                    issue created, best-effort added to the configured board,
+                    and (if `--status` given) its initial Status set — reusing
+                    the same `team.toml` resolution and `set_status` code as
+                    above. Degrades gracefully: a missing `project` scope or
+                    unconfigured board never loses the created issue, it only
+                    surfaces a `warnings` entry with `board_added=False`.
 
 Usage:
     python3 board_reconcile.py reconcile [--json] [--team-toml PATH]
                                           [--repo-root PATH]
                                           [--merges-limit N] [--open-limit N]
     python3 board_reconcile.py set-status --issue N --status NAME
+                                          [--team-toml PATH] [--repo-root PATH]
+                                          [--json]
+    python3 board_reconcile.py create --title TITLE
+                                          [--body TEXT | --body-file PATH]
+                                          [--labels a,b,c] [--status NAME]
                                           [--team-toml PATH] [--repo-root PATH]
                                           [--json]
 
@@ -169,6 +183,19 @@ class StatusResult:
 
 
 @dataclass
+class CreateResult:
+    issue_number: int
+    issue_url: str
+    board_added: bool
+    board_item_id: Optional[str]
+    status: Optional[str]
+    warnings: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class MainDrift:
     local_sha: Optional[str]
     remote_sha: Optional[str]
@@ -226,6 +253,16 @@ class BoardProvider(ABC):
         options). MUST raise `BoardError` — never silently no-op — if the
         board can't be resolved, the item isn't found, or `status` isn't a
         valid option."""
+
+    @abstractmethod
+    def create_issue(self, title: str, body: str, labels: list[str],
+                      status: Optional[str]) -> CreateResult:
+        """Create an issue, best-effort add it to the configured board, and
+        best-effort set its initial `status` (reusing `set_status`). MUST
+        raise `BoardError` only if issue CREATION itself fails — a missing
+        `project` scope, an unconfigured board, or a `set_status` failure
+        must degrade to a `warnings` entry with `board_added=False`, never
+        lose the created issue."""
 
 
 Runner = Callable[[list], str]
@@ -513,6 +550,69 @@ class GitHubProvider(BoardProvider):
             option_id=option["id"],
         )
 
+    def create_issue(self, title: str, body: str, labels: list[str],
+                      status: Optional[str] = None) -> CreateResult:
+        cmd = ["gh", "issue", "create", "--title", title, "--body", body] + self._repo_flag()
+        for label in labels:
+            cmd += ["--label", label]
+
+        try:
+            raw = self._run(cmd)
+        except Exception as e:  # noqa: BLE001 - issue creation itself must fail loudly
+            raise BoardError(f"gh issue create failed: {e}") from e
+
+        lines = [ln.strip() for ln in raw.strip().splitlines() if ln.strip()]
+        url = lines[-1] if lines else ""
+        m = re.search(r"/issues/(\d+)", url)
+        if not m:
+            raise BoardError(f"gh issue create succeeded but returned no parseable issue URL: {raw!r}")
+        issue_number = int(m.group(1))
+
+        warnings: list[str] = []
+        board_added = False
+        board_item_id: Optional[str] = None
+        result_status: Optional[str] = None
+
+        if not (self.config.project_number and self.config.gh_org):
+            warnings.append(
+                "no board configured (missing project_number/gh_org in team.toml) "
+                f"— issue #{issue_number} created but not added to any board"
+            )
+        else:
+            try:
+                add_raw = self._run([
+                    "gh", "project", "item-add", str(self.config.project_number),
+                    "--owner", self.config.gh_org, "--url", url, "--format", "json",
+                ])
+                item = json.loads(add_raw)
+                board_item_id = item.get("id")
+                board_added = True
+            except Exception as e:  # noqa: BLE001 - board add is best-effort, never lose the issue
+                warnings.append(
+                    f"gh project item-add failed (missing `project` scope? run "
+                    f"`gh auth refresh -s project,read:project`) — issue #{issue_number} was "
+                    f"created but NOT added to the board: {e}"
+                )
+
+            if board_added and status:
+                try:
+                    status_result = self.set_status(issue_number, status)
+                    result_status = status_result.status
+                except BoardError as e:
+                    warnings.append(
+                        f"issue #{issue_number} was added to the board but setting status "
+                        f"{status!r} failed: {e}"
+                    )
+
+        return CreateResult(
+            issue_number=issue_number,
+            issue_url=url,
+            board_added=board_added,
+            board_item_id=board_item_id,
+            status=result_status,
+            warnings=warnings,
+        )
+
 
 # --- digest assembly ---------------------------------------------------------
 
@@ -639,6 +739,35 @@ def _cmd_set_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_create(args: argparse.Namespace) -> int:
+    config = _resolve_config(args)
+    provider = _make_provider(config)
+
+    if args.body_file:
+        body = Path(args.body_file).read_text(encoding="utf-8")
+    elif args.body is not None:
+        body = args.body
+    else:
+        body = ""
+    labels = [l.strip() for l in args.labels.split(",") if l.strip()] if args.labels else []
+
+    try:
+        result = provider.create_issue(args.title, body, labels, args.status)
+    except BoardError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"created issue #{result.issue_number}: {result.issue_url}")
+        print(f"  board_added={result.board_added} board_item_id={result.board_item_id} "
+              f"status={result.status!r}")
+        for w in result.warnings:
+            print(f"  ! {w}")
+    return 0
+
+
 def _add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--json", action="store_true", help="machine-readable output on stdout")
     p.add_argument("--team-toml", default=None, help="override team.toml path")
@@ -661,10 +790,25 @@ def main() -> int:
     set_status_p.add_argument("--status", required=True, help="target status name (e.g. Todo, 'In Progress', Blocked, Done)")
     set_status_p.set_defaults(func=_cmd_set_status)
 
+    create_p = subparsers.add_parser(
+        "create", help="create an issue, add it to the board, and set its initial Status — one call"
+    )
+    _add_common_args(create_p)
+    create_p.add_argument("--title", required=True, help="issue title")
+    create_p.add_argument("--body-file", default=None, help="path to a file containing the issue body")
+    create_p.add_argument("--body", default=None, help="inline issue body (use --body-file for longer text)")
+    create_p.add_argument("--labels", default=None, help="comma-separated label names")
+    create_p.add_argument(
+        "--status", default=None,
+        help="initial Status to set after adding to the board (requires a configured board; "
+             "skipped with a warning if the board add fails or no board is configured)",
+    )
+    create_p.set_defaults(func=_cmd_create)
+
     # Backward compatibility: no subcommand -> default to `reconcile` so
     # existing callers (`board_reconcile.py --json`) keep working unchanged.
     argv = sys.argv[1:]
-    if not argv or argv[0] not in ("reconcile", "set-status", "-h", "--help"):
+    if not argv or argv[0] not in ("reconcile", "set-status", "create", "-h", "--help"):
         argv = ["reconcile"] + argv
 
     args = parser.parse_args(argv)

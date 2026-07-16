@@ -417,6 +417,152 @@ def test_set_status_missing_project_scope_fails_loudly():
     check(raised, "set_status raises BoardError when gh project view fails")
 
 
+def _create_run(issue_create=None, item_add=None, project_view=None, field_list=None, item_list=None):
+    """Builds a `run` callable covering the full `create_issue` call chain:
+    `gh issue create` -> `gh project item-add` -> (reused) `set_status`'s
+    `gh project {view,field-list,item-list,item-edit}`."""
+    calls: list[list] = []
+
+    def run(cmd: list) -> str:
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "issue", "create"]:
+            if isinstance(issue_create, Exception):
+                raise issue_create
+            return issue_create
+        if cmd[:3] == ["gh", "project", "item-add"]:
+            if isinstance(item_add, Exception):
+                raise item_add
+            return item_add
+        if cmd[:3] == ["gh", "project", "view"]:
+            if isinstance(project_view, Exception):
+                raise project_view
+            return project_view
+        if cmd[:3] == ["gh", "project", "field-list"]:
+            if isinstance(field_list, Exception):
+                raise field_list
+            return field_list
+        if cmd[:3] == ["gh", "project", "item-list"]:
+            if isinstance(item_list, Exception):
+                raise item_list
+            return item_list
+        if cmd[:3] == ["gh", "project", "item-edit"]:
+            return ""
+        raise RuntimeError(f"unhandled create_issue fixture: {cmd}")
+
+    run.calls = calls  # type: ignore[attr-defined]
+    return run
+
+
+def new_issue_item_list_fixture() -> str:
+    return json.dumps({
+        "items": [
+            {
+                "id": "PVTI_new1",
+                "status": "Todo",
+                "content": {"number": 200, "title": "new issue", "url": "https://x/200"},
+            },
+        ]
+    })
+
+
+def test_create_issue_happy_path_with_board_and_status():
+    """A title (+ body/labels) creates the issue, adds it to the configured
+    board, and sets its initial Status — all in one `create_issue` call."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/200\n",
+        item_add=json.dumps({"id": "PVTI_new1"}),
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        item_list=new_issue_item_list_fixture(),
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.create_issue("new issue", "body text", ["bug", "eng"], "Todo")
+    check(result.issue_number == 200, "create_issue parses the issue number from the created issue's URL")
+    check(result.issue_url == "https://github.com/YourOrg/your-repo/issues/200",
+          "create_issue returns the created issue's URL")
+    check(result.board_added is True, "create_issue adds the new issue to the configured board")
+    check(result.board_item_id == "PVTI_new1", "create_issue records the board item id from item-add")
+    check(result.status == "Todo", "create_issue sets and echoes the requested initial status")
+    check(result.warnings == [], "create_issue happy path carries no warnings")
+
+    create_calls = [c for c in run.calls if c[:3] == ["gh", "issue", "create"]]  # type: ignore[attr-defined]
+    check(len(create_calls) == 1, "create_issue issues exactly one gh issue create call")
+    check("--label" in create_calls[0], "create_issue passes labels through to gh issue create")
+
+
+def test_create_issue_no_board_configured_degrades_gracefully():
+    """No project_number/gh_org configured: the issue is still created, but
+    board_added is False with an explanatory warning — the issue is never
+    lost."""
+    cfg = RepoConfig(gh_org=None, gh_repo="YourOrg/your-repo", project_number=None, provider="github")
+    run = _create_run(issue_create="https://github.com/YourOrg/your-repo/issues/201\n")
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.create_issue("no-board issue", "", [], status=None)
+    check(result.issue_number == 201, "create_issue still creates the issue with no board configured")
+    check(result.board_added is False, "create_issue reports board_added False with no board configured")
+    check(any("no board configured" in w for w in result.warnings),
+          "create_issue warns that no board is configured")
+
+
+def test_create_issue_item_add_failure_keeps_the_issue():
+    """`gh project item-add` failing (e.g. missing `project` scope) never
+    loses the created issue — it degrades to a warning, board_added False."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/202\n",
+        item_add=RuntimeError("HTTP 403: Resource not accessible (missing scope)"),
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.create_issue("scope-missing issue", "", [], status="Todo")
+    check(result.issue_number == 202, "create_issue still creates the issue when item-add fails")
+    check(result.board_added is False, "create_issue reports board_added False when item-add fails")
+    check(result.status is None, "create_issue never sets status when the board add itself failed")
+    check(any("item-add failed" in w for w in result.warnings),
+          "create_issue warns that item-add failed")
+
+
+def test_create_issue_status_failure_keeps_the_board_add():
+    """Board add succeeds but `set_status` fails (e.g. unknown status name):
+    board_added stays True, status stays unset, and the failure surfaces as a
+    warning rather than raising."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/203\n",
+        item_add=json.dumps({"id": "PVTI_new2"}),
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        item_list=json.dumps({"items": []}),  # issue #203 not found -> set_status raises
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.create_issue("status-fail issue", "", [], status="Todo")
+    check(result.board_added is True, "create_issue keeps board_added True when only set_status fails")
+    check(result.status is None, "create_issue leaves status unset when set_status fails")
+    check(any("setting status" in w for w in result.warnings),
+          "create_issue warns that setting the initial status failed")
+
+
+def test_create_issue_creation_failure_raises_loudly():
+    """`gh issue create` itself failing MUST raise BoardError — this is the
+    one step create_issue never degrades past, unlike the board-add/status
+    steps that follow it."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(issue_create=RuntimeError("HTTP 422: Validation Failed"))
+    provider = GitHubProvider(cfg, run=run)
+
+    raised = False
+    try:
+        provider.create_issue("doomed issue", "", [], status=None)
+    except BoardError as e:
+        raised = True
+        check("gh issue create failed" in str(e), "issue-create error names the failing gh call")
+    check(raised, "create_issue raises BoardError when gh issue create itself fails")
+
+
 def main() -> int:
     test_board_configured_happy_path()
     test_zero_config_fallback()
@@ -426,6 +572,11 @@ def main() -> int:
     test_set_status_missing_board_config_fails_loudly()
     test_set_status_issue_not_on_board_fails_loudly()
     test_set_status_missing_project_scope_fails_loudly()
+    test_create_issue_happy_path_with_board_and_status()
+    test_create_issue_no_board_configured_degrades_gracefully()
+    test_create_issue_item_add_failure_keeps_the_issue()
+    test_create_issue_status_failure_keeps_the_board_add()
+    test_create_issue_creation_failure_raises_loudly()
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")

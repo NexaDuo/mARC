@@ -141,20 +141,24 @@ AskUserQuestion tool for genuine decisions). Do not delegate a vague task — a 
 task produces a vague PR.
 
 ### 3. Record on the team board (source of truth = GitHub Project)
-For each ready item:
-1. Create the issue (use the discovered `$GH_REPO`):
-   ```bash
-   gh issue create --repo "$GH_REPO" \
-     --title "<type>: <concise outcome>" \
-     --label "<discipline-and-severity labels>" \
-     --body "<the detailed body from the template below>"
-   ```
-   Prefer existing labels (`bug`, `enhancement`, `documentation`, plus discipline
-   / severity labels the repo defines); create a label only if none fits.
-2. Add it to the discovered team Project board:
-   ```bash
-   gh project item-add "$PROJ" --owner "$GH_ORG" --url <issue-url>
-   ```
+For each ready item, run the bundled `create` command — ONE call replaces the
+`gh issue create` + `gh project item-add` + set-status sequence:
+```bash
+python3 "${{{ plugin_root_env }}:-.}/scripts/board_reconcile.py" create \
+  --title "<type>: <concise outcome>" \
+  --body-file <path-to-the-detailed-body-from-the-template-below> \
+  --labels "<discipline-and-severity labels, comma-separated>" \
+  --status "Todo"
+```
+Prefer existing labels (`bug`, `enhancement`, `documentation`, plus discipline
+/ severity labels the repo defines); create a label only if none fits. It
+reads all repo facts from `{{ config_dir }}/team.toml` at runtime (same
+zero-dependency fallbacks as reconciliation — no hardcoded org/repo/board).
+Unlike `set-status`, `create` degrades gracefully on the board-add/status
+steps: a missing `project` scope or unconfigured board never loses the
+created issue, it only surfaces a warning (`board_added: false`) in the
+`--json` output — check that field and follow up manually (`gh project
+item-add`) rather than assuming the issue landed on the board.
 
 #### Board status convention (keep it honest, reflect reality)
 The Project's `Status` field is the at-a-glance state of every item. **You** are
@@ -310,6 +314,20 @@ and whether CI/deploy workflows went green. Keep the board `Status` in sync as
 state changes (In Progress → Blocked when it needs the user → Done). The task is
 **not** complete at PR-open; follow it through the repo's release phases to
 validated success.
+
+**Verifying a version bump actually shipped.** After tagging + pushing a
+release, don't hand-roll the `gh api .../git/refs/tags`/`gh run list`/`gh
+release view` sequence to confirm it landed — run the bundled verify script,
+which checks all three in one call (tag exists, the tag-triggered release
+workflow run went `success`, the GitHub Release is published and marked
+Latest):
+```bash
+python3 "${{{ plugin_root_env }}:-.}/scripts/release_verify.py" --json
+```
+Defaults to the version in `plugin.json`; pass an explicit version/tag as the
+first positional arg to check a different one. A non-zero exit means the
+release is NOT fully verified — read which of the three checks failed before
+telling the user it shipped.
 
 **Merge handoff requires the proof, not the assertion.** When you hand a
 merge/release decision to `@sre` (or act on it yourself), pass the verifiable

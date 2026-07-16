@@ -4,7 +4,26 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.16.7] - 2026-07-16
+## [0.16.8] - 2026-07-16
+
+### Added
+- **`release_verify.py` (#113).** ONE-call replacement for the operator's
+  hand-rolled post-release `gh api .../git/refs/tags` / `gh run list` / `gh
+  release view` sequence — checks that a version's tag exists, its
+  tag-triggered `Release` workflow run completed with `conclusion: success`,
+  and its GitHub Release is published and marked Latest, in a single call
+  (`--json` mode for machine parsing). Defaults to `plugin.json`'s version.
+  Decision logic (`verify_release()`) is a pure, offline-unit-tested function,
+  same pattern as `release_gate.py`'s `is_released()`.
+- **`board_reconcile.py create` (#113).** ONE-call replacement for the
+  operator's hand-rolled `gh issue create` / `gh project item-add` /
+  set-status sequence when filing a new tracked issue — creates the issue,
+  best-effort adds it to the configured board, and best-effort sets its
+  initial Status, reusing the same `team.toml` resolution and `set_status`
+  code as `set-status` (#106). Degrades gracefully: a missing `project` scope
+  or unconfigured board never loses the created issue, it only surfaces a
+  `warnings` entry with `board_added: false` — the created issue's `id`/`url`
+  are always returned.
 
 ### Changed
 - **Flushed two process-improvement buffer items into versioned source (#110).**
