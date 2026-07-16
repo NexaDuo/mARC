@@ -513,6 +513,15 @@ jobs:
       - name: cross-harness script-parity self-test
         run: python3 harnesses/claude-code/marc/scripts/test_script_parity.py
 
+      # 8e. release_gate.py self-test (issue #75). Feeds the pure
+      #     `is_released()` decision synthetic tag/release lists (no `gh`/
+      #     `git`/network) and asserts released-ok/missing-tag/no-release/
+      #     draft-release verdicts, so the scheduled release-gate.yml check
+      #     (which invokes this same function against real repo state) is
+      #     backed by deterministic, offline, zero-token-cost coverage.
+      - name: release-gate self-test
+        run: python3 harnesses/claude-code/marc/scripts/test_release_gate.py
+
       - name: actionlint (workflow schema + expression lint)
         run: |
           set -euo pipefail

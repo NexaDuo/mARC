@@ -4,6 +4,11 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.6] - 2026-07-16
+
+### Added
+- **Release drift gate (#75).** A version bump to `plugin.json` was, until now, only kept in sync with a pushed `vX.Y.Z` tag and a published GitHub Release by operator discipline — a bump-without-release already slipped silently more than once. Added `scripts/release_gate.py`, a stdlib-only script that reads the manifest `version` and asserts a matching tag exists AND a published (non-draft) release exists for it, with a pure `is_released()` decision function covered offline by `test_release_gate.py` (released-ok / missing-tag / tag-without-release / draft-release fixtures, wired into the Tier 1 CI self-tests). Added `.github/workflows/release-gate.yml`, which runs the check on a **daily schedule** (plus manual `workflow_dispatch`) rather than on push/PR — the tag+release are created by the operator after a version-bump PR merges, so an on-push check would always fail on the merge commit itself.
+
 ## [0.16.5] - 2026-07-16
 
 ### Fixed
