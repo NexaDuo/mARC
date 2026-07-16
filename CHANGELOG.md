@@ -4,6 +4,11 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4] - 2026-07-16
+
+### Added
+- **`board_reconcile.py set-status` (#105).** Extended the #103/#104 board operator script with a one-call `set-status` subcommand that moves a project board item's Status (Todo/In Progress/Blocked/Done) in a single tool-call, replacing the `gh project view`/`field-list`/`item-list`/`item-edit` sequence the `@techlead` skill previously embedded inline. `set_status(...)` is now part of the provider-agnostic `BoardProvider` interface, implemented by `GitHubProvider`; it validates the target status against the project's actual Status options (errors clearly on an unknown status rather than sending a bad option-id) and fails loudly — never silently no-ops — when the board can't be resolved or the `project` scope is missing. `board_reconcile.py` gains a `reconcile` subcommand (the prior default behavior) alongside `set-status`; calling the script with no subcommand still defaults to `reconcile` for backward compatibility. Updated the `@techlead` skill's "Setting status programmatically" recipe accordingly.
+
 ## [0.16.3] - 2026-07-16
 
 ### Added

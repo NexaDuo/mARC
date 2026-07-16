@@ -1,41 +1,67 @@
 #!/usr/bin/env python3
-"""Board reconciliation operator script (origin: #103).
+"""Board operator script (origin: #103, extended #105).
 
-ONE-call replacement for the `@techlead` skill's hand-rolled `gh issue list` /
-`gh pr list` / `gh release view` / `git fetch` reconciliation snippets. Reads
-every repo fact from `team.toml` at runtime (org/repo/board number, using the
-skill's own zero-dependency extraction fallbacks — no hardcoded slugs) and
-prints a normalized, PROVIDER-AGNOSTIC digest of board/PR/release/drift state:
+ONE-call replacement for the `@techlead` skill's hand-rolled `gh` board
+sequences. Two subcommands:
 
-  * open board items — id/title/status/assignee/linked_pr
-  * recent merges
-  * release state (does the plugin manifest version match the latest tag/
-    release?)
-  * local <-> remote `main` drift
+  * `reconcile`   — replaces the `gh issue list` / `gh pr list` /
+                    `gh release view` / `git fetch` reconciliation snippets.
+                    Reads every repo fact from `team.toml` at runtime
+                    (org/repo/board number, using the skill's own
+                    zero-dependency extraction fallbacks — no hardcoded
+                    slugs) and prints a normalized, PROVIDER-AGNOSTIC digest
+                    of board/PR/release/drift state:
+                      - open board items — id/title/status/assignee/linked_pr
+                      - recent merges
+                      - release state (does the plugin manifest version match
+                        the latest tag/release?)
+                      - local <-> remote `main` drift
+  * `set-status`  — replaces the inline `gh project view` / `field-list` /
+                    `item-list` / `item-edit` sequence the skill embedded for
+                    moving a board item's Status. One call: issue number +
+                    target status name in, the item's Status field mutated.
 
 Usage:
-    python3 board_reconcile.py [--json] [--team-toml PATH] [--repo-root PATH]
-                                [--merges-limit N] [--open-limit N]
+    python3 board_reconcile.py reconcile [--json] [--team-toml PATH]
+                                          [--repo-root PATH]
+                                          [--merges-limit N] [--open-limit N]
+    python3 board_reconcile.py set-status --issue N --status NAME
+                                          [--team-toml PATH] [--repo-root PATH]
+                                          [--json]
 
-    --json           machine-readable digest on stdout (the normalized
-                      contract; see `NormalizedDigest` / `SCHEMA_VERSION`).
-                      Default is a short human-readable summary.
+    (no subcommand defaults to `reconcile` for backward compatibility with
+    existing callers.)
+
+    --json           machine-readable output on stdout. Default is a short
+                      human-readable summary.
     --team-toml PATH override the team.toml path (default:
                       <repo-root>/.claude/team.toml).
     --repo-root PATH  override the repo root used for git/manifest lookups
                       (default: current working directory).
+    --issue N         (set-status only) the issue/PR number the board item is
+                      linked to.
+    --status NAME     (set-status only) target status name, validated against
+                      the project's actual Status field options (e.g. Todo,
+                      "In Progress", Blocked, Done — exact match required).
 
-Degrades gracefully: a missing `project` scope, a missing/ambiguous board, no
-`gh` auth, or no releases/tags never crashes the script — each gap surfaces as
-a `warnings` entry and the corresponding digest section reports what it can
-(never guesses, never auto-picks an untitled board — same rule the skill
-enforces at dispatch time).
+`reconcile` degrades gracefully: a missing `project` scope, a missing/
+ambiguous board, no `gh` auth, or no releases/tags never crashes the script —
+each gap surfaces as a `warnings` entry and the corresponding digest section
+reports what it can (never guesses, never auto-picks an untitled board — same
+rule the skill enforces at dispatch time).
+
+`set-status` is the opposite by design: it never degrades quietly. If the
+board can't be resolved (missing `project_number`/`gh_org`, missing `project`
+scope, project/field/item lookup failure) or the requested status isn't one of
+the project's actual Status options, it FAILS LOUDLY (raises `BoardError`,
+exits non-zero with a clear message) rather than silently no-op'ing a status
+change.
 
 Provider architecture: `BoardProvider` is the abstract contract; `GitHubProvider`
 is the only concrete implementation today. A future Azure DevOps / Jira
-provider plugs in by implementing the same four methods and emitting the same
-normalized digest shape — nothing downstream (this CLI, the skill, tests)
-needs to change.
+provider plugs in by implementing the same methods (including `set_status`)
+and emitting the same normalized shapes — nothing downstream (this CLI, the
+skill, tests) needs to change.
 """
 from __future__ import annotations
 
@@ -50,6 +76,12 @@ from pathlib import Path
 from typing import Callable, Optional
 
 SCHEMA_VERSION = 1
+
+
+class BoardError(Exception):
+    """Raised by `set_status` (and friends) when the board/status can't be
+    resolved unambiguously. Callers MUST surface this loudly (never catch and
+    silently no-op) — carries the #103 safety into status mutation (#105)."""
 
 # --- team.toml zero-dependency extraction (mirrors the skill's `toml_get`) --
 # Same discipline as the shell `sed` pattern the skill uses: key names are
@@ -124,6 +156,19 @@ class ReleaseState:
 
 
 @dataclass
+class StatusResult:
+    item_id: str
+    issue_number: int
+    previous_status: Optional[str]
+    status: str
+    field_id: str
+    option_id: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class MainDrift:
     local_sha: Optional[str]
     remote_sha: Optional[str]
@@ -173,6 +218,14 @@ class BoardProvider(ABC):
     @abstractmethod
     def get_main_drift(self, repo_root: Path) -> MainDrift:
         ...
+
+    @abstractmethod
+    def set_status(self, issue_number: int, status: str) -> StatusResult:
+        """Resolve the board item linked to `issue_number` and move it to
+        `status` (must exactly match one of the project's Status field
+        options). MUST raise `BoardError` — never silently no-op — if the
+        board can't be resolved, the item isn't found, or `status` isn't a
+        valid option."""
 
 
 Runner = Callable[[list], str]
@@ -373,6 +426,93 @@ class GitHubProvider(BoardProvider):
 
         return MainDrift(local_sha, remote_sha, ahead, behind, in_sync, notes)
 
+    def set_status(self, issue_number: int, status: str) -> StatusResult:
+        if not (self.config.project_number and self.config.gh_org):
+            raise BoardError(
+                "no board configured (missing project_number/gh_org in team.toml) "
+                "— cannot set status without a resolvable project; refusing to "
+                "guess or auto-bind an untitled/ambiguous board"
+            )
+
+        try:
+            project_raw = self._run(
+                ["gh", "project", "view", str(self.config.project_number),
+                 "--owner", self.config.gh_org, "--format", "json"]
+            )
+            project = json.loads(project_raw)
+            project_id = project.get("id")
+        except Exception as e:  # noqa: BLE001
+            raise BoardError(
+                f"gh project view failed (missing `project` scope? run "
+                f"`gh auth refresh -s project,read:project`): {e}"
+            ) from e
+        if not project_id:
+            raise BoardError(
+                f"gh project view returned no project id for #{self.config.project_number} "
+                f"(owner {self.config.gh_org}) — cannot resolve board unambiguously"
+            )
+
+        try:
+            fields_raw = self._run(
+                ["gh", "project", "field-list", str(self.config.project_number),
+                 "--owner", self.config.gh_org, "--format", "json"]
+            )
+            fields = json.loads(fields_raw).get("fields", [])
+        except Exception as e:  # noqa: BLE001
+            raise BoardError(f"gh project field-list failed: {e}") from e
+
+        status_field = next((f for f in fields if f.get("name") == "Status"), None)
+        if not status_field:
+            raise BoardError(
+                f"project #{self.config.project_number} has no 'Status' field — "
+                f"cannot set status"
+            )
+        options = status_field.get("options", [])
+        option = next((o for o in options if o.get("name") == status), None)
+        if not option:
+            valid = ", ".join(o.get("name", "") for o in options) or "(none)"
+            raise BoardError(
+                f"unknown status '{status}' — valid options for this project's "
+                f"Status field are: {valid}"
+            )
+
+        try:
+            items_raw = self._run(
+                ["gh", "project", "item-list", str(self.config.project_number),
+                 "--owner", self.config.gh_org, "--format", "json", "--limit", "200"]
+            )
+            items = json.loads(items_raw).get("items", [])
+        except Exception as e:  # noqa: BLE001
+            raise BoardError(f"gh project item-list failed: {e}") from e
+
+        item = next((it for it in items if (it.get("content") or {}).get("number") == issue_number), None)
+        if not item:
+            raise BoardError(
+                f"issue #{issue_number} was not found on project #{self.config.project_number} "
+                f"— has it been added to the board? (`gh project item-add`)"
+            )
+
+        previous_status = item.get("status")
+        try:
+            self._run([
+                "gh", "project", "item-edit",
+                "--id", item["id"],
+                "--project-id", project_id,
+                "--field-id", status_field["id"],
+                "--single-select-option-id", option["id"],
+            ])
+        except Exception as e:  # noqa: BLE001
+            raise BoardError(f"gh project item-edit failed: {e}") from e
+
+        return StatusResult(
+            item_id=item["id"],
+            issue_number=issue_number,
+            previous_status=previous_status,
+            status=status,
+            field_id=status_field["id"],
+            option_id=option["id"],
+        )
+
 
 # --- digest assembly ---------------------------------------------------------
 
@@ -447,15 +587,7 @@ def render_human(digest: NormalizedDigest) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--json", action="store_true", help="machine-readable digest on stdout")
-    parser.add_argument("--team-toml", default=None, help="override team.toml path")
-    parser.add_argument("--repo-root", default=".", help="repo root for git/manifest lookups")
-    parser.add_argument("--merges-limit", type=int, default=10)
-    parser.add_argument("--open-limit", type=int, default=50)
-    args = parser.parse_args()
-
+def _resolve_config(args: argparse.Namespace) -> RepoConfig:
     repo_root = Path(args.repo_root).resolve()
     team_toml = Path(args.team_toml) if args.team_toml else repo_root / ".claude" / "team.toml"
     config = RepoConfig.from_team_toml(team_toml)
@@ -470,7 +602,17 @@ def main() -> int:
             pass
     if not config.gh_org and config.gh_repo and "/" in config.gh_repo:
         config.gh_org = config.gh_repo.split("/", 1)[0]
+    return config
 
+
+def _make_provider(config: RepoConfig) -> BoardProvider:
+    provider_cls = PROVIDERS.get(config.provider, GitHubProvider)
+    return provider_cls(config)
+
+
+def _cmd_reconcile(args: argparse.Namespace) -> int:
+    repo_root = Path(args.repo_root).resolve()
+    config = _resolve_config(args)
     digest = build_digest(config, repo_root, args.open_limit, args.merges_limit)
 
     if args.json:
@@ -478,6 +620,58 @@ def main() -> int:
     else:
         print(render_human(digest))
     return 0
+
+
+def _cmd_set_status(args: argparse.Namespace) -> int:
+    config = _resolve_config(args)
+    provider = _make_provider(config)
+    try:
+        result = provider.set_status(args.issue, args.status)
+    except BoardError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"issue #{result.issue_number}: {result.previous_status!r} -> {result.status!r} "
+              f"(item {result.item_id})")
+    return 0
+
+
+def _add_common_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--json", action="store_true", help="machine-readable output on stdout")
+    p.add_argument("--team-toml", default=None, help="override team.toml path")
+    p.add_argument("--repo-root", default=".", help="repo root for git/manifest lookups")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    subparsers = parser.add_subparsers(dest="command")
+
+    reconcile_p = subparsers.add_parser("reconcile", help="print the normalized board/PR/release/drift digest")
+    _add_common_args(reconcile_p)
+    reconcile_p.add_argument("--merges-limit", type=int, default=10)
+    reconcile_p.add_argument("--open-limit", type=int, default=50)
+    reconcile_p.set_defaults(func=_cmd_reconcile)
+
+    set_status_p = subparsers.add_parser("set-status", help="move a board item's Status in one call")
+    _add_common_args(set_status_p)
+    set_status_p.add_argument("--issue", type=int, required=True, help="issue/PR number linked to the board item")
+    set_status_p.add_argument("--status", required=True, help="target status name (e.g. Todo, 'In Progress', Blocked, Done)")
+    set_status_p.set_defaults(func=_cmd_set_status)
+
+    # Backward compatibility: no subcommand -> default to `reconcile` so
+    # existing callers (`board_reconcile.py --json`) keep working unchanged.
+    argv = sys.argv[1:]
+    if not argv or argv[0] not in ("reconcile", "set-status", "-h", "--help"):
+        argv = ["reconcile"] + argv
+
+    args = parser.parse_args(argv)
+    if not hasattr(args, "func"):
+        parser.print_help()
+        return 1
+    return args.func(args)
 
 
 if __name__ == "__main__":

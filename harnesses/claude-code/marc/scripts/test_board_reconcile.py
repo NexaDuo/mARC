@@ -37,6 +37,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from board_reconcile import (  # noqa: E402
+    BoardError,
     GitHubProvider,
     RepoConfig,
     SCHEMA_VERSION,
@@ -265,10 +266,166 @@ def test_toml_get_zero_dependency_extraction():
     check(toml_get(text, "nonexistent_key") is None, "toml_get returns None for a missing key")
 
 
+def _set_status_run(project_view=None, field_list=None, item_list=None, item_edit_raises=None):
+    """Builds a `run` callable that routes `gh project {view,field-list,item-list,
+    item-edit}` (all share the ("gh","project") prefix, so `make_fake_run`'s
+    two-token keying can't disambiguate them) to per-subcommand fixtures."""
+    calls: list[list] = []
+
+    def run(cmd: list) -> str:
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "project", "view"]:
+            if isinstance(project_view, Exception):
+                raise project_view
+            return project_view
+        if cmd[:3] == ["gh", "project", "field-list"]:
+            if isinstance(field_list, Exception):
+                raise field_list
+            return field_list
+        if cmd[:3] == ["gh", "project", "item-list"]:
+            if isinstance(item_list, Exception):
+                raise item_list
+            return item_list
+        if cmd[:3] == ["gh", "project", "item-edit"]:
+            if item_edit_raises:
+                raise item_edit_raises
+            return ""
+        raise RuntimeError(f"unhandled set_status fixture: {cmd}")
+
+    run.calls = calls  # type: ignore[attr-defined]
+    return run
+
+
+def status_field_fixture() -> str:
+    return json.dumps({
+        "fields": [
+            {"id": "PVTF_field1", "name": "Title"},
+            {
+                "id": "PVTF_status",
+                "name": "Status",
+                "type": "ProjectV2SingleSelectField",
+                "options": [
+                    {"id": "opt_todo", "name": "Todo"},
+                    {"id": "opt_inprog", "name": "In Progress"},
+                    {"id": "opt_blocked", "name": "Blocked"},
+                    {"id": "opt_done", "name": "Done"},
+                ],
+            },
+        ]
+    })
+
+
+def test_set_status_happy_path():
+    """A valid issue + a valid target status resolves the correct field-id/
+    option-id and issues exactly one `item-edit` call."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _set_status_run(
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        item_list=project_item_list_fixture(),
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.set_status(103, "Done")
+    check(result.item_id == "PVTI_abc123", "set_status resolves the item linked to the target issue")
+    check(result.previous_status == "In Progress", "set_status records the previous status")
+    check(result.status == "Done", "set_status echoes the requested status")
+    check(result.field_id == "PVTF_status", "set_status resolves the Status field id")
+    check(result.option_id == "opt_done", "set_status resolves the correct option-id for a valid status")
+
+    edit_calls = [c for c in run.calls if c[:3] == ["gh", "project", "item-edit"]]  # type: ignore[attr-defined]
+    check(len(edit_calls) == 1, "set_status issues exactly one item-edit call")
+    edit_cmd = edit_calls[0]
+    check("--single-select-option-id" in edit_cmd and "opt_done" in edit_cmd,
+          "item-edit call carries the resolved option-id")
+    check("--field-id" in edit_cmd and "PVTF_status" in edit_cmd,
+          "item-edit call carries the resolved field-id")
+
+
+def test_set_status_unknown_status_errors():
+    """An unknown status name is rejected (never sends a bad option-id) with
+    an error listing the project's actual valid options."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _set_status_run(
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        item_list=project_item_list_fixture(),
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    raised = False
+    try:
+        provider.set_status(103, "Kinda Done")
+    except BoardError as e:
+        raised = True
+        check("Kinda Done" in str(e), "unknown-status error names the rejected status")
+        check("Todo" in str(e) and "Done" in str(e), "unknown-status error lists the valid options")
+    check(raised, "set_status raises BoardError for an unknown status name")
+
+    edit_calls = [c for c in run.calls if c[:3] == ["gh", "project", "item-edit"]]  # type: ignore[attr-defined]
+    check(len(edit_calls) == 0, "unknown status never reaches item-edit (no bad option-id sent)")
+
+
+def test_set_status_missing_board_config_fails_loudly():
+    """No project_number/gh_org configured -> BoardError, never a silent no-op
+    (carries the #103 safety into status mutation)."""
+    cfg = RepoConfig(gh_org=None, gh_repo="YourOrg/your-repo", project_number=None, provider="github")
+    provider = GitHubProvider(cfg, run=lambda cmd: (_ for _ in ()).throw(RuntimeError("should not be called")))
+
+    raised = False
+    try:
+        provider.set_status(103, "Done")
+    except BoardError as e:
+        raised = True
+        check("no board configured" in str(e), "missing-board error explains why status can't be set")
+    check(raised, "set_status raises BoardError (fails loudly) when no board is configured")
+
+
+def test_set_status_issue_not_on_board_fails_loudly():
+    """The issue exists but isn't linked to any item on this project board ->
+    BoardError, never a silent no-op."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _set_status_run(
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        item_list=project_item_list_fixture(),
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    raised = False
+    try:
+        provider.set_status(999, "Done")
+    except BoardError as e:
+        raised = True
+        check("999" in str(e), "item-not-found error names the missing issue number")
+    check(raised, "set_status raises BoardError when the issue isn't on the project board")
+
+
+def test_set_status_missing_project_scope_fails_loudly():
+    """`gh project view` failing (e.g. missing `project` scope) surfaces as a
+    BoardError, never a silent no-op."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _set_status_run(project_view=RuntimeError("HTTP 403: Resource not accessible (missing scope)"))
+    provider = GitHubProvider(cfg, run=run)
+
+    raised = False
+    try:
+        provider.set_status(103, "Done")
+    except BoardError as e:
+        raised = True
+        check("project" in str(e).lower(), "missing-scope error mentions the `project` scope")
+    check(raised, "set_status raises BoardError when gh project view fails")
+
+
 def main() -> int:
     test_board_configured_happy_path()
     test_zero_config_fallback()
     test_toml_get_zero_dependency_extraction()
+    test_set_status_happy_path()
+    test_set_status_unknown_status_errors()
+    test_set_status_missing_board_config_fails_loudly()
+    test_set_status_issue_not_on_board_fails_loudly()
+    test_set_status_missing_project_scope_fails_loudly()
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
