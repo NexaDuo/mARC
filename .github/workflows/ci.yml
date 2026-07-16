@@ -490,12 +490,15 @@ jobs:
       - name: token-guard hook self-test
         run: python3 harnesses/claude-code/marc/scripts/test_token_sentinel.py
 
-      # 8c. board_reconcile.py digest contract self-test (issue #103). Internal
-      #     operator CLI, no E2E flow to assert on — instead this feeds
-      #     `GitHubProvider` canned fixture data (via its injectable `run`
-      #     callable, no real `gh`/`git`/network) and asserts the normalized
-      #     `--json` digest keeps its exact schema, so a future provider (or an
-      #     accidental field rename) can't silently drift it. Deterministic,
+      # 8c. board_reconcile.py digest contract self-test (issue #103, extended
+      #     #105 set-status, #113 create). Internal operator CLI, no E2E flow
+      #     to assert on — instead this feeds `GitHubProvider` canned fixture
+      #     data (via its injectable `run` callable, no real `gh`/`git`/
+      #     network) and asserts the normalized `--json` digest keeps its
+      #     exact schema (so a future provider or accidental field rename
+      #     can't silently drift it), that `set-status` fails loudly on an
+      #     unresolvable board, and that `create` never loses a created issue
+      #     even when the board-add or status-set step fails. Deterministic,
       #     offline, zero token cost.
       - name: board_reconcile digest contract self-test
         run: python3 harnesses/claude-code/marc/scripts/test_board_reconcile.py
@@ -521,6 +524,17 @@ jobs:
       #     backed by deterministic, offline, zero-token-cost coverage.
       - name: release-gate self-test
         run: python3 harnesses/claude-code/marc/scripts/test_release_gate.py
+
+      # 8f. release_verify.py self-test (issue #113). Feeds the pure
+      #     `verify_release()` decision synthetic tag/workflow-run/release
+      #     fixtures (no `gh`/`git`/network) and asserts the per-check
+      #     PASS/FAIL verdict — tag_exists, workflow_run (missing/running/
+      #     failed), release_published (missing/draft/not-Latest) — so the
+      #     operator's on-demand post-release digest is backed by
+      #     deterministic, offline, zero-token-cost coverage, same pattern as
+      #     `release_gate.py`/`test_release_gate.py`.
+      - name: release-verify self-test
+        run: python3 harnesses/claude-code/marc/scripts/test_release_verify.py
 
       - name: actionlint (workflow schema + expression lint)
         run: |
