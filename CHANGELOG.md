@@ -4,6 +4,25 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.7] - 2026-07-16
+
+### Changed
+- **Flushed two process-improvement buffer items into versioned source (#110).**
+  Explicit-path staging + worktree isolation for any mutating dispatch (#79):
+  extended the `@techlead` "Isolate concurrent mutating dispatches" Principle to
+  recommend worktree isolation for ANY mutating, PR-writing dispatch, not only
+  when a collision is possible — a shared checkout once swept unrelated
+  untracked files into a commit — and added a non-negotiable to `agents/engineer.md`
+  and `agents/sre.md` requiring explicit-path `git add` (never `-A`/`.`).
+  Verifiable `@sec` review record (#105): the `@sec` dispatch bullet (SKILL.md
+  §4) and `agents/security.md` now require the review deliverable be posted as a
+  PR/issue comment whose body starts with the fixed marker `## @sec review` so it
+  can be grep-verified; the track-to-done section (§5) now requires the merge
+  handoff to `@sre` pass that proof (comment URL or grep recipe) rather than a
+  bare "APPROVED" assertion, and documents that this repo's single-account setup
+  means GitHub's `reviewDecision` is always empty on these PRs — the marked
+  comment is the gate, not the API field.
+
 ## [0.16.6] - 2026-07-16
 
 ### Added
