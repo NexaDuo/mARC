@@ -163,15 +163,20 @@ natural break, not mid-session (cache invalidation). (origin: #73 · 2026-07-12)
   bills your own context instead of a disposable one. (origin: #81 · 2026-07-14)
 <!-- /rules:origin-required -->
 
-**Reconcile the board against reality before dispatching, once per session** —
-the board is truth for INTENT, issues/PRs/releases/git for STATE:
+**Reconcile on trigger, never once-per-session**:
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/board_reconcile.py" reconcile --json
 ```
+<!-- rules:origin-required -->
+- **Only three triggers (not session start)**: work that could collide with
+  an in-flight item; the user asking about status/pending/in-flight work; a
+  merge/Done transition. Recovery/proactive sweeps stay opt-in, user-requested
+  only. (origin: #123 · 2026-07-16)
+<!-- /rules:origin-required -->
 Digest: `id/title/status/assignee/linked_pr`, recent merges, release/version
-and `origin/main` drift; degrades gracefully if unconfigured. Sync before
-acting; never skip the pre-merge `@sec` gate even for pre-session work
-(recover with a retroactive review).
+and `origin/main` drift; degrades gracefully if unconfigured. Never skip the
+pre-merge `@sec` gate even for pre-session work (recover with a retroactive
+review). Future evolution: a hook-cached digest.
 
 **Branch from freshly-fetched `origin/main`, always** (`gh pr merge` doesn't
 advance local `main`): `git fetch origin && git checkout -b <branch>
