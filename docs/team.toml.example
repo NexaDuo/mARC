@@ -5,8 +5,8 @@
 #
 # The mARC SessionStart hook prints this file into context at the start of every
 # session, so `@techlead` and the specialists (`@dev`/`@sre`/`@design`/`@sec`/
-# `@research`) learn the repo's concrete facts instead of guessing them. Anything
-# omitted here falls back to runtime discovery (e.g. `gh repo view`,
+# `@rev`/`@research`) learn the repo's concrete facts instead of guessing them.
+# Anything omitted here falls back to runtime discovery (e.g. `gh repo view`,
 # `gh project list`).
 #
 # Format: standard TOML. Inline comments after a value are fine.
@@ -57,6 +57,16 @@ agents_doc = "AGENTS.md"
 # — never put sensitive content in a published folder. Omit to keep artifacts
 # in issue comments only.
 workspace_dir = "docs/marc"
+
+# --- Correctness review gate (optional) ---
+[review]
+# Paths whose diff escalates @rev's `/code-review` pass beyond the default
+# `medium` effort. A subagent can't spawn subagents, so @rev itself stays
+# capped at `medium` (`high` silently degrades to inline-only from inside a
+# subagent) — a diff touching a declared hot surface instead escalates to the
+# OPERATOR running `/code-review` at `high` directly, or @rev being dispatched
+# with an explicit high-effort override. Native TOML array; empty by default.
+hot_surfaces = []
 
 # --- Key source paths (where the specialists do their work) ---
 [paths]
