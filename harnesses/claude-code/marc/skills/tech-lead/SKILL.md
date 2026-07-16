@@ -242,9 +242,10 @@ rule-origin convention.
 runaway loop offline (no network, zero token cost) with the bundled script
 `scripts/token_sentinel.py`: it reads a Claude Code session `.jsonl` and reports, per
 user turn, the model, tool-call count, and tokens processed, flagging turns that cross
-a call or token threshold. Run `python3 scripts/token_sentinel.py` (defaults to the
-newest session log for the current project) after a heavy run to confirm the tiering
-and bounds above are actually holding. (origin: #69 · 2026-07-10)
+a call or token threshold. Run `python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/token_sentinel.py"`
+(resolves regardless of cwd; defaults to the newest session log for the current
+project) after a heavy run to confirm the tiering and bounds above are actually
+holding. (origin: #69 · 2026-07-10)
 
 **An automatic guard complements the manual sentinel — you need not run anything.**
 A warn-only `PostToolUse` hook (`hooks/token-guard.sh`, sharing the sentinel's counting
@@ -272,16 +273,36 @@ model differences, which are separate caches). (origin: #73 · 2026-07-12)
   yourself. (origin: #81 · 2026-07-14)
 <!-- /rules:origin-required -->
 
-**Reconcile the board against reality before dispatching.** At session start —
-and before dispatching any individual item — verify the item isn't ALREADY done:
-check the issue's comments/linked PRs and recent merges (`gh pr list --state
-merged`); a "Todo" item may be merged and live in production while the board
-lies (real dogfood incident: two issues sat Todo/dispatched while their PRs were
-merged and deployed — one dispatch nearly duplicated shipped work). The board is
-the source of truth for INTENT, but GitHub PRs/deploys are the source of truth
-for STATE; sync the board before acting on it, and never let a merge happen
+**Reconcile the board against reality before dispatching — run the bundled
+script, once.** At session start — and before dispatching any individual item —
+verify no item is ALREADY done: a "Todo" item may be merged and live in
+production while the board lies (real dogfood incident: two issues sat
+Todo/dispatched while their PRs were merged and deployed — one dispatch nearly
+duplicated shipped work). The board is the source of truth for INTENT, but the
+board provider (issues/PRs/releases/git) is the source of truth for STATE.
+Instead of hand-rolling `gh issue list`/`gh pr list`/`gh release view`/
+`git fetch` calls, run the bundled reconciliation script ONCE per session and
+read its digest:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/board_reconcile.py" --json
+```
+
+It reads all repo facts from `.claude/team.toml` at runtime (with the
+same zero-dependency fallbacks as above — no hardcoded org/repo/board) and
+normalizes them into a provider-agnostic digest: each tracked item's
+`id/title/status/assignee/linked_pr`, recent merges, release state (does
+`plugin.json`/the equivalent version file match the latest tag/release?), and
+whether local `main` has drifted from `origin/main`. It degrades gracefully
+(reports what it can, flags what it can't) if the `project` scope or a board
+isn't configured — never let a missing board silently stall reconciliation. Sync
+the board against the digest before acting on it, and never let a merge happen
 without the pre-merge `@sec` gate even when the work predates your session
 (recover with a retroactive review if you find one already merged).
+
+> **Never silently bind to a default/"untitled" project** even via the script —
+> the same rule above applies: an ambiguous or untitled board is a decision for
+> the user, not an auto-pick.
 
 **Branch from freshly-fetched `origin/main`, always.** When you dispatch PRs in
 sequence (or merge one before another opens), instruct each specialist to cut its

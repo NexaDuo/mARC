@@ -4,6 +4,11 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] - 2026-07-16
+
+### Added
+- **`board_reconcile.py` operator script (#103).** Bundled a one-call, provider-agnostic board reconciliation script (`scripts/board_reconcile.py`) that reads repo facts from `team.toml` at runtime (zero-dependency, no hardcoded org/repo/board), normalizes them into a digest (open items' id/title/status/assignee/linked PR, recent merges, release state incl. plugin manifest ↔ tag/release match, local ↔ remote `main` drift), and degrades gracefully when the `project` scope or board isn't configured. Ships a `BoardProvider` interface with a concrete `GitHubProvider`, so a future Azure DevOps / Jira provider can plug in against the same normalized contract. Added optional `[board].provider` to `docs/team.toml.example` (defaults to `github`). The `@techlead` skill now runs this script once instead of hand-rolling `gh issue list`/`gh pr list`/`gh release view`/`git fetch` reconciliation snippets, and the documented `token_sentinel.py` invocation now resolves via the plugin root regardless of the operator's cwd.
+
 ## [0.16.2] - 2026-07-15
 
 ### Fixed
