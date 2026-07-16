@@ -168,21 +168,20 @@ responsible for keeping it accurate:
   sitting in "In Progress" pretending work is happening.
 - **Done** — only after merged **and** validated (see step 5).
 
-Setting status programmatically (discover IDs once per session; they're stable but
-re-fetch if an edit 404s):
+Setting status programmatically: run the bundled `set-status` command — ONE
+call replaces the field-list/item-list/item-view/item-edit sequence:
 ```bash
-# Discover the Status field id + option ids (Todo/In Progress/Blocked/Done)
-gh project field-list "$PROJ" --owner "$GH_ORG" --format json \
-  | jq -r '.fields[] | select(.name=="Status") | .id, (.options[] | "  \(.name) → \(.id)")'
-# Map an issue number → board item id (DEFAULT PAGE IS 30 — use a high --limit)
-gh project item-list "$PROJ" --owner "$GH_ORG" --format json --limit 200 \
-  | jq -r ".items[] | select(.content.number==<N>) | .id"
-# Discover the project's node id (PVT_…) for item-edit
-gh project view "$PROJ" --owner "$GH_ORG" --format json | jq -r .id
-# Set the status
-gh project item-edit --id <PVTI_…> --project-id <PVT_…> \
-  --field-id <STATUS_FIELD_ID> --single-select-option-id <OPTION_ID>
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/board_reconcile.py" set-status \
+  --issue <N> --status "<Todo|In Progress|Blocked|Done>"
 ```
+It reads all repo facts from `.claude/team.toml` at runtime (same
+zero-dependency fallbacks as reconciliation — no hardcoded org/repo/board),
+validates the target status against the project's actual Status options
+(errors clearly on a typo rather than sending a bad option-id), and resolves
+the field-id/option-id/item-id internally. It FAILS LOUDLY — never silently
+no-ops — if the board can't be resolved, the `project` scope is missing, or
+the issue isn't linked to any item on the board; treat a non-zero exit as a
+signal to fix the board state, not to move on.
 
 #### Recording discipline (rule origin + sanitization)
 - **Tag every governed rule with its origin.** When you record a durable rule —
@@ -285,7 +284,7 @@ Instead of hand-rolling `gh issue list`/`gh pr list`/`gh release view`/
 read its digest:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/board_reconcile.py" --json
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/board_reconcile.py" reconcile --json
 ```
 
 It reads all repo facts from `.claude/team.toml` at runtime (with the
