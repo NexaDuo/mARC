@@ -4,6 +4,11 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5] - 2026-07-16
+
+### Fixed
+- **Antigravity `scripts/` symlink (#107).** `harnesses/antigravity/marc/` shipped no `scripts/` directory even though its compiled `@techlead` skill instructs the operator to run `${AGY_PLUGIN_ROOT}/scripts/board_reconcile.py`, breaking board reconcile and the `set-status` subcommand (#105/#106) on Antigravity. Added `harnesses/antigravity/marc/scripts` as a relative symlink to `../../claude-code/marc/scripts`, mirroring the existing `harnesses/antigravity/marc/hooks` symlink. Added a stdlib-only, offline cross-harness script-parity self-test (`test_script_parity.py`) to the Tier 1 CI structural gate that scans every harness's compiled SKILL.md for `${*_PLUGIN_ROOT}/scripts/<name>` references and fails if any doesn't resolve to a real file, so this class of drift can't ship silently again.
+
 ## [0.16.4] - 2026-07-16
 
 ### Added

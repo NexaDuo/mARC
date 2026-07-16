@@ -500,6 +500,19 @@ jobs:
       - name: board_reconcile digest contract self-test
         run: python3 harnesses/claude-code/marc/scripts/test_board_reconcile.py
 
+      # 8d. Cross-harness script-parity self-test (issue #107). A harness's
+      #     compiled SKILL.md can instruct the operator to run
+      #     `${SOME_PLUGIN_ROOT}/scripts/<name>.py` while that harness ships
+      #     no `scripts/` directory at all (Antigravity referenced
+      #     `board_reconcile.py`/`token_sentinel.py` with no `scripts/`
+      #     symlink, breaking board reconcile + set-status there). This scans
+      #     every harness's compiled SKILL.md files for
+      #     `${<PLUGIN_ROOT_ENV>:-.}/scripts/<name>` references and asserts
+      #     each resolves to a real file within that harness. Deterministic,
+      #     offline, zero token cost.
+      - name: cross-harness script-parity self-test
+        run: python3 harnesses/claude-code/marc/scripts/test_script_parity.py
+
       - name: actionlint (workflow schema + expression lint)
         run: |
           set -euo pipefail
