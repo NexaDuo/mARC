@@ -3,7 +3,8 @@
 
 Offline operator self-check: no network, zero token/dollar cost. Reads a Claude
 Code session `.jsonl` and reports, per user turn, the model used, the number of
-assistant tool calls, and the tokens processed (input + cache_read + cache_write),
+assistant tool calls, and the cost-weighted tokens processed (fresh input and
+cache-write tokens at full rate, cache-read tokens discounted, origin: #100),
 flagging turns that look runaway so the operator can tighten model tiering and
 dispatch bounds.
 
@@ -70,18 +71,38 @@ import tempfile
 DEFAULT_HOOK_THRESHOLD = 25
 HOOK_THRESHOLD_ENV = "MARC_TOKEN_GUARD_THRESHOLD"
 
-# --- Context-size / per-turn-token guard (origin: #81) ----------------------
+# --- Context-size / per-turn-token guard (origin: #81, re-weighted #100) ----
 # The call-count band above misses the case where a MODERATE number of tool
 # calls (below the call-count threshold) still drags in an oversized context —
 # a handful of large file reads or a big re-read can blow the token budget
 # without ever crossing the call-count band. This band watches tokens
-# processed in the CURRENT turn (input + cache_read + cache_creation, same
-# metric the manual CLI already reports) independent of model tier: a large
-# re-read costs real money on any tier, not just Opus. Override with the env
-# var; a turn that reaches N warns once, then again at 2N, 3N, ... (same band
+# processed in the CURRENT turn, independent of model tier: a large re-read
+# costs real money on any tier, not just Opus. Override with the env var; a
+# turn that reaches N warns once, then again at 2N, 3N, ... (same band
 # debounce as the call-count guard, in its own state file so the two guards
 # never clobber each other).
-DEFAULT_HOOK_TOKENS_THRESHOLD = 150_000
+#
+# The measure is WEIGHTED (origin: #100), not a flat sum. Anthropic bills a
+# prompt-cache read (`cache_read_input_tokens`) at roughly 1/10th the rate of
+# fresh input or a cache write (`input_tokens` + `cache_creation_input_tokens`,
+# both full-rate). A flat `input + cache_read + cache_creation` sum treats a
+# cheap re-read of an already-cached skill/context identically to an expensive
+# fresh generation, so a normal large-skill session that reloads the same
+# cached context turn after turn (all cache-read, little fresh) trips the band
+# on tokens that cost a tenth of what they look like — a false positive, not a
+# real blowup. CACHE_READ_WEIGHT below discounts cache-read tokens toward that
+# real cost before banding.
+CACHE_READ_WEIGHT = 0.1  # cache_read_input_tokens counted at ~1/10th rate; tune here only.
+
+# Re-tuned against the WEIGHTED measure (previously 150_000 against the flat
+# sum). Observed false positives pre-#100 were raw floors of ~213K-965K on
+# turns dominated by cache-read (large-skill dispatch, 6-9 tool calls): at a
+# 0.1x weight those turns land at roughly 20K-100K weighted tokens even in a
+# fairly mixed (not purely cache-read) split, comfortably under this
+# threshold. A genuinely generation/cache-creation-dominated turn of the same
+# raw size weights close to its raw value and still crosses it. Override with
+# the env var if a repo's real workload needs a different band.
+DEFAULT_HOOK_TOKENS_THRESHOLD = 130_000
 HOOK_TOKENS_THRESHOLD_ENV = "MARC_TOKEN_GUARD_TOKENS_THRESHOLD"
 
 # --- Mid-session model-switch guard (origin: #73) --------------------------
@@ -131,11 +152,47 @@ def is_real_user_turn(rec: dict) -> bool:
 
 
 def usage_tokens(usage: dict) -> int:
+    """Flat (unweighted) raw sum, kept for diagnostic display only. The band
+    checks below use `weighted_usage_tokens`, not this."""
     return (
         int(usage.get("input_tokens", 0) or 0)
         + int(usage.get("cache_read_input_tokens", 0) or 0)
         + int(usage.get("cache_creation_input_tokens", 0) or 0)
     )
+
+
+def usage_components(usage: dict) -> tuple[int, int]:
+    """Split one usage dict into (fresh, cache_read) token counts.
+
+    `fresh` = input_tokens + cache_creation_input_tokens: both bill at full
+    rate (a cache write is still a full-price write of the whole context).
+    `cache_read` = cache_read_input_tokens: a discounted re-read of tokens
+    already cached (origin: #100 — see CACHE_READ_WEIGHT above).
+    """
+    fresh = (
+        int(usage.get("input_tokens", 0) or 0)
+        + int(usage.get("cache_creation_input_tokens", 0) or 0)
+    )
+    cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
+    return fresh, cache_read
+
+
+def weighted_usage_tokens(fresh: int, cache_read: int) -> int:
+    """Cost-weighted token measure: fresh tokens at full rate, cache-read
+    tokens discounted by CACHE_READ_WEIGHT (origin: #100). This is the measure
+    that feeds the context-size band, so a cache-read-dominated re-read of an
+    already-cached context no longer counts the same as a fresh generation.
+    """
+    return fresh + round(cache_read * CACHE_READ_WEIGHT)
+
+
+def dominant_token_type(fresh: int, cache_read: int) -> str:
+    """Label for the advisory/report: which token type actually drove this
+    turn's size, so an operator or a manual audit can tell a cheap cache-read
+    re-read (false-positive shape) from a real generation/cache-creation spike
+    (genuine-cost shape) at a glance (origin: #100).
+    """
+    return "cache-read-dominated" if cache_read > fresh else "generation-dominated"
 
 
 def count_tool_calls(content) -> int:
@@ -163,7 +220,14 @@ def analyze(path: str):
       model     last model seen in the turn ("-" if none)
       calls     total `tool_use` blocks across the turn's assistant messages
       requests  assistant API requests in the turn that made >=1 tool call
-      tokens    summed usage tokens across the turn's assistant messages
+      tokens    weighted usage tokens across the turn's assistant messages
+                (origin: #100 — fresh tokens full rate, cache-read tokens
+                discounted by CACHE_READ_WEIGHT; this feeds the context-size
+                band)
+      raw_tokens     flat (unweighted) sum, same as pre-#100 `tokens` — kept
+                     for diagnostic display
+      fresh_tokens   summed input + cache_creation tokens (full-rate)
+      cache_read_tokens  summed cache_read tokens (discounted)
 
     Plus MAIN-THREAD-only fields for the model-switch guard (origin: #73), which
     deliberately EXCLUDE subagent/sidechain assistant messages (`isSidechain` is
@@ -180,7 +244,8 @@ def analyze(path: str):
 
     def new_turn(prompt: str) -> dict:
         t = {"prompt": prompt, "model": "-", "calls": 0, "requests": 0,
-             "tokens": 0, "main_model": "-", "cw": 0, "cr": 0,
+             "tokens": 0, "raw_tokens": 0, "fresh_tokens": 0, "cache_read_tokens": 0,
+             "main_model": "-", "cw": 0, "cr": 0,
              "_main_seen": False}
         turns.append(t)
         return t
@@ -210,7 +275,11 @@ def analyze(path: str):
                     current["requests"] += 1
                 usage = msg.get("usage")
                 if isinstance(usage, dict):
-                    current["tokens"] += usage_tokens(usage)
+                    current["raw_tokens"] += usage_tokens(usage)
+                    fresh, cache_read = usage_components(usage)
+                    current["fresh_tokens"] += fresh
+                    current["cache_read_tokens"] += cache_read
+                    current["tokens"] += weighted_usage_tokens(fresh, cache_read)
                 # Main-thread-only tracking for the switch guard (origin: #73):
                 # ignore subagent/sidechain messages entirely.
                 if rec.get("isSidechain") is True:
@@ -352,25 +421,42 @@ def should_warn_tokens(*, tokens: int, threshold: int, turn_index: int,
     return True
 
 
-def build_tokens_advisory(*, model: str, tokens: int, threshold: int) -> dict:
+def build_tokens_advisory(*, model: str, tokens: int, threshold: int,
+                          fresh: int, cache_read: int) -> dict:
     """Non-blocking PostToolUse payload for the context-size / per-turn-token
     band (same channels as the other guards: no `decision`, no exit 2).
+
+    `tokens` is the WEIGHTED measure (origin: #100), and the advisory names
+    whether the turn is cache-read-dominated (likely a cheap re-read of
+    already-cached context, so treat this as a heads-up rather than alarm) or
+    generation-dominated (fresh tokens drove the size, so the cost is real).
     """
     approx_k = max(1, round(tokens / 1000))
     threshold_k = max(1, round(threshold / 1000))
+    kind = dominant_token_type(fresh, cache_read)
+    if kind == "cache-read-dominated":
+        shape_note = (
+            "Most of that is discounted prompt-cache re-reads (cheap), not "
+            "fresh generation, so this is likely a large re-read rather than "
+            "a real cost spike."
+        )
+    else:
+        shape_note = (
+            "Most of that is fresh input or a cache write, both full-rate, "
+            "so this turn's cost is real."
+        )
     advice = (
         f"[mARC token-guard] Context-size guard: this turn has processed "
-        f"~{approx_k}K tokens ({model}), past the {threshold_k}K-token threshold, "
-        f"even though the tool-call count may still be low. A moderate call "
-        f"count can still carry an oversized re-read context, and that costs "
-        f"real money regardless of model tier. This is advisory only — nothing "
-        f"was blocked. Consider `/compact` to shrink context before continuing, "
+        f"~{approx_k}K weighted tokens ({model}, {kind}), past the "
+        f"{threshold_k}K-token threshold, even though the tool-call count may "
+        f"still be low. {shape_note} This is advisory only, nothing was "
+        f"blocked. Consider `/compact` to shrink context before continuing, "
         f"or starting a fresh session for the next task."
     )
     return {
         "systemMessage": (
-            f"[mARC] token-guard: ~{approx_k}K tokens processed this turn "
-            f"(>{threshold_k}K). Advisory only. Consider /compact."
+            f"[mARC] token-guard: ~{approx_k}K weighted tokens processed this "
+            f"turn (>{threshold_k}K, {kind}). Advisory only. Consider /compact."
         ),
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
@@ -511,7 +597,9 @@ def run_hook(stdin_text: str) -> int:
     current = turns[turn_index]
     model = current.get("model", "-")
     count = current.get("requests", 0)
-    tokens = current.get("tokens", 0)
+    tokens = current.get("tokens", 0)  # weighted measure, origin: #100
+    fresh_tokens = current.get("fresh_tokens", 0)
+    cache_read_tokens = current.get("cache_read_tokens", 0)
     threshold = hook_threshold()
     tokens_threshold = hook_tokens_threshold()
     session_key = str(payload.get("session_id") or transcript_path)
@@ -539,7 +627,8 @@ def run_hook(stdin_text: str) -> int:
     if should_warn_tokens(tokens=tokens, threshold=tokens_threshold,
                           turn_index=turn_index, session_key=session_key):
         advisories.append(build_tokens_advisory(
-            model=model, tokens=tokens, threshold=tokens_threshold))
+            model=model, tokens=tokens, threshold=tokens_threshold,
+            fresh=fresh_tokens, cache_read=cache_read_tokens))
 
     merged = _merge_advisories(advisories)
     if merged is not None:
@@ -553,7 +642,8 @@ def main(argv=None) -> int:
     ap.add_argument("--calls", type=int, default=DEFAULT_HOOK_THRESHOLD,
                     help="flag turns above this tool-call count")
     ap.add_argument("--tokens", type=int, default=DEFAULT_HOOK_TOKENS_THRESHOLD,
-                    help="flag turns above this token count (context-size signal, origin: #81)")
+                    help="flag turns above this WEIGHTED token count "
+                         "(context-size signal, origin: #81; weighting origin: #100)")
     ap.add_argument("--hook", action="store_true",
                     help="run as a warn-only PostToolUse hook (reads hook JSON on stdin; always exits 0)")
     args = ap.parse_args(argv)
@@ -575,13 +665,16 @@ def main(argv=None) -> int:
 
     turns = analyze(path)
     print(f"session: {path}")
-    print(f"turns:   {len(turns)}   thresholds: >{args.calls} calls, >{args.tokens} tokens "
-          f"(context-size signal, origin: #81)\n")
-    print(f"{'#':>3}  {'model':<28} {'calls':>6} {'tokens':>12}  {'flag':<14} prompt")
+    print(f"turns:   {len(turns)}   thresholds: >{args.calls} calls, >{args.tokens} weighted "
+          f"tokens (context-size signal, origin: #81; cache-read weighted "
+          f"{CACHE_READ_WEIGHT}x, origin: #100)\n")
+    print(f"{'#':>3}  {'model':<28} {'calls':>6} {'tokens':>12}  {'dominant':<20} {'flag':<14} prompt")
     flagged = 0
     total_tokens = 0
+    total_raw_tokens = 0
     for i, t in enumerate(turns, 1):
         total_tokens += t["tokens"]
+        total_raw_tokens += t.get("raw_tokens", t["tokens"])
         over_calls = t["calls"] > args.calls
         over_tokens = t["tokens"] > args.tokens
         # Distinct flags so a manual audit can see WHICH signal tripped: a
@@ -597,8 +690,10 @@ def main(argv=None) -> int:
             flag = ""
         if over_calls or over_tokens:
             flagged += 1
-        print(f"{i:>3}  {t['model']:<28} {t['calls']:>6} {t['tokens']:>12}  {flag:<14} {t['prompt']}")
-    print(f"\ntotal tokens processed: {total_tokens}   flagged turns: {flagged}")
+        dominant = dominant_token_type(t.get("fresh_tokens", 0), t.get("cache_read_tokens", 0))
+        print(f"{i:>3}  {t['model']:<28} {t['calls']:>6} {t['tokens']:>12}  {dominant:<20} {flag:<14} {t['prompt']}")
+    print(f"\nweighted tokens processed: {total_tokens}   raw tokens: {total_raw_tokens}   "
+          f"flagged turns: {flagged}")
     return 1 if flagged else 0
 
 
