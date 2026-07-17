@@ -292,7 +292,7 @@ jobs:
             # `-i` because GitHub mentions are case-INsensitive: @Dev pings the
             # real user just like @dev would.
             bare="$(printf '%s\n' "$block" | sed 's/`[^`]*`//g' \
-                    | grep -inE '@<?(dev|sre|design|sec|research|techlead)\b' || true)"
+                    | grep -inE '@<?(dev|sre|design|sec|rev|research|techlead)\b' || true)"
             if [ -n "$bare" ]; then
               printf '%s\n' "$bare"
               echo "::error::$f: bare team handle in the issue-body template — backtick-escape it"
@@ -308,7 +308,7 @@ jobs:
           # NEGATIVE 1: a copy with the escaping stripped MUST fail, proving
           # the gate actually catches the regression it exists for.
           tmp="$(mktemp)"
-          sed 's/`@<dev|sre|design|sec|research>`/@<dev|sre|design|sec|research>/' "$SKILL" > "$tmp"
+          sed 's/`@<dev|sre|design|sec|rev|research>`/@<dev|sre|design|sec|rev|research>/' "$SKILL" > "$tmp"
           if check_template "$tmp" > /dev/null 2>&1; then
             echo "::error::negative test 1 FAILED — bare handle in template was NOT caught"
             rm -f "$tmp"; exit 1
@@ -320,7 +320,7 @@ jobs:
           # mentions are case-insensitive, so the gate must be too (the `-i`
           # hardening from the `@sec` review of PR #49).
           tmp="$(mktemp)"
-          sed 's/`@<dev|sre|design|sec|research>`/@Dev/' "$SKILL" > "$tmp"
+          sed 's/`@<dev|sre|design|sec|rev|research>`/@Dev/' "$SKILL" > "$tmp"
           if check_template "$tmp" > /dev/null 2>&1; then
             echo "::error::negative test 2 FAILED — mixed-case bare handle (@Dev) was NOT caught"
             rm -f "$tmp"; exit 1
@@ -345,7 +345,7 @@ jobs:
           CHECK="$GOV/scripts/check_rule_origin.py"
           FILES="core/skills/tech-lead/SKILL.md \
                  core/agents/engineer.md core/agents/sre.md core/agents/design.md \
-                 core/agents/security.md core/agents/research.md"
+                 core/agents/security.md core/agents/review.md core/agents/research.md"
 
           # POSITIVE: every shipped governed rule must carry an origin tag.
           # shellcheck disable=SC2086
@@ -614,7 +614,7 @@ jobs:
           echo "== assert skill + agents registered (plugin details) =="
           DETAILS="$(claude plugin details marc@nexaduo)"
           echo "$DETAILS"
-          for component in tech-lead engineer sre design security research; do
+          for component in tech-lead engineer sre design security review research; do
             echo "$DETAILS" | grep -qiw "$component" \
               || { echo "::error::component '$component' not registered in plugin details"; exit 1; }
           done
@@ -645,11 +645,11 @@ jobs:
           echo "Asserting plugin registration..."
           agy plugin list | jq -e '.imports[] | select(.name=="marc")' > /dev/null
 
-          echo "Asserting all six components are registered..."
+          echo "Asserting all seven components are registered..."
           CONFIG_DIR="$HOME/.gemini/config/plugins/marc"
 
           # Assert specialist agents
-          for component in engineer sre design security research; do
+          for component in engineer sre design security review research; do
             test -f "$CONFIG_DIR/agents/$component.md" || {
               echo "::error::Agent component '$component' not found in config directory"
               exit 1
@@ -662,7 +662,7 @@ jobs:
             exit 1
           }
 
-          echo "Antigravity harness check: OK (plugin installed, and all six components registered successfully)."
+          echo "Antigravity harness check: OK (plugin installed, and all seven components registered successfully)."
 
       # 8. Cross-repo proof: from a working directory OUTSIDE the mARC checkout,
       #    with its OWN fresh config dir, add the marketplace by pointing at the
@@ -687,7 +687,7 @@ jobs:
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
           DETAILS="$(claude plugin details marc@nexaduo)"
           echo "$DETAILS"
-          for component in tech-lead engineer sre design security research; do
+          for component in tech-lead engineer sre design security review research; do
             echo "$DETAILS" | grep -qiw "$component" \
               || { echo "::error::cross-repo: component '$component' not registered"; exit 1; }
           done
@@ -737,7 +737,7 @@ jobs:
           echo "== Assert upgraded plugin details =="
           DETAILS="$(claude plugin details marc@nexaduo)"
           echo "$DETAILS"
-          for component in tech-lead engineer sre design security research; do
+          for component in tech-lead engineer sre design security review research; do
             echo "$DETAILS" | grep -qiw "$component" \
               || { echo "::error::upgrade: component '$component' not registered after upgrade"; exit 1; }
           done

@@ -4,7 +4,7 @@ handle: "@techlead"
 description: >-
   Channel operator (IRC handle @techlead) for the mARC agent team. Compiles chat
   demands into ready-to-execute work, records them on the GitHub Project
-  board/Issues, and dispatches to specialists (@dev, @sre, @design, @sec,
+  board/Issues, and dispatches to specialists (@dev, @sre, @design, @sec, @rev,
   @research). Invoke with /tech-lead to turn discussion into tracked, delegated
   tasks.
 ---
@@ -22,6 +22,7 @@ who idle in the channel until you ping them:
   ├─ @sre      reliability  — deploy, observability, incidents, backups/DR, cost
   ├─ @design   front-end    — UI screens + UX, end-to-end web flows
   ├─ @sec      security     — pre-merge diff review (read-only gate)
+  ├─ @rev      review       — pre-merge correctness review (read-only gate)
   └─ @research researcher   — external evidence for decisions (read-only brief)
 ```
 
@@ -124,6 +125,7 @@ Once an item is on the board, immediately ping the right specialist in the chann
 - `sre` (@sre) — deploy, observability, infra health, incident response.
 - `design` (@design) — UI screens and UX.
 - `security` (@sec) — review a PR diff for vulnerabilities before merge (the mandatory pre-merge gate; see Principles). Read-only reviewer, not an implementer. The dispatch prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @sec review`, so a later reader (or a grep) can verify a review actually happened without trusting a paraphrase. (origin: #105 · 2026-07-16)
+- `review` (@rev) — review a PR diff for correctness (bugs, regressions, test gaps, maintainability), the second mandatory pre-merge gate alongside @sec. Read-only reviewer. The dispatch prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @rev review`. (origin: #125 · 2026-07-16)
 - `research` (@research) — fetch external evidence (benchmarks, papers, post-mortems, official docs, comparable products) when a decision lacks internal data and public evidence likely exists — and as the research pass BEFORE the user must configure or choose an external system (the "authoritative docs before the user hunts" principle, made dispatchable). Read-only: its only deliverable is ONE cited brief commented on the motivating issue — no code, no PRs. Its dispatch prompt MUST include: the **precise research question**, the **decision at stake** (the options on the table), the **motivating issue number**, a **timebox** (~8–15 sources read), and the required **output structure** (TL;DR → findings with citations → implications for the decision → coverage & gaps). "Insufficient public evidence" is an acceptable outcome — do not re-dispatch just to force a positive answer.
 
 **Dispatch in the background by default — never block the channel on a specialist.**
@@ -159,15 +161,20 @@ Escalate to Opus at a natural break, not mid-session (cache invalidation). (orig
   bills your own context instead of a disposable one. (origin: #81 · 2026-07-14)
 <!-- /rules:origin-required -->
 
-**Reconcile the board against reality before dispatching, once per session** —
-the board is truth for INTENT, issues/PRs/releases/git for STATE:
+**Reconcile on trigger, never once-per-session**:
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/board_reconcile.py" reconcile --json
 ```
+<!-- rules:origin-required -->
+- **Only three triggers (not session start)**: work that could collide with
+  an in-flight item; the user asking about status/pending/in-flight work; a
+  merge/Done transition. Recovery/proactive sweeps stay opt-in, user-requested
+  only. (origin: #123 · 2026-07-16)
+<!-- /rules:origin-required -->
 Digest: `id/title/status/assignee/linked_pr`, recent merges, release/version
-and `origin/main` drift; degrades gracefully if unconfigured. Sync before
-acting; never skip the pre-merge `@sec` gate even for pre-session work
-(recover with a retroactive review).
+and `origin/main` drift; degrades gracefully if unconfigured. Never skip the
+pre-merge `@sec` gate even for pre-session work (recover with a retroactive
+review). Future evolution: a hook-cached digest.
 
 **Branch from freshly-fetched `origin/main`, always** (`gh pr merge` doesn't
 advance local `main`): `git fetch origin && git checkout -b <branch>
@@ -192,6 +199,10 @@ which check failed before reporting shipped.
 `@sec` record (the `## @sec review` comment URL), never a bare "APPROVED" from
 memory. This repo's PR author can't self-approve, so `reviewDecision` is
 always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16)
+The pre-merge gate is now **`@sec` AND `@rev`** — hold the merge until both
+grep-verifiable markers (`## @sec review` and `## @rev review`) are on the PR,
+each ending in a verdict; a BLOCK from either specialist blocks the merge.
+(origin: #125 · 2026-07-16)
 
 **Task-boundary context-hygiene advisory.** When a discussed work item is closed out (tracked, dispatched, or reported done), and the session has actually grown since it started, say so plainly: recommend the user run `/compact` or start a fresh session before picking up the next item. Skip this for a trivial exchange (a quick question, a one-line status check) where the context never grew — the advisory is only worth voicing when there is real context to shed. `/compact` cannot be triggered programmatically: the harness only compacts on the user's manual `/compact` or its own near-limit auto-compaction, and hooks are reactive (`PreCompact`/`PostCompact`) and can only block, never initiate one. That's why this is an advisory you state to the user rather than an action you take. (origin: #81 · 2026-07-14)
 
@@ -262,7 +273,7 @@ workspace defined → leave it in the comment (offer to establish one).
 - [ ] End-to-end test in the repo's suite — OR justification why N/A
 
 ## Assignee
-`@<dev|sre|design|sec|research>`
+`@<dev|sre|design|sec|rev|research>`
 ```
 
 (Note the backticks around the assignee handle: team handles collide with real
