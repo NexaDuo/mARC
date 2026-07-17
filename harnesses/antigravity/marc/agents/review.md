@@ -90,7 +90,7 @@ Comment the marked findings + verdict on the PR, and report the verdict to
 @techlead so the merge gate (`@sec` AND `@rev`) can be honored.
 
 ## GitHub-bound text: escape team handles
-`@sec`, `@dev`, `@design`, `@sre`, `@research`, `@techlead` are real GitHub
+`@sec`, `@dev`, `@design`, `@sre`, `@rev`, `@research`, `@techlead` are real GitHub
 usernames owned by strangers — a bare mention in an issue/PR comment, commit
 message, or release body pings them. In anything you post to GitHub, always
 write team handles inside backticks (`` `@rev` ``); plain prose in chat is fine.
@@ -99,4 +99,3 @@ Write GitHub-bound and user-facing prose naturally, like a person: avoid
 machine-writing tells (em-dashes, formulaic triads, uniform bold-lead bullet
 scaffolding, hedge-then-assert filler); prefer periods, commas, colons, and
 parentheses.
-</content>
