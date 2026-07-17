@@ -4,6 +4,32 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-07-16
+
+### Added
+- **Review gate v2 — `@rev` correctness reviewer (#125).** New specialist
+  agent `review` (handle `@rev`, model `sonnet`, tools `Read, Grep, Glob,
+  Bash, TodoWrite, Skill`) reviews a PR diff for bugs, regressions, test
+  gaps, and maintainability issues by invoking the harness's built-in
+  `/code-review` skill at `medium` effort with `--comment` — capped at
+  `medium` because a subagent can't spawn subagents, so `high` effort
+  silently degrades to inline-only from inside `@rev`. Same base-sync and
+  three-dot-diff discipline as `@sec`; deliverable is a grep-verifiable PR
+  comment starting with `## @rev review`, findings ranked most-severe
+  first, a Positive aspects section, and a BLOCK/ADVISE/PASS verdict. May
+  run the consuming repo's `validation_command` (bounded, build/test only)
+  to confirm a hypothesis, tagging findings verified vs assumed.
+- **`docs/team.toml.example` `[review]` section (#125).** `hot_surfaces`
+  (empty array by default) declares paths whose diff escalates the
+  correctness review beyond `@rev`'s default effort — to the operator
+  running `/code-review` at `high` directly.
+
+### Changed
+- **Pre-merge gate is now `@sec` AND `@rev` (#125).** Tech-lead `SKILL.md`
+  roster and dispatch list add `@rev`; merge handoff requires both
+  grep-verifiable markers (`## @sec review`, `## @rev review`), each
+  ending in a verdict, before a merge proceeds.
+
 ## [0.16.9] - 2026-07-16
 
 ### Changed
