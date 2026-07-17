@@ -146,7 +146,7 @@ cheapest lever on token budget:
   (origin: #69 · 2026-07-10)
 <!-- /rules:origin-required -->
 
-**Automatic Token Guard:** You are protected by a background token sentinel. Do not manually check your token usage. If the background guard detects a runaway loop, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to starting a fresh session. (origin: #119 · 2026-07-16)
+**Automatic Token Guard:** You are protected by a background token sentinel. Do not manually check your token usage. If the background guard detects a runaway loop, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to start a fresh session. (origin: #119 · 2026-07-16)
 Escalate to Opus at a natural break, not mid-session (cache invalidation). (origin: #73 · 2026-07-12)
 
 <!-- rules:origin-required -->
