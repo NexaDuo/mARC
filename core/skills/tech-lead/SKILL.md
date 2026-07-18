@@ -138,12 +138,8 @@ cheapest lever on token budget:
   (origin: #69 · 2026-07-10)
 <!-- /rules:origin-required -->
 
-**Token-throughput sentinel** (offline, zero-cost): `python3
-"${{{ plugin_root_env }}:-.}/scripts/token_sentinel.py"`. (origin: #69 · 2026-07-10)
-A warn-only guard (`hooks/token-guard.sh`) complements it live, nudging
-{{ compact_action }} past the Opus threshold (`MARC_TOKEN_GUARD_THRESHOLD`,
-default ~25); never blocks. (origin: #71 · 2026-07-12) Escalate to Opus at a
-natural break, not mid-session (cache invalidation). (origin: #73 · 2026-07-12)
+**Automatic Token Guard:** You are protected by a background token sentinel. Do not manually check your token usage. If the background guard detects a runaway loop, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to {{ compact_action }}. (origin: #119 · 2026-07-16)
+Escalate to Opus at a natural break, not mid-session (cache invalidation). (origin: #73 · 2026-07-12)
 
 <!-- rules:origin-required -->
 - **Delegate execution — the operator does not run the loop itself.** Heavy
