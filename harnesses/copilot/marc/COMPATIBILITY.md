@@ -33,7 +33,7 @@ Validated on **GitHub Copilot CLI 1.0.71**:
 | **`/marc:init` plugin-id detection** | Uses `claude plugin list --json` + `jq` to detect `<plugin>@<marketplace>`. | `copilot plugin list` is human-readable text in current validation (no documented JSON mode). | **Implemented** | Copilot mapping now shims `copilot plugin list` into JSON-compatible output for existing merge logic. |
 | **Durable settings target** | Writes `enabledPlugins` in `.claude/settings.json`. | Copilot repo settings convention is `.github/copilot/settings.json`. | **Implemented** | Copilot `init` compile mapping now targets `.github/copilot/settings.json`. |
 | **Hooks config + runtime paths** | Claude hooks + `CLAUDE_*` env assumptions. | Claude env vars are absent in Copilot runtime. | **Implemented** | Copilot harness now ships `hooks/hooks.json` in Copilot `version: 1` schema with Copilot env/path wiring. |
-| **Aux scripts (`scripts/*.py`)** | `board_reconcile.py`, `release_verify.py`, `token_sentinel.py`. | Copilot can run shell/python commands in-session; no install-root env var to reference them directly (see finding 5 above). | **Compatible** | Ship physical copies under `harnesses/copilot/marc/scripts/` (self-contained, no cross-harness symlink) and additionally sync them into the writable `COPILOT_PLUGIN_DATA` dir at session start via an identity-pinned `sessionStart` hook — see "Script-sync identity pinning" below. |
+| **Aux scripts (`scripts/*.py`)** | `board_reconcile.py`, `release_verify.py`, `token_sentinel.py`. | Copilot can run shell/python commands in-session; no install-root env var to reference them directly (see finding 5 above). | **Compatible** | Ship physical copies under `harnesses/copilot/marc/scripts/` (self-contained, no cross-harness symlink) and additionally sync them into the writable `COPILOT_PLUGIN_DATA` dir at session start via a `sessionStart` hook with a best-effort name/repo sanity check — see "Script-sync sanity check" below. |
 
 ---
 
@@ -63,7 +63,7 @@ Copilot mapping must use:
 Any command snippets using `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PROJECT_DIR` must be
 reworked for Copilot-compatible path discovery and safe fallback behavior.
 
-### 4. Script-sync identity pinning (`hooks/hooks.json` sessionStart)
+### 4. Script-sync sanity check (`hooks/hooks.json` sessionStart)
 
 Copilot exposes no install-root env var equivalent to `CLAUDE_PLUGIN_ROOT`
 (finding 5, above) — only a writable *data* dir (`COPILOT_PLUGIN_DATA`), which
@@ -77,19 +77,25 @@ That `find` previously trusted whatever `*/marc/plugin.json` it saw first
 (`head -n1`, non-deterministic ordering) and copied `.py` files out of that
 directory — a plugin directory named `marc` from an untrusted source (a
 typosquat) would have its code adopted and later executed by the `postToolUse`
-hook and the tech-lead skill, with zero identity check. Fixed by identity
-pinning: each candidate's `plugin.json` is parsed and only trusted if
-`.name == "marc"` **and** `.repository`/`.homepage` reference
-`NexaDuo/mARC` — non-matching candidates are skipped (never adopted), and
-candidates are sorted first so the outcome is deterministic. No trusted match
-found is a silent no-op (nothing to sync yet, not an error); a wrong-identity
-match is refused rather than adopted.
+hook and the tech-lead skill, with zero check at all. Improved by adding a
+sanity check: each candidate's `plugin.json` is parsed and only used if
+`.name == "marc"` **and** `.repository`/`.homepage` reference `NexaDuo/mARC` —
+non-matching candidates are skipped, and candidates are sorted first so the
+outcome is deterministic. No matching candidate is a silent no-op (nothing to
+sync yet, not an error); a mismatched candidate is skipped rather than adopted.
+
+This is a best-effort reduction of accidental/first-match adoption, not an
+authentication or anti-typosquat boundary: `.name`/`.repository`/`.homepage`
+are self-declared by the candidate's own `plugin.json`, so a targeted
+typosquatter can simply write matching values into their own file and pass the
+check. Copilot exposes no install-root env var (or other trusted identity
+signal) for plugins, so no stronger mechanism is available at this layer.
 
 `scripts/` itself is no longer a symlink escaping to
 `harnesses/claude-code/marc/scripts` (that dangles on a
 `owner/repo:harnesses/copilot/marc` subpath install, which only checks out the
-copilot subtree) — it now ships physical copies in-tree, so the identity-pinned
-sync above always has real files to find and copy regardless of install shape.
+copilot subtree) — it now ships physical copies in-tree, so the sync above
+always has real files to find and copy regardless of install shape.
 
 ---
 
