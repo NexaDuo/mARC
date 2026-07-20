@@ -223,7 +223,7 @@ existing settings, preserving all other keys.
 SETTINGS="$ROOT/.github/copilot/settings.json"
 
 # Discover the installed plugin id (e.g. marc@<marketplace>) at runtime.
-PLUGIN_ID="$(bash -lc 'copilot plugin list | awk '\''/•/{print $2}'\'' | jq -R -s '\''split("\\n")[:-1] | map({id: ., name: (split("@")[0])})'\''' 2>/dev/null \
+PLUGIN_ID="$(bash -lc 'copilot plugin list | sed -nE '\''s/^[[:space:]]*(•[[:space:]]+)?([^[:space:]]+)[[:space:]]*\(v[0-9.]+\).*/\2/p'\'' | jq -R -s '\''split("\n")[:-1] | map({id: ., name: (split("@")[0])})'\''' 2>/dev/null \
   | jq -r '.[] | select(.name=="marc") | .id' | head -n1)"
 # Fall back to asking the user for the id if it can't be read; never invent it.
 

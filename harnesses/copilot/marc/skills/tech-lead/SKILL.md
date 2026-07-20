@@ -125,6 +125,7 @@ Once an item is on the board, immediately ping the right specialist in the chann
 - `marc:sre` (@sre) — deploy, observability, infra health, incident response.
 - `marc:design` (@design) — UI screens and UX.
 - `marc:security` (@sec) — pre-merge security review (read-only reviewer, not implementer). Require the deliverable comment marker `## @sec review` in the PR/issue.
+- `marc:review` (@rev) — pre-merge correctness review (bugs, regressions, test gaps, maintainability), the second mandatory pre-merge gate alongside @sec. Read-only reviewer, not implementer. Require the deliverable comment marker `## @rev review` in the PR/issue.
 - `marc:research` (@research) — external evidence brief only (no code, no PR).
 
 Use one task call per specialist with:

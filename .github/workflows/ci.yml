@@ -77,9 +77,14 @@ jobs:
           test -f harnesses/copilot/marc/compile.json
           test -f harnesses/copilot/marc/plugin.json
           test -f harnesses/copilot/marc/hooks/hooks.json
-          test -L harnesses/copilot/marc/scripts
+          # scripts/ is a real, self-contained directory (not a symlink out to
+          # harnesses/claude-code/marc/scripts): a `owner/repo:harnesses/copilot/marc`
+          # subpath install only checks out this subtree, so an off-tree symlink
+          # dangles there. Ship physical copies instead (origin: issue on PR #122).
+          test -d harnesses/copilot/marc/scripts && ! test -L harnesses/copilot/marc/scripts
+          test -f harnesses/copilot/marc/scripts/token_sentinel.py
           jq -e '.version == 1 and (.hooks | type == "object")' harnesses/copilot/marc/hooks/hooks.json > /dev/null
-          echo "Copilot harness structure gate: OK (compile.json/plugin.json/hooks schema/scripts link present)."
+          echo "Copilot harness structure gate: OK (compile.json/plugin.json/hooks schema/self-contained scripts present)."
 
       # 3b. team.toml schema contract (issue #51). `/marc:init` (skills/init)
       #     prefills a `.claude/team.toml` from this canonical example, so it

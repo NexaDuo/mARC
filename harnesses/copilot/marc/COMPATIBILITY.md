@@ -33,7 +33,7 @@ Validated on **GitHub Copilot CLI 1.0.71**:
 | **`/marc:init` plugin-id detection** | Uses `claude plugin list --json` + `jq` to detect `<plugin>@<marketplace>`. | `copilot plugin list` is human-readable text in current validation (no documented JSON mode). | **Implemented** | Copilot mapping now shims `copilot plugin list` into JSON-compatible output for existing merge logic. |
 | **Durable settings target** | Writes `enabledPlugins` in `.claude/settings.json`. | Copilot repo settings convention is `.github/copilot/settings.json`. | **Implemented** | Copilot `init` compile mapping now targets `.github/copilot/settings.json`. |
 | **Hooks config + runtime paths** | Claude hooks + `CLAUDE_*` env assumptions. | Claude env vars are absent in Copilot runtime. | **Implemented** | Copilot harness now ships `hooks/hooks.json` in Copilot `version: 1` schema with Copilot env/path wiring. |
-| **Aux scripts (`scripts/*.py`)** | `board_reconcile.py`, `release_verify.py`, `token_sentinel.py`. | Copilot can run shell/python commands in-session. | **Compatible** | Reuse scripts; wire with Copilot harness paths/env conventions. |
+| **Aux scripts (`scripts/*.py`)** | `board_reconcile.py`, `release_verify.py`, `token_sentinel.py`. | Copilot can run shell/python commands in-session; no install-root env var to reference them directly (see finding 5 above). | **Compatible** | Ship physical copies under `harnesses/copilot/marc/scripts/` (self-contained, no cross-harness symlink) and additionally sync them into the writable `COPILOT_PLUGIN_DATA` dir at session start via an identity-pinned `sessionStart` hook — see "Script-sync identity pinning" below. |
 
 ---
 
@@ -63,12 +63,40 @@ Copilot mapping must use:
 Any command snippets using `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PROJECT_DIR` must be
 reworked for Copilot-compatible path discovery and safe fallback behavior.
 
+### 4. Script-sync identity pinning (`hooks/hooks.json` sessionStart)
+
+Copilot exposes no install-root env var equivalent to `CLAUDE_PLUGIN_ROOT`
+(finding 5, above) — only a writable *data* dir (`COPILOT_PLUGIN_DATA`), which
+`compile.json`'s `plugin_root_env` points at. Because the compiled skill
+commands run out of that data dir, the `scripts/*.py` files have to be synced
+into it before use. Locating "our own" install to copy from still requires a
+`find` under `$HOME/.copilot/installed-plugins`, since Copilot gives us no
+direct reference to it.
+
+That `find` previously trusted whatever `*/marc/plugin.json` it saw first
+(`head -n1`, non-deterministic ordering) and copied `.py` files out of that
+directory — a plugin directory named `marc` from an untrusted source (a
+typosquat) would have its code adopted and later executed by the `postToolUse`
+hook and the tech-lead skill, with zero identity check. Fixed by identity
+pinning: each candidate's `plugin.json` is parsed and only trusted if
+`.name == "marc"` **and** `.repository`/`.homepage` reference
+`NexaDuo/mARC` — non-matching candidates are skipped (never adopted), and
+candidates are sorted first so the outcome is deterministic. No trusted match
+found is a silent no-op (nothing to sync yet, not an error); a wrong-identity
+match is refused rather than adopted.
+
+`scripts/` itself is no longer a symlink escaping to
+`harnesses/claude-code/marc/scripts` (that dangles on a
+`owner/repo:harnesses/copilot/marc` subpath install, which only checks out the
+copilot subtree) — it now ships physical copies in-tree, so the identity-pinned
+sync above always has real files to find and copy regardless of install shape.
+
 ---
 
 ## Roadmap to Copilot harness parity
 
 - [x] Create Copilot compatibility tracker (`harnesses/copilot/marc/COMPATIBILITY.md`)
-- [x] Add Copilot harness scaffold (`plugin.json`, `compile.json`, `skills/`, `agents/`, and shared `scripts/` linkage)
+- [x] Add Copilot harness scaffold (`plugin.json`, `compile.json`, `skills/`, `agents/`, and a self-contained `scripts/` directory — physical copies, not a cross-harness symlink, so a `owner/repo:harnesses/copilot/marc` subpath install is never missing its own scripts)
 - [x] Compile Copilot output from `core/` into `harnesses/copilot/marc/`
 - [x] Implement Copilot-native dispatch instructions in `skills/tech-lead/SKILL.md`
 - [x] Implement Copilot-native `/marc:init` settings flow for `.github/copilot/settings.json`
