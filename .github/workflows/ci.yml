@@ -26,6 +26,13 @@ env:
   # Pin the CLI for reproducibility. BUMP: bump this to adopt a newer Claude Code
   # (latest verified working: 2.1.200). Node 22+ is required by the CLI.
   CLAUDE_CODE_VERSION: "2.1.200"
+  # Pin the GitHub Copilot CLI for reproducibility (latest verified working:
+  # 1.0.72). Empirically confirmed (issue #127 AC#1): `copilot plugin install`
+  # and `copilot plugin marketplace add` both run with NO auth token at all
+  # (GH_TOKEN/GITHUB_TOKEN/COPILOT_GITHUB_TOKEN unset) — they only read/copy the
+  # local marketplace directory, same no-auth-needed shape as `claude plugin
+  # install`. No secret is required for this gate.
+  COPILOT_CLI_VERSION: "1.0.72"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -687,6 +694,54 @@ jobs:
           }
 
           echo "Antigravity harness check: OK (plugin installed, and all seven components registered successfully)."
+
+      # Tier 2 — Copilot harness install + component registration (issue #127
+      # AC#1). Unlike Antigravity, this needs NO secret: `copilot plugin
+      # install`/`copilot plugin marketplace add` only read/copy the local
+      # marketplace directory and make no authenticated API call, so this is a
+      # hard, always-run gate (same shape as the Claude Code Tier 2 steps
+      # above), not an optional/secret-gated tier. GH_TOKEN/GITHUB_TOKEN/
+      # COPILOT_GITHUB_TOKEN are explicitly unset below to prove that boundary
+      # in-workflow, mirroring the Claude Code "auth-boundary probe" step.
+      - name: Tier 2 — Copilot harness install + component registration
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          COPILOT_GITHUB_TOKEN: ""
+          HOME: ${{ github.workspace }}/.copilot-home
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME"
+
+          echo "Installing GitHub Copilot CLI (pinned, no auth token set)..."
+          npm i -g "@github/copilot@${COPILOT_CLI_VERSION}"
+          copilot --version
+
+          echo "Adding local marketplace and installing marc@nexaduo..."
+          copilot plugin marketplace add ./
+          copilot plugin install marc@nexaduo
+
+          echo "== assert plugin marc@nexaduo installed (plugin list) =="
+          copilot plugin list | grep -qi "marc@nexaduo"
+
+          echo "== assert skills registered (skill list) =="
+          SKILLS="$(copilot skill list)"
+          echo "$SKILLS"
+          for skill in init tech-lead; do
+            echo "$SKILLS" | grep -qiw "$skill" \
+              || { echo "::error::skill '$skill' not registered in copilot skill list"; exit 1; }
+          done
+
+          echo "== assert specialist agents registered (installed-plugins files) =="
+          AGENTS_DIR="$HOME/.copilot/installed-plugins/nexaduo/marc/agents"
+          for component in engineer sre design security review research; do
+            test -f "$AGENTS_DIR/$component.md" || {
+              echo "::error::agent '$component' not found under $AGENTS_DIR"
+              exit 1
+            }
+          done
+
+          echo "Copilot harness check: OK (plugin installed with no auth token, tech-lead+init skills and all six specialist agents registered)."
 
       # 8. Cross-repo proof: from a working directory OUTSIDE the mARC checkout,
       #    with its OWN fresh config dir, add the marketplace by pointing at the
