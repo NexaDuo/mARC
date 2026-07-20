@@ -25,7 +25,7 @@
     `@dev` `@sre` `@design` `@sec` `@rev` `@research`: ready.
 ```
 
-**mARC (Multi-Agent Relay Control)** packages a full software-delivery agent team, dressed in a retro/vaporwave **IRC** console aesthetic. Rather than building separate agent systems for every platform, mARC defines a single core team in `core/` and compiles it into plugins for different developer tools, which we call **harnesses**. Currently, mARC supports both Claude Code and Google Antigravity as first-class harnesses. It relies on the host tool to run and isolate subagents, providing a consistent team that you install once and reuse across your projects.
+**mARC (Multi-Agent Relay Control)** packages a full software-delivery agent team, dressed in a retro/vaporwave **IRC** console aesthetic. Rather than building separate agent systems for every platform, mARC defines a single core team in `core/` and compiles it into plugins for different developer tools, which we call **harnesses**. Today, mARC ships three harnesses: Claude Code, Google Antigravity, and GitHub Copilot CLI. It relies on the host tool to run and isolate subagents, providing a consistent team that you install once and reuse across your projects.
 
 ## Try it in two minutes
 
@@ -50,6 +50,16 @@ agy /marc:tech-lead
 ```
 
 Note that the binary is installed to `~/.local/bin/agy`, so the path should be in `$PATH`.
+
+### GitHub Copilot CLI
+
+Run these commands in your terminal to add the marketplace, install the plugin, and start:
+
+```bash
+copilot plugin marketplace add NexaDuo/mARC
+copilot plugin install marc@nexaduo
+/marc:tech-lead
+```
 
 ## The metaphor: one channel, one op, a bench of specialists
 
@@ -128,11 +138,13 @@ Run **`/marc:init`** in the consuming repo. It scaffolds the repository configur
 
 To support multiple host tools, mARC uses a harness-based architecture. A single core team of agents is defined under `core/` and compiled into platform-specific plugins located in the `harnesses/` directory.
 
-Currently, mARC supports two first-class harnesses: Claude Code (plugin under `harnesses/claude-code/marc/`) and Google Antigravity (plugin under `harnesses/antigravity/marc/`).
+Currently, mARC ships three harnesses: Claude Code (plugin under `harnesses/claude-code/marc/`), Google Antigravity (plugin under `harnesses/antigravity/marc/`), and GitHub Copilot CLI (plugin under `harnesses/copilot/marc/`).
 
-Because each host tool provides different agent execution APIs, the subagent dispatch mechanism varies between harnesses. Claude Code uses the native `Agent` tool to dispatch subagents, whereas Google Antigravity uses the `invoke_subagent` tool.
+Because each host tool provides different agent execution APIs, the subagent dispatch mechanism varies between harnesses. Claude Code uses the native `Agent` tool to dispatch subagents, Google Antigravity uses `invoke_subagent`, and Copilot uses the `task` tool with plugin custom agents (`marc:*`).
 
-The leader skill `@techlead` dynamically inspects the available tools and maps its requests to the appropriate dispatch tool. For a detailed breakdown of tool schemas and configuration mappings, refer to [COMPATIBILITY.md](harnesses/antigravity/marc/COMPATIBILITY.md).
+The leader skill `@techlead` dynamically inspects the available tools and maps its requests to the appropriate dispatch tool. For detailed mapping notes, refer to:
+- [Google Antigravity compatibility tracker](harnesses/antigravity/marc/COMPATIBILITY.md)
+- [GitHub Copilot compatibility tracker](harnesses/copilot/marc/COMPATIBILITY.md)
 
 ## Layout
 
@@ -152,6 +164,14 @@ harnesses/
       skills/                    # symlinked leader skills (e.g. `/marc:tech-lead`, `/marc:init`)
       agents/                    # symlinked specialist agents
       COMPATIBILITY.md           # compatibility tracker for Google Antigravity
+  copilot/
+    marc/                        # compiled GitHub Copilot CLI plugin
+      plugin.json                # Copilot plugin manifest
+      skills/tech-lead/          # `@techlead` leader skill
+      skills/init/               # `/marc:init`, Copilot config flow
+      agents/                    # `@dev`, `@sre`, `@design`, `@sec`, `@research` bench
+      hooks/hooks.json           # Copilot `version: 1` hooks config
+      COMPATIBILITY.md           # compatibility tracker for GitHub Copilot
 docs/
   ARCHITECTURE.md                # growth model covering the different roles and harnesses
   marc/                          # durable team artifacts like decision records and research briefs

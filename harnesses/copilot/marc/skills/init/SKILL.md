@@ -5,9 +5,9 @@ description: >-
   Opt-in onboarding for the mARC agent team. Scaffolds a per-repo team binding so
   the team graduates from ephemeral session-memory to persistent, versioned
   config — without ever writing a file silently. Discovers the repo's org/repo/
-  project at runtime via `gh`, prefills `{{ config_dir }}/team.toml`, and (optionally)
+  project at runtime via `gh`, prefills `.github/copilot/team.toml`, and (optionally)
   a lean `AGENTS.md` skeleton and the `enabledPlugins` pin in
-  `{{ config_dir }}/settings.json`. Each artifact is independently opt-in and is shown to
+  `.github/copilot/settings.json`. Each artifact is independently opt-in and is shown to
   you before anything is written. Invoke with /marc:init.
 ---
 
@@ -16,7 +16,7 @@ description: >-
 You are running the **mARC onboarding flow**. Your job is to help the user turn a
 zero-config repo into one with a **persistent, versioned team binding**, so
 `@techlead` and the specialists stop relying on ephemeral session memory and read
-the repo's concrete facts from `{{ config_dir }}/team.toml` (and optionally `AGENTS.md`)
+the repo's concrete facts from `.github/copilot/team.toml` (and optionally `AGENTS.md`)
 at the start of every session.
 
 ## The one rule that overrides everything
@@ -51,7 +51,7 @@ what we are reducing**; every file write still stops for an explicit "yes".
 
 ```bash
 # Where onboarding writes (the CONSUMING repo, not the plugin):
-ROOT="${{{ project_dir_env }}:-$PWD}"
+ROOT="${COPILOT_PROJECT_DIR:-$PWD}"
 
 # --- ORG + REPO (from the checked-out repo) ---
 GH_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"
@@ -87,7 +87,7 @@ repo — match its sections, keys, and comments. Use generic placeholders (e.g.
 
 ---
 
-## Artifact 1 — `{{ config_dir }}/team.toml`  (the core binding)
+## Artifact 1 — `.github/copilot/team.toml`  (the core binding)
 
 Prefill **only** the fields you discovered. Leave every other field as a clearly
 labelled `TODO` — source paths, validation command, and release facts are
@@ -158,15 +158,15 @@ EOF
 Show the rendered content, then on an explicit "yes":
 
 ```bash
-mkdir -p "$ROOT/{{ config_dir }}"
-# ... write the shown content to "$ROOT/{{ config_dir }}/team.toml" ...
+mkdir -p "$ROOT/.github/copilot"
+# ... write the shown content to "$ROOT/.github/copilot/team.toml" ...
 ```
 
 Never overwrite an existing `team.toml` without showing the user the current
 file and the proposed one and getting explicit confirmation to replace it.
 
 **Legacy migration (`team.config` → `team.toml`):** if the repo still has a
-pre-0.11.0 `{{ config_dir }}/team.config`, carry its values into the TOML you compose
+pre-0.11.0 `.github/copilot/team.config`, carry its values into the TOML you compose
 (same key names; comma-separated path strings become native TOML arrays), show
 the result as usual, and on the user's "yes" write `team.toml` **and offer to
 delete the obsolete `team.config`** (it is no longer parsed by any mARC
@@ -209,7 +209,7 @@ exists, **do not touch it** — show the user it exists and stop for that artifa
 
 ---
 
-## Artifact 3 — `enabledPlugins` pin in `{{ config_dir }}/settings.json`  (adopt for good)
+## Artifact 3 — `enabledPlugins` pin in `.github/copilot/settings.json`  (adopt for good)
 
 This is the **heaviest commitment** — it pins mARC on for this repo for everyone
 who works in it. Frame it deliberately as the *"adopt mARC for good"* step, not a
@@ -220,10 +220,10 @@ casual default. Offer it last and only if the user wants durable enablement.
 existing settings, preserving all other keys.
 
 ```bash
-SETTINGS="$ROOT/{{ config_dir }}/settings.json"
+SETTINGS="$ROOT/.github/copilot/settings.json"
 
 # Discover the installed plugin id (e.g. marc@<marketplace>) at runtime.
-PLUGIN_ID="$({{ plugin_list_command }} 2>/dev/null \
+PLUGIN_ID="$(bash -lc 'copilot plugin list | sed -nE '\''s/^[[:space:]]*(•[[:space:]]+)?([^[:space:]]+)[[:space:]]*\(v[0-9.]+\).*/\2/p'\'' | jq -R -s '\''split("\n")[:-1] | map({id: ., name: (split("@")[0])})'\''' 2>/dev/null \
   | jq -r '.[] | select(.name=="marc") | .id' | head -n1)"
 # Fall back to asking the user for the id if it can't be read; never invent it.
 
@@ -237,7 +237,7 @@ printf '%s' "$BASE" | jq --arg id "$PLUGIN_ID" \
 
 Show the merged JSON (the full resulting file, so the user sees nothing else
 changed), and on an explicit "yes" write that exact JSON to
-`$ROOT/{{ config_dir }}/settings.json`. Verify it still parses (`jq . "$SETTINGS"`) after
+`$ROOT/.github/copilot/settings.json`. Verify it still parses (`jq . "$SETTINGS"`) after
 writing. If `PLUGIN_ID` is empty, do not write — ask the user for the correct
 `<plugin>@<marketplace>` id first.
 

@@ -1,0 +1,16 @@
+{
+  "name": "nexaduo",
+  "metadata": {
+    "description": "The mARC self-marketplace — a portable IRC/vaporwave-styled agent team for GitHub Copilot CLI."
+  },
+  "owner": {
+    "name": "NexaDuo"
+  },
+  "plugins": [
+    {
+      "name": "marc",
+      "description": "mARC (Multi-Agent Relay Control) — IRC/vaporwave team plugin for Copilot CLI: @techlead + specialist bench.",
+      "source": "./harnesses/copilot/marc"
+    }
+  ]
+}
