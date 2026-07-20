@@ -357,8 +357,7 @@ jobs:
       - name: Rule-origin governance gate
         run: |
           set -euo pipefail
-          GOV=harnesses/claude-code/marc
-          CHECK="$GOV/scripts/check_rule_origin.py"
+          CHECK="core/scripts/check_rule_origin.py"
           FILES="core/skills/tech-lead/SKILL.md \
                  core/agents/engineer.md core/agents/sre.md core/agents/design.md \
                  core/agents/security.md core/agents/review.md core/agents/research.md"
@@ -513,7 +512,7 @@ jobs:
       #     emits a NON-BLOCKING payload (no `decision`), and ALWAYS exits 0.
       #     Deterministic, offline, zero token cost.
       - name: token-guard hook self-test
-        run: python3 harnesses/claude-code/marc/scripts/test_token_sentinel.py
+        run: python3 core/scripts/test_token_sentinel.py
 
       # 8c. board_reconcile.py digest contract self-test (issue #103, extended
       #     #105 set-status, #113 create). Internal operator CLI, no E2E flow
@@ -526,7 +525,7 @@ jobs:
       #     even when the board-add or status-set step fails. Deterministic,
       #     offline, zero token cost.
       - name: board_reconcile digest contract self-test
-        run: python3 harnesses/claude-code/marc/scripts/test_board_reconcile.py
+        run: python3 core/scripts/test_board_reconcile.py
 
       # 8d. Cross-harness script-parity self-test (issue #107). A harness's
       #     compiled SKILL.md can instruct the operator to run
@@ -539,7 +538,7 @@ jobs:
       #     each resolves to a real file within that harness. Deterministic,
       #     offline, zero token cost.
       - name: cross-harness script-parity self-test
-        run: python3 harnesses/claude-code/marc/scripts/test_script_parity.py
+        run: python3 core/scripts/test_script_parity.py
 
       # 8e. release_gate.py self-test (issue #75). Feeds the pure
       #     `is_released()` decision synthetic tag/release lists (no `gh`/
@@ -548,7 +547,7 @@ jobs:
       #     (which invokes this same function against real repo state) is
       #     backed by deterministic, offline, zero-token-cost coverage.
       - name: release-gate self-test
-        run: python3 harnesses/claude-code/marc/scripts/test_release_gate.py
+        run: python3 core/scripts/test_release_gate.py
 
       # 8f. release_verify.py self-test (issue #113). Feeds the pure
       #     `verify_release()` decision synthetic tag/workflow-run/release
@@ -559,7 +558,7 @@ jobs:
       #     deterministic, offline, zero-token-cost coverage, same pattern as
       #     `release_gate.py`/`test_release_gate.py`.
       - name: release-verify self-test
-        run: python3 harnesses/claude-code/marc/scripts/test_release_verify.py
+        run: python3 core/scripts/test_release_verify.py
 
       - name: actionlint (workflow schema + expression lint)
         run: |

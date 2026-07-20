@@ -35,7 +35,7 @@ project_title = "your-repo"
 
 # --- Board provider (optional) ---
 [board]
-# Which backend `scripts/board_reconcile.py` normalizes against. Defaults to
+# Which backend `scripts/board.py` normalizes against. Defaults to
 # "github" when omitted. A future Azure DevOps / Jira provider plugs in here
 # without changing the normalized digest contract downstream tooling reads.
 provider = "github"
