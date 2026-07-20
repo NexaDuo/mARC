@@ -22,7 +22,7 @@
 *** Topic: turn a discussion into tracked, delegated, shipped work
 --> `@techlead` has been given channel operator status
     `@techlead`: specialists, standby. i'll convene you when there's work.
-    `@dev` `@sre` `@design` `@sec` `@research`: ready.
+    `@dev` `@sre` `@design` `@sec` `@rev` `@research`: ready.
 ```
 
 **mARC (Multi-Agent Relay Control)** packages a full software-delivery agent team, dressed in a retro/vaporwave **IRC** console aesthetic. Rather than building separate agent systems for every platform, mARC defines a single core team in `core/` and compiles it into plugins for different developer tools, which we call **harnesses**. Today, mARC ships three harnesses: Claude Code, Google Antigravity, and GitHub Copilot CLI. It relies on the host tool to run and isolate subagents, providing a consistent team that you install once and reuse across your projects.
@@ -71,10 +71,11 @@ Think of your project as an IRC channel. **`@techlead`** holds channel-operator 
 | `@dev`       | engineer             | app/service code, IaC, deploy scripts, schema, tests |
 | `@sre`       | reliability          | deploys, observability, incidents, backups/DR, cost  |
 | `@design`    | front-end            | UI screens and overall web flows                     |
-| `@sec`       | security (read-only) | pre-merge diff review, which is the mandatory merge gate |
+| `@sec`       | security (read-only) | pre-merge diff review; one half of the mandatory merge gate |
+| `@rev`       | review (read-only)   | pre-merge correctness review; the other half of the mandatory merge gate |
 | `@research`  | researcher (read-only) | external evidence (such as benchmarks or documentation) as a cited brief |
 
-`@techlead` is a skill (`/marc:tech-lead`), while `@dev`, `@sre`, `@design`, `@sec`, and `@research` are subagents that it dispatches. `@techlead` is the first of several planned leader skills, including `founder` and `eng-director`, which will convene the same shared specialist bench.
+`@techlead` is a skill (`/marc:tech-lead`), while `@dev`, `@sre`, `@design`, `@sec`, `@rev`, and `@research` are subagents that it dispatches. `@techlead` is the first of several planned leader skills, including `founder` and `eng-director`, which will convene the same shared specialist bench.
 
 ## Generic by design: repository configuration
 

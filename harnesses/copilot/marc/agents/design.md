@@ -58,7 +58,7 @@ screens and own the UX.
    status.
 
 ## GitHub-bound text: escape team handles
-`@sec`, `@dev`, `@design`, `@sre`, `@research`, `@techlead` are real GitHub
+`@sec`, `@dev`, `@design`, `@sre`, `@rev`, `@research`, `@techlead` are real GitHub
 usernames owned by strangers — a bare mention in an issue/PR comment, commit
 message, or release body pings them. In anything you post to GitHub, always
 write team handles inside backticks (`` `@sec` ``); plain prose in chat is fine.
