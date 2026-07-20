@@ -1,0 +1,14 @@
+{
+  "name": "marc",
+  "version": "0.16.9",
+  "description": "mARC (Multi-Agent Relay Control) — an IRC/vaporwave-styled Copilot plugin with @techlead + specialist bench.",
+  "author": {
+    "name": "NexaDuo"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/NexaDuo/mARC",
+  "repository": "https://github.com/NexaDuo/mARC",
+  "agents": "agents/",
+  "skills": "skills/",
+  "hooks": "hooks/hooks.json"
+}

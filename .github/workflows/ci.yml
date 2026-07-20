@@ -66,9 +66,20 @@ jobs:
       # 3. Both JSON manifests must parse.
       - name: jq parse manifests
         run: |
+          jq . .github/plugin/marketplace.json > /dev/null
           jq . .claude-plugin/marketplace.json > /dev/null
           jq . harnesses/claude-code/marc/.claude-plugin/plugin.json > /dev/null
           jq . harnesses/antigravity/marc/plugin.json > /dev/null
+          jq . harnesses/copilot/marc/plugin.json > /dev/null
+
+      - name: Copilot harness structure gate
+        run: |
+          test -f harnesses/copilot/marc/compile.json
+          test -f harnesses/copilot/marc/plugin.json
+          test -f harnesses/copilot/marc/hooks/hooks.json
+          test -L harnesses/copilot/marc/scripts
+          jq -e '.version == 1 and (.hooks | type == "object")' harnesses/copilot/marc/hooks/hooks.json > /dev/null
+          echo "Copilot harness structure gate: OK (compile.json/plugin.json/hooks schema/scripts link present)."
 
       # 3b. team.toml schema contract (issue #51). `/marc:init` (skills/init)
       #     prefills a `.claude/team.toml` from this canonical example, so it
@@ -456,21 +467,30 @@ jobs:
         run: |
           CC_PLUGIN=harnesses/claude-code/marc/.claude-plugin/plugin.json
           AGY_PLUGIN=harnesses/antigravity/marc/plugin.json
+          COPILOT_PLUGIN=harnesses/copilot/marc/plugin.json
 
           CC_VERSION="$(jq -r .version "$CC_PLUGIN")"
           AGY_VERSION="$(jq -r .version "$AGY_PLUGIN")"
+          COPILOT_VERSION="$(jq -r .version "$COPILOT_PLUGIN")"
 
           test -n "$CC_VERSION" && test "$CC_VERSION" != "null" \
             || { echo "::error::could not read .version from $CC_PLUGIN"; exit 1; }
           test -n "$AGY_VERSION" && test "$AGY_VERSION" != "null" \
             || { echo "::error::could not read .version from $AGY_PLUGIN"; exit 1; }
+          test -n "$COPILOT_VERSION" && test "$COPILOT_VERSION" != "null" \
+            || { echo "::error::could not read .version from $COPILOT_PLUGIN"; exit 1; }
 
           if [ "$CC_VERSION" != "$AGY_VERSION" ]; then
             echo "::error::Harness version-parity gate: $CC_PLUGIN is ${CC_VERSION} but $AGY_PLUGIN is ${AGY_VERSION}, both harnesses must ship at the same version."
             exit 1
           fi
 
-          echo "Harness version-parity gate: OK (both harnesses at ${CC_VERSION})."
+          if [ "$CC_VERSION" != "$COPILOT_VERSION" ]; then
+            echo "::error::Harness version-parity gate: $CC_PLUGIN is ${CC_VERSION} but $COPILOT_PLUGIN is ${COPILOT_VERSION}, all harnesses must ship at the same version."
+            exit 1
+          fi
+
+          echo "Harness version-parity gate: OK (claude-code, antigravity, and copilot harnesses at ${CC_VERSION})."
 
       # 9. actionlint — workflow schema + expression lint. Plain YAML parsing
       #    (jq/yaml.safe_load) accepts a file that GitHub's stricter workflow

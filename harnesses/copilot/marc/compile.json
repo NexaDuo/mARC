@@ -1,0 +1,12 @@
+{
+  "harness_name": "GitHub Copilot CLI",
+  "config_dir": ".github/copilot",
+  "project_dir_env": "COPILOT_PROJECT_DIR",
+  "plugin_root_env": "COPILOT_PLUGIN_DATA",
+  "plugin_manifest_path": "harnesses/copilot/marc/plugin.json",
+  "plugin_list_command": "bash -lc 'copilot plugin list | awk '\\''/\u2022/{print $2}'\\'' | jq -R -s '\\''split(\"\\\\n\")[:-1] | map({id: ., name: (split(\"@\")[0])})'\\'''",
+  "dispatch_instructions": "Once an item is on the board, immediately ping the right specialist in the channel \u2014 do not wait for the user's confirmation. Use the task tool to dispatch to mARC custom agents with `mode: \"background\"`:\n- `marc:engineer` (@dev) \u2014 app/service code, IaC, deploy scripts, schema, tests, PRs.\n- `marc:sre` (@sre) \u2014 deploy, observability, infra health, incident response.\n- `marc:design` (@design) \u2014 UI screens and UX.\n- `marc:security` (@sec) \u2014 pre-merge security review (read-only reviewer, not implementer). Require the deliverable comment marker `## @sec review` in the PR/issue.\n- `marc:research` (@research) \u2014 external evidence brief only (no code, no PR).\n\nUse one task call per specialist with:\n- `agent_type`: the mapped `marc:*` specialist\n- `name`: concise specialist run name (for example `dev-issue-123`)\n- `description`: short action label\n- `prompt`: full spec (issue URL, acceptance criteria, affected files, constraints)\n- `mode`: `background`\n\nDispatch in the background by default \u2014 never block the channel on specialist execution. Launch independent items in parallel, then sequence dependent stages by waiting for specialist completion notifications.",
+  "isolation_instructions": "by creating separate git worktrees for concurrent mutating specialist tasks before dispatch",
+  "compact_action": "start a fresh session",
+  "task_boundary_advisory": "When a discussed work item is closed out (tracked, dispatched, or reported done), and the session has actually grown since it started, say so plainly: recommend the user start a fresh session before picking up the next item. Skip this for a trivial exchange (a quick question, a one-line status check) where the context never grew \u2014 the advisory is only worth voicing when there is real context to shed."
+}
