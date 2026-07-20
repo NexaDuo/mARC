@@ -22,10 +22,10 @@
 *** Topic: turn a discussion into tracked, delegated, shipped work
 --> `@techlead` has been given channel operator status
     `@techlead`: specialists, standby. i'll convene you when there's work.
-    `@dev` `@sre` `@design` `@sec` `@research`: ready.
+    `@dev` `@sre` `@design` `@sec` `@rev` `@research`: ready.
 ```
 
-**mARC (Multi-Agent Relay Control)** packages a full software-delivery agent team, dressed in a retro/vaporwave **IRC** console aesthetic. Rather than building separate agent systems for every platform, mARC defines a single core team in `core/` and compiles it into plugins for different developer tools, which we call **harnesses**. Currently, mARC supports both Claude Code and Google Antigravity as first-class harnesses. It relies on the host tool to run and isolate subagents, providing a consistent team that you install once and reuse across your projects.
+**mARC (Multi-Agent Relay Control)** packages a full software-delivery agent team, dressed in a retro/vaporwave **IRC** console aesthetic. Rather than building separate agent systems for every platform, mARC defines a single core team in `core/` and compiles it into plugins for different developer tools, which we call **harnesses**. Today, mARC ships Claude Code and Google Antigravity harnesses, and tracks GitHub Copilot parity under [`harnesses/copilot/marc/COMPATIBILITY.md`](harnesses/copilot/marc/COMPATIBILITY.md). It relies on the host tool to run and isolate subagents, providing a consistent team that you install once and reuse across your projects.
 
 ## Try it in two minutes
 
@@ -51,6 +51,10 @@ agy /marc:tech-lead
 
 Note that the binary is installed to `~/.local/bin/agy`, so the path should be in `$PATH`.
 
+### GitHub Copilot (in progress)
+
+Copilot support is under active implementation. Track current compatibility and roadmap in [`harnesses/copilot/marc/COMPATIBILITY.md`](harnesses/copilot/marc/COMPATIBILITY.md).
+
 ## The metaphor: one channel, one op, a bench of specialists
 
 Think of your project as an IRC channel. **`@techlead`** holds channel-operator status. It listens to the discussion, compiles it into well-specified, tracked work on your GitHub Project board, and then pings the right specialist to do it.
@@ -62,9 +66,10 @@ Think of your project as an IRC channel. **`@techlead`** holds channel-operator 
 | `@sre`       | reliability          | deploys, observability, incidents, backups/DR, cost  |
 | `@design`    | front-end            | UI screens and overall web flows                     |
 | `@sec`       | security (read-only) | pre-merge diff review, which is the mandatory merge gate |
+| `@rev`       | review (read-only)   | pre-merge correctness review, the second mandatory merge gate |
 | `@research`  | researcher (read-only) | external evidence (such as benchmarks or documentation) as a cited brief |
 
-`@techlead` is a skill (`/marc:tech-lead`), while `@dev`, `@sre`, `@design`, `@sec`, and `@research` are subagents that it dispatches. `@techlead` is the first of several planned leader skills, including `founder` and `eng-director`, which will convene the same shared specialist bench.
+`@techlead` is a skill (`/marc:tech-lead`), while `@dev`, `@sre`, `@design`, `@sec`, `@rev`, and `@research` are subagents that it dispatches. `@techlead` is the first of several planned leader skills, including `founder` and `eng-director`, which will convene the same shared specialist bench.
 
 ## Generic by design: repository configuration
 
@@ -127,11 +132,13 @@ Run **`/marc:init`** in the consuming repo. It scaffolds the repository configur
 
 To support multiple host tools, mARC uses a harness-based architecture. A single core team of agents is defined under `core/` and compiled into platform-specific plugins located in the `harnesses/` directory.
 
-Currently, mARC supports two first-class harnesses: Claude Code (plugin under `harnesses/claude-code/marc/`) and Google Antigravity (plugin under `harnesses/antigravity/marc/`).
+Currently, mARC ships two harnesses: Claude Code (plugin under `harnesses/claude-code/marc/`) and Google Antigravity (plugin under `harnesses/antigravity/marc/`). GitHub Copilot harness support is tracked as in-progress under `harnesses/copilot/marc/`.
 
-Because each host tool provides different agent execution APIs, the subagent dispatch mechanism varies between harnesses. Claude Code uses the native `Agent` tool to dispatch subagents, whereas Google Antigravity uses the `invoke_subagent` tool.
+Because each host tool provides different agent execution APIs, the subagent dispatch mechanism varies between harnesses. Claude Code uses the native `Agent` tool to dispatch subagents, Google Antigravity uses `invoke_subagent`, and Copilot mapping is being implemented against Copilot's task/custom-agent model.
 
-The leader skill `@techlead` dynamically inspects the available tools and maps its requests to the appropriate dispatch tool. For a detailed breakdown of tool schemas and configuration mappings, refer to [COMPATIBILITY.md](harnesses/antigravity/marc/COMPATIBILITY.md).
+The leader skill `@techlead` dynamically inspects the available tools and maps its requests to the appropriate dispatch tool. For detailed mapping notes, refer to:
+- [Google Antigravity compatibility tracker](harnesses/antigravity/marc/COMPATIBILITY.md)
+- [GitHub Copilot compatibility tracker](harnesses/copilot/marc/COMPATIBILITY.md)
 
 ## Layout
 
@@ -151,6 +158,9 @@ harnesses/
       skills/                    # symlinked leader skills (e.g. `/marc:tech-lead`, `/marc:init`)
       agents/                    # symlinked specialist agents
       COMPATIBILITY.md           # compatibility tracker for Google Antigravity
+  copilot/
+    marc/                        # GitHub Copilot harness (implementation in progress)
+      COMPATIBILITY.md           # compatibility tracker for GitHub Copilot
 docs/
   ARCHITECTURE.md                # growth model covering the different roles and harnesses
   marc/                          # durable team artifacts like decision records and research briefs
