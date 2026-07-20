@@ -4,6 +4,18 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] - 2026-07-20
+
+### Changed
+- **`core/scripts/` is the canonical single source of truth for scripts (#129).**
+  `board_reconcile.py` renamed to `board.py`; a backward-compat `board_reconcile.py`
+  shim is kept for one release. `test_script_parity.py` now enforces byte-identity
+  across all three harnesses.
+
+### CI
+- Repointed `release-gate.yml` to `core/scripts/release_gate.py` (#131).
+- Added a Copilot install-parity Tier 2 gate (#132).
+
 ## [0.17.0] - 2026-07-16
 
 ### Added
