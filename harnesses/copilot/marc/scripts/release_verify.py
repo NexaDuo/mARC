@@ -19,7 +19,7 @@ Usage:
               (override with an explicit positional arg, e.g. "0.16.7" or
               "v0.16.7" — the leading "v" is optional either way).
     --repo    OWNER/REPO override; default resolution mirrors
-              `board_reconcile.py`: team.toml `gh_repo`, then `gh repo view`
+              `board.py`: team.toml `gh_repo`, then `gh repo view`
               zero-config fallback.
     --workflow  the tag-triggered release workflow's file name (default:
               "release.yml", this repo's actual workflow — override for a
@@ -42,7 +42,7 @@ I/O) so it's unit-testable offline — see `test_release_verify.py`, mirroring
 
 Never crashes: every `gh`/`git` call is wrapped, a failure degrades to a
 `None`/`False` field plus a note in the check's `notes`, not an exception —
-same discipline as `board_reconcile.py reconcile`.
+same discipline as `board.py reconcile`.
 """
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ from typing import Optional
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from board_reconcile import RepoConfig, _resolve_config  # noqa: E402
+from board import RepoConfig, _resolve_config  # noqa: E402
 
 SCHEMA_VERSION = 1
 DEFAULT_WORKFLOW = "release.yml"
@@ -271,7 +271,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable output on stdout")
     parser.add_argument("--repo-root", default=".", help="repo root for manifest/team.toml lookups (default: cwd)")
     parser.add_argument("--team-toml", default=None, help="override team.toml path")
-    parser.add_argument("--repo", default=None, help="OWNER/REPO override (default: resolved like board_reconcile.py)")
+    parser.add_argument("--repo", default=None, help="OWNER/REPO override (default: resolved like board.py)")
     parser.add_argument("--workflow", default=DEFAULT_WORKFLOW,
                          help=f"tag-triggered release workflow file name (default: {DEFAULT_WORKFLOW})")
     parser.add_argument("--manifest", default=None, help="override plugin.json path")

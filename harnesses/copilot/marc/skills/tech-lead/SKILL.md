@@ -42,7 +42,7 @@ session → offer `/marc:init` to scaffold one from discovered facts — opt-in,
 show content before writing; proceed zero-config if declined.
 
 ### Discover the target repo + project
-Never hardcode a repo slug or project number — `board_reconcile.py`'s
+Never hardcode a repo slug or project number — `board.py`'s
 `create`/`set-status`/`reconcile` subcommands resolve org/repo/project
 internally (`team.toml` → `gh` repo → `gh project list`). Two guardrails:
 - **Never auto-bind to a default/"untitled" project** (often number `1`).
@@ -82,7 +82,7 @@ decisions). Never delegate a vague task — it produces a vague PR.
 For each ready item, run the bundled `create` command — one call replaces the
 `gh issue create` + `gh project item-add` + set-status sequence:
 ```bash
-python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/board_reconcile.py" create \
+python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/board.py" create \
   --title "<type>: <concise outcome>" \
   --body-file <path-to-the-detailed-body-from-the-template-below> \
   --labels "<discipline-and-severity labels, comma-separated>" \
@@ -103,7 +103,7 @@ it landed.
 Run the bundled `set-status` command — one call replaces the
 field-list/item-list/item-view/item-edit sequence:
 ```bash
-python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/board_reconcile.py" set-status \
+python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/board.py" set-status \
   --issue <N> --status "<Todo|In Progress|Blocked|Done>"
 ```
 Validates against the project's real Status options; FAILS LOUDLY (never
@@ -165,7 +165,7 @@ Escalate to Opus at a natural break, not mid-session (cache invalidation). (orig
 
 **Reconcile on trigger, never once-per-session**:
 ```bash
-python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/board_reconcile.py" reconcile --json
+python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/board.py" reconcile --json
 ```
 <!-- rules:origin-required -->
 - **Only three triggers (not session start)**: work that could collide with

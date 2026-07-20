@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Self-test for `board_reconcile.py`'s normalized `--json` output contract
-(origin: #103).
+"""Self-test for `board.py`'s normalized `--json` output contract
+(origin: #103; module renamed from `board_reconcile.py` to `board.py`,
+origin: #128 — this test file keeps its name to match its established
+test-discovery pattern).
 
 Stdlib only (no pytest); run directly:  python3 test_board_reconcile.py
 
@@ -36,7 +38,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from board_reconcile import (  # noqa: E402
+from board import (  # noqa: E402
     BoardError,
     GitHubProvider,
     RepoConfig,
