@@ -17,7 +17,7 @@ name: Release Gate
 # kept for on-demand manual runs (e.g. right after a merge, to check sooner).
 #
 # Decision logic lives in a pure, offline-unit-tested function
-# (harnesses/claude-code/marc/scripts/release_gate.py::is_released, covered by
+# (core/scripts/release_gate.py::is_released, covered by
 # test_release_gate.py — wired into ci.yml's Tier-1 self-tests). This workflow
 # is a thin invocation of that script using the real `git`/`gh` state.
 
@@ -42,4 +42,4 @@ jobs:
       - name: Assert plugin.json version has a pushed tag + published release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 harnesses/claude-code/marc/scripts/release_gate.py
+        run: python3 core/scripts/release_gate.py
