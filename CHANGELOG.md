@@ -4,6 +4,44 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-07-21
+
+### Added
+- **Opt-in, default-OFF per-turn token-cost telemetry recorder (#149, brief:
+  #148), Claude Code harness only.** A new `hooks/token-telemetry.sh` fires
+  on `Stop` (once per turn, unlike `PostToolUse`'s once-per-tool-call) and
+  reuses `token_sentinel.py`'s existing transcript-parsing (`analyze()`,
+  additively extended with `input_tokens`/`output_tokens`/
+  `cache_write_tokens`/`last_ts` fields) instead of reinventing token
+  accounting — the PostToolUse token-guard's behavior is unchanged. Writes
+  ONE append-only JSONL line per turn to
+  `~/.claude/marc-state/token-telemetry.jsonl` (honors `MARC_STATE_DIR`):
+  `ts`, `session_id`, `turn_index`, `model`, `input`, `output`, `cache_read`,
+  `cache_write`, `weighted`, and a repo/cwd BASENAME — never any message-body
+  content. OFF by default: nothing is written unless the consuming repo's
+  `.claude/team.toml` has `[telemetry]` / `enabled = true` (documented in
+  `docs/team.toml.example`); the toggle is checked in bash BEFORE ever
+  shelling out to python3, so the common (disabled) case costs nothing extra.
+  Antigravity and Copilot are explicitly out of scope for the hook itself
+  (their `plugin.json` only bump for the cross-harness parity gate).
+- **One-shot telemetry backfill (`scripts/token_telemetry_backfill.py`,
+  #149).** Manual/opt-in CLI (never auto-run) that mines existing
+  `~/.claude/projects/**/*.jsonl` session transcripts into the same schema,
+  idempotent on `(session_id, turn_index)` so re-running never duplicates a
+  line. Documents the ~30-day default `cleanupPeriodDays` retention ceiling
+  (already-rotated transcripts are unrecoverable) and that historical
+  pricing is not reconstructed, only raw token counts.
+- **Zero-dependency telemetry summary (`scripts/token_telemetry_report.py`,
+  #149).** `rtk gain`-style stdlib-only per-session/per-turn table (totals +
+  a simple newest-vs-oldest trend line) over `token-telemetry.jsonl`; no
+  dashboard, no external deps, out of scope for v1 per the issue.
+- **CI coverage:** a new hook self-test synthesizes team.toml/transcript
+  fixtures and asserts OFF (missing/false) writes nothing, ON writes exactly
+  one well-formed JSONL line per `Stop` firing with the whitelisted
+  numeric-only schema, and a missing transcript still exits 0; a separate
+  backfill self-test asserts idempotency and that new turns are still
+  picked up on a re-run. `shellcheck`-clean on the new hook.
+
 ## [0.19.0] - 2026-07-21
 
 ### Added

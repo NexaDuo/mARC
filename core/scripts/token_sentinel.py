@@ -228,6 +228,18 @@ def analyze(path: str):
                      for diagnostic display
       fresh_tokens   summed input + cache_creation tokens (full-rate)
       cache_read_tokens  summed cache_read tokens (discounted)
+      output_tokens  summed assistant output tokens (origin: #149 — not used
+                     by any guard band above; additive field for the opt-in
+                     token-telemetry recorder, which needs input/output/
+                     cache-read/cache-write split separately, not just the
+                     guard's folded weighted/fresh measures)
+      input_tokens   summed raw `input_tokens` only (excludes cache_creation;
+                     `fresh_tokens` above still folds the two together for the
+                     guard band — this is a separate additive field, #149)
+      cache_write_tokens  summed `cache_creation_input_tokens` only (same
+                          split rationale as `input_tokens`, #149)
+      last_ts        ISO timestamp of the last assistant message seen in the
+                     turn ("" if none) — additive field, origin: #149
 
     Plus MAIN-THREAD-only fields for the model-switch guard (origin: #73), which
     deliberately EXCLUDE subagent/sidechain assistant messages (`isSidechain` is
@@ -245,6 +257,7 @@ def analyze(path: str):
     def new_turn(prompt: str) -> dict:
         t = {"prompt": prompt, "model": "-", "calls": 0, "requests": 0,
              "tokens": 0, "raw_tokens": 0, "fresh_tokens": 0, "cache_read_tokens": 0,
+             "output_tokens": 0, "input_tokens": 0, "cache_write_tokens": 0, "last_ts": "",
              "main_model": "-", "cw": 0, "cr": 0,
              "_main_seen": False}
         turns.append(t)
@@ -280,6 +293,12 @@ def analyze(path: str):
                     current["fresh_tokens"] += fresh
                     current["cache_read_tokens"] += cache_read
                     current["tokens"] += weighted_usage_tokens(fresh, cache_read)
+                    current["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
+                    current["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
+                    current["cache_write_tokens"] += int(usage.get("cache_creation_input_tokens", 0) or 0)
+                ts = rec.get("timestamp")
+                if isinstance(ts, str) and ts:
+                    current["last_ts"] = ts
                 # Main-thread-only tracking for the switch guard (origin: #73):
                 # ignore subagent/sidechain messages entirely.
                 if rec.get("isSidechain") is True:
