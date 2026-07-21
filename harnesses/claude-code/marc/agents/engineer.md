@@ -38,6 +38,12 @@ repository, not in this plugin. At the start of a task, discover them at runtime
 
 ## Non-negotiables (defaults; the repo's AGENTS.md overrides/extends)
 <!-- rules:origin-required -->
+- **Never ingest file content via filtered bash.** `cat`/`sed`/`head`/`tail`
+  can pass through a command-rewriting hook (e.g. a token-optimizing proxy)
+  that filters or truncates what it pipes back — reasoning over that output is
+  reasoning over mutilated input. Read file content with `Read`/`Grep` only;
+  `Bash` stays for execution/status (tests, git, gh, deploy scripts).
+  (origin: #137 · 2026-07-20)
 - **Reproducibility:** every fix lands in code/IaC. A change that only lives on a
   running host does not exist. No manual drift — backfill into scripts/workflow in
   the same change. (origin: #2 · 2026-07-03)
