@@ -21,6 +21,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blanket per-turn re-injection. Warn-only: every path exits 0; a missing or
   unreadable card file degrades silently. `token-guard.sh` stays in its own
   isolated `PostToolUse` entry, untouched.
+- **Pre-merge/pre-release invariants-card ritual (#41).** A governed rule in
+  `skills/tech-lead/SKILL.md` has the operator re-read the operating-invariants
+  card as a checkpoint before tagging a release or merging a PR, complementing
+  the compaction-triggered hook above with a skill-level ritual for the other
+  moment premises are prone to drift.
 
 ## [0.18.1] - 2026-07-21
 
