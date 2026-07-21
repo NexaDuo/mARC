@@ -18,6 +18,15 @@
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/outdated-check.sh\" 2>/dev/null; exit 0"
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/invariants-card.sh\" 2>/dev/null; exit 0"
+          }
+        ]
       }
     ],
     "PostToolUse": [

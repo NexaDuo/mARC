@@ -455,6 +455,45 @@ jobs:
 
           echo "outdated-version hooks: OK (shellcheck-clean; 7-day gate suppresses+fires; anti-nag holds)."
 
+      # 6c. Compaction-triggered operating-invariants card (origin #41, #145):
+      #     SessionStart hook gated (via hooks.json matcher AND an in-script
+      #     defensive re-check) to source=compact only. Proves the card IS
+      #     emitted on the compact path, is NOT emitted on a normal/other
+      #     SessionStart source, and that a missing card file degrades to a
+      #     silent exit 0 (warn-only contract, same posture as the other
+      #     hooks in this directory).
+      - name: invariants-card hook — shellcheck + compact-only emission test
+        run: |
+          set -e
+          HOOKS_DIR="harnesses/claude-code/marc/hooks"
+          CARD="harnesses/claude-code/marc/skills/tech-lead/references/invariants-card.md"
+          shellcheck "$HOOKS_DIR/invariants-card.sh"
+          bash -n "$HOOKS_DIR/invariants-card.sh"
+          [ -f "$CARD" ] || { echo "::error::invariants-card.md missing"; exit 1; }
+
+          HOOK="$HOOKS_DIR/invariants-card.sh"
+
+          # source=compact -> must emit the card content.
+          out_compact="$(printf '{"source":"compact"}' | bash "$HOOK")"
+          [ -n "$out_compact" ] || { echo "::error::expected card output on source=compact"; exit 1; }
+          echo "$out_compact" | grep -q "operating invariants" || { echo "::error::compact output missing expected card heading"; exit 1; }
+
+          # source=startup (ordinary SessionStart) -> must stay silent.
+          out_startup="$(printf '{"source":"startup"}' | bash "$HOOK")"
+          [ -z "$out_startup" ] || { echo "::error::expected silence on source=startup, got: $out_startup"; exit 1; }
+
+          # source=resume -> must stay silent too.
+          out_resume="$(printf '{"source":"resume"}' | bash "$HOOK")"
+          [ -z "$out_resume" ] || { echo "::error::expected silence on source=resume, got: $out_resume"; exit 1; }
+
+          # Missing card file -> silent exit 0, even on source=compact.
+          out_missing="$(printf '{"source":"compact"}' | MARC_INVARIANTS_CARD="/tmp/marc-invariants-does-not-exist-$$.md" bash "$HOOK")"
+          status_missing=$?
+          [ -z "$out_missing" ] || { echo "::error::expected silence when card file is missing, got: $out_missing"; exit 1; }
+          [ "$status_missing" -eq 0 ] || { echo "::error::expected exit 0 when card file is missing, got $status_missing"; exit 1; }
+
+          echo "invariants-card hook: OK (shellcheck-clean; emits on compact only; silent on missing card)."
+
       # 7. Wordmark parity gate: the block-letter "mARC" wordmark is a copy-paste
       #    duplicate across three surfaces (README banner, install.sh banner,
       #    docs/index.html hero). They MUST stay byte-identical so the brand mark

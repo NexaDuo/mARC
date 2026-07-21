@@ -222,6 +222,9 @@ each ending in a verdict; a BLOCK from either specialist blocks the merge.
   → resolve the thread; a won't-fix requires a stated justification before
   resolving. Do this at every push, not once at PR-open, since bots re-comment
   on new commits. (origin: #139 · 2026-07-20)
+- **Re-read the operating-invariants card before tagging or merging.** Treat
+  `skills/tech-lead/references/invariants-card.md` as a checkpoint at that
+  moment, not just a post-compaction reminder. (origin: #41 · 2026-07-21)
 <!-- /rules:origin-required -->
 
 **Terminal-state playbook: branch protection `REVIEW_REQUIRED`, no eligible
