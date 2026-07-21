@@ -464,16 +464,25 @@
         </div>
 
         <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 2) · install the mARC plugin</span>
+          <span class="meta"><span class="you">you</span> (step 2) · clone the repo (agy installs from a local directory)</span>
           <div class="cmd">
             <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-plugin">agy plugin install NexaDuo/mARC:harnesses/antigravity/marc</code>
+            <code id="cmd-agy-clone">git clone https://github.com/NexaDuo/mARC.git</code>
+            <button class="copy" type="button" id="copy-btn-agy-clone" data-copy="cmd-agy-clone" aria-label="Copy: clone mARC repository">copy</button>
+          </div>
+        </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 3) · install the mARC plugin from the harness directory</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">$</span>
+            <code id="cmd-agy-plugin">agy plugin install ./mARC/harnesses/antigravity/marc</code>
             <button class="copy" type="button" id="copy-btn-agy-plugin" data-copy="cmd-agy-plugin" aria-label="Copy: install mARC plugin on Antigravity">copy</button>
           </div>
         </div>
 
         <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 3) · invoke the tech-lead skill</span>
+          <span class="meta"><span class="you">you</span> (step 4) · invoke the tech-lead skill</span>
           <div class="cmd">
             <span class="prompt" aria-hidden="true">$</span>
             <code id="cmd-agy-invoke">agy /marc:tech-lead</code>

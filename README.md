@@ -45,11 +45,12 @@ Run these commands in your terminal to install the Google Antigravity CLI, insta
 
 ```bash
 bash <(curl -fsSL https://antigravity.google/cli/install.sh)
-agy plugin install NexaDuo/mARC:harnesses/antigravity/marc
+git clone https://github.com/NexaDuo/mARC.git
+agy plugin install ./mARC/harnesses/antigravity/marc
 agy /marc:tech-lead
 ```
 
-Note that the binary is installed to `~/.local/bin/agy`, so the path should be in `$PATH`.
+Note that the binary is installed to `~/.local/bin/agy`, so the path should be in `$PATH`. `agy plugin install` takes a **local directory**, so the repository is cloned first and the plugin is installed from its harness subdirectory.
 
 ### GitHub Copilot CLI
 
@@ -122,10 +123,11 @@ Or run these commands inside Claude Code:
 /reload-plugins
 ```
 
-For Google Antigravity, you can update by re-running the installation command:
+For Google Antigravity, pull the latest sources and re-run the install from the local directory:
 
 ```bash
-agy plugin install NexaDuo/mARC:harnesses/antigravity/marc
+git -C mARC pull
+agy plugin install ./mARC/harnesses/antigravity/marc
 ```
 
 **Update notifications:** mARC ships a `SessionStart` hook that checks whether your installed version is behind the version on `main` once per session. If a new major or minor version is available, it prints a one-line update reminder. This check is silent and does not block the session if you are offline or if the check times out.
