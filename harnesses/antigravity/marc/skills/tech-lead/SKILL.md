@@ -75,6 +75,18 @@ zero chat context, could they execute it correctly?* A task is ready only with:
 - **Regression test** — mandatory for bug fixes unless pure infra/CLI/internal
   logic; justify any skip.
 
+<!-- rules:origin-required -->
+- **Cross-service contract tests must traverse the real producer path.** For
+  any field one service writes and another reads, the mandatory regression
+  test must go through the **actual** serializer/payload builder that produces
+  it in production, never a hand-assembled fixture that hard-codes the
+  discriminator. A hand-built payload can stay green while the real client
+  stops emitting the field it asserts on — "reviewed ≠ executed" catches the
+  review gap, this closes the matching test gap. State this explicitly in the
+  issue's acceptance criteria when the task touches a cross-service contract.
+  (origin: #134 · 2026-07-20)
+<!-- /rules:origin-required -->
+
 If any item is underspecified, ask the user now (AskUserQuestion for genuine
 decisions). Never delegate a vague task — it produces a vague PR.
 
@@ -145,6 +157,13 @@ cheapest lever on token budget:
 - **Reference, don't embed — pass paths, not blobs.** Never paste file/image
   contents or base64; the specialist reads what it needs on its own tier.
   (origin: #69 · 2026-07-10)
+- **Never dispatch a specialist to ingest file content via filtered bash.** A
+  command-rewriting hook (e.g. a token-optimizing proxy) can intercept
+  `cat`/`sed`/`head`/`tail` and filter or truncate the piped content, so a
+  `@sec`/`@rev`/`@dev` reasoning over that output is reasoning over mutilated
+  input — a real correctness risk for a diff or security review. Every dispatch
+  prompt must say: read file **content** with `Read`/`Grep` only; `Bash` is for
+  execution/status (tests, git, gh), never content ingestion. (origin: #137 · 2026-07-20)
 <!-- /rules:origin-required -->
 
 **Automatic Token Guard:** You are protected by a background token sentinel. Do not manually check your token usage. If the background guard detects a runaway loop, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to start a fresh session. (origin: #119 · 2026-07-16)
@@ -199,6 +218,41 @@ The pre-merge gate is now **`@sec` AND `@rev`** — hold the merge until both
 grep-verifiable markers (`## @sec review` and `## @rev review`) are on the PR,
 each ending in a verdict; a BLOCK from either specialist blocks the merge.
 (origin: #125 · 2026-07-16)
+
+<!-- rules:origin-required -->
+- **The pre-merge gate is `@sec` AND `@rev` AND bots-adjudicated-at-HEAD.**
+  Inline bot reviews (Cursor/Greptile-class) live in `pulls/{n}/comments`, not
+  in `gh pr checks`, are not `@sec`/`@rev`, re-run on every push, and never
+  notify the operator loop — "CI green" is not permission to advance while a
+  bot finding sits unaddressed. Anchor adjudication to the current HEAD SHA to
+  cut stale-comment noise:
+  `gh api repos/<org>/<repo>/pulls/<N>/comments --paginate --jq '.[] | select(.commit_id=="<HEAD_SHA>")'`.
+  Per thread: verify it's actually addressed → reply citing the fixing commit
+  → resolve the thread; a won't-fix requires a stated justification before
+  resolving. Do this at every push, not once at PR-open, since bots re-comment
+  on new commits. (origin: #139 · 2026-07-20)
+<!-- /rules:origin-required -->
+
+**Terminal-state playbook: branch protection `REVIEW_REQUIRED`, no eligible
+non-author approver.** A repo can require a review from someone other than the
+PR author; if the only available reviewers are bots/the author, `gh pr merge`
+sits at `REVIEW_REQUIRED` indefinitely and no further push changes that.
+<!-- rules:origin-required -->
+- **Detect this early, not at merge time.** Check `reviewDecision` /
+  `mergeStateStatus` right after opening the PR (or right after dispatching
+  `@sec`/`@rev`), not only when the merge attempt itself fails — a late
+  discovery burns a review cycle for nothing. (origin: #133 · 2026-07-20)
+- **Escalate with a named ask, never a vague "blocked."** Request a specific
+  human reviewer (`gh pr edit <N> --add-reviewer <user>`) or state the exact
+  action needed ("a human with write access must approve or merge this PR");
+  set the board item to **Blocked** with that ask as the status reason, don't
+  leave it "In Progress" pretending work continues. (origin: #133 · 2026-07-20)
+- **`--admin` override policy.** `gh pr merge --admin` bypasses the review
+  requirement and is reserved for an explicit, in-the-moment human
+  authorization for this specific PR — never a standing default, never
+  inferred from a prior unrelated approval. Record who authorized it and why
+  in the merge/PR trail. (origin: #133 · 2026-07-20)
+<!-- /rules:origin-required -->
 
 **Task-boundary context-hygiene advisory.** When a discussed work item is closed out (tracked, dispatched, or reported done), and the session has actually grown since it started, say so plainly: recommend the user start a fresh session before picking up the next item. Skip this for a trivial exchange (a quick question, a one-line status check) where the context never grew — the advisory is only worth voicing when there is real context to shed. Note that Google Antigravity does not support `/compact`; the only way to clear context is to start a new session. (origin: #81 · 2026-07-14)
 

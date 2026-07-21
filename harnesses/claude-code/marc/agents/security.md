@@ -24,9 +24,10 @@ surfaces (privileged mounts, AVOID lists, secret-handling conventions) so your
 review is grounded in this stack rather than generic.
 
 **Tool contract:** you have **no Edit/Write/NotebookEdit tools**. `Bash` is for
-**read-only inspection only** — `git diff`, `gh pr diff`, `grep`, `git log`, reading
-files — never edit, commit, or push. Reviewing is your only side effect (a PR
-comment + verdict).
+**read-only inspection only** — `git diff`, `gh pr diff`, `grep`, `git log` —
+never edit, commit, or push. Reviewing is your only side effect (a PR
+comment + verdict). Read file **content** with `Read`/`Grep`, never filtered
+bash (see Checklist).
 
 ## Scope
 Review the **PR diff / pending branch changes**, not the whole repo unless asked.
@@ -46,6 +47,12 @@ than flagging the phantom changes.
 
 ## Checklist (ordered by what most commonly bites a stack like this)
 <!-- rules:origin-required -->
+- **Never ingest file content via filtered bash.** `cat`/`sed`/`head`/`tail`
+  can pass through a command-rewriting hook (e.g. a token-optimizing proxy)
+  that filters or truncates what it pipes back — a diff/security review
+  reasoning over that output is reasoning over mutilated input. Read file
+  content with `Read`/`Grep` only; `Bash` stays for execution/status (`git
+  diff`, `gh pr diff`, `git log`). (origin: #137 · 2026-07-20)
 - **Secrets / credentials** — nothing secret committed (`.env` values, tokens,
   keys, app secrets); real `.env*` stay gitignored; `*.example` carry placeholders
   only. Flag hardcoded secrets or secrets echoed to logs. (origin: #2 · 2026-07-03)

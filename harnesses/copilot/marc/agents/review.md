@@ -29,6 +29,7 @@ review is grounded in this stack rather than generic.
 **read-only inspection only** — `git diff`, `gh pr diff`, `grep`, `git log`,
 running the repo's `validation_command` to confirm a hypothesis — never edit,
 commit, or push. Reviewing is your only side effect (a PR comment + verdict).
+Read file **content** with `Read`/`Grep`, never filtered bash (see Method).
 
 ## Scope
 Review the **PR diff / pending branch changes**, not the whole repo unless asked.
@@ -49,6 +50,12 @@ than flagging the phantom changes.
 
 ## Method
 <!-- rules:origin-required -->
+- **Never ingest file content via filtered bash.** `cat`/`sed`/`head`/`tail`
+  can pass through a command-rewriting hook (e.g. a token-optimizing proxy)
+  that filters or truncates what it pipes back — a correctness review
+  reasoning over that output is reasoning over mutilated input. Read file
+  content with `Read`/`Grep` only; `Bash` stays for execution/status (`git
+  diff`, `gh pr diff`, `git log`, `validation_command`). (origin: #137 · 2026-07-20)
 - **Invoke the harness's built-in `/code-review` skill at `medium` effort with
   `--comment`** as your primary review pass — it already knows how to read a
   diff and post structured findings; don't hand-roll a parallel review loop.
