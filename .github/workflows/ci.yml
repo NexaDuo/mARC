@@ -391,6 +391,70 @@ jobs:
           shellcheck install.sh
           bash -n install.sh
 
+      # 6b. Outdated-version hooks: shellcheck-clean + >=7-day PostToolUse
+      #     re-check gate (origin #52). outdated-check.sh (SessionStart) and
+      #     outdated-recheck.sh (PostToolUse) share hooks/lib/version-check.sh
+      #     so the semver-compare logic lives in exactly one place. Proves,
+      #     with a stubbed curl (no real network), that the re-check hook
+      #     SUPPRESSES within the 7-day window and FIRES once the persisted
+      #     timestamp is >=7 days old, and that it never nudges on a
+      #     patch-only bump (anti-nag).
+      - name: outdated-version hooks — shellcheck + >=7-day gate test
+        run: |
+          set -e
+          HOOKS_DIR="harnesses/claude-code/marc/hooks"
+          shellcheck "$HOOKS_DIR/outdated-check.sh" "$HOOKS_DIR/outdated-recheck.sh" "$HOOKS_DIR/lib/version-check.sh"
+          bash -n "$HOOKS_DIR/outdated-check.sh"
+          bash -n "$HOOKS_DIR/outdated-recheck.sh"
+          bash -n "$HOOKS_DIR/lib/version-check.sh"
+
+          WORK="$(mktemp -d)"
+          mkdir -p "$WORK/plugin/.claude-plugin" "$WORK/state" "$WORK/fakebin"
+          echo '{"name":"marc","version":"1.0.0"}' > "$WORK/plugin/.claude-plugin/plugin.json"
+
+          printf '%s\n' '#!/usr/bin/env bash' 'echo "call" >> "$MARC_TEST_CURL_LOG"' 'echo '"'"'{"version":"1.1.0"}'"'"'' > "$WORK/fakebin/curl"
+          chmod +x "$WORK/fakebin/curl"
+
+          export CLAUDE_PLUGIN_ROOT="$WORK/plugin"
+          export MARC_STATE_DIR="$WORK/state"
+          export MARC_TEST_CURL_LOG="$WORK/curl.log"
+          export PATH="$WORK/fakebin:$PATH"
+          : > "$MARC_TEST_CURL_LOG"
+
+          RECHECK="$HOOKS_DIR/outdated-recheck.sh"
+
+          # No stamp yet -> gate is due -> must fire (nudge + 1 network call).
+          out1="$(bash "$RECHECK")"
+          calls1="$(wc -l < "$MARC_TEST_CURL_LOG")"
+          echo "$out1" | grep -q "update available: 1.0.0 -> 1.1.0" || { echo "::error::expected nudge on first (no-stamp) run"; exit 1; }
+          [ "$calls1" -eq 1 ] || { echo "::error::expected exactly 1 network call on first run, got $calls1"; exit 1; }
+
+          # Fresh stamp (just written) -> within 7 days -> must SUPPRESS, zero extra network calls.
+          out2="$(bash "$RECHECK")"
+          calls2="$(wc -l < "$MARC_TEST_CURL_LOG")"
+          [ -z "$out2" ] || { echo "::error::expected silent suppress within 7-day window, got: $out2"; exit 1; }
+          [ "$calls2" -eq 1 ] || { echo "::error::expected no additional network call within 7-day window, call count now $calls2"; exit 1; }
+
+          # Inject a timestamp >=7 days old -> gate must be due again -> FIRES.
+          eight_days_ago=$(( $(date +%s) - 8*24*3600 ))
+          echo "$eight_days_ago" > "$MARC_STATE_DIR/outdated-check-last-run"
+          out3="$(bash "$RECHECK")"
+          calls3="$(wc -l < "$MARC_TEST_CURL_LOG")"
+          echo "$out3" | grep -q "update available: 1.0.0 -> 1.1.0" || { echo "::error::expected nudge after >=7-day-old stamp"; exit 1; }
+          [ "$calls3" -eq 2 ] || { echo "::error::expected a second network call after the gate re-elapsed, got $calls3"; exit 1; }
+          new_stamp="$(cat "$MARC_STATE_DIR/outdated-check-last-run")"
+          now="$(date +%s)"
+          [ $(( now - new_stamp )) -lt 60 ] || { echo "::error::expected the stamp to be refreshed to ~now after firing"; exit 1; }
+
+          # Patch-only drift (anti-nag): same major.minor, different patch -> must stay silent.
+          printf '%s\n' '#!/usr/bin/env bash' 'echo '"'"'{"version":"1.0.9"}'"'"'' > "$WORK/fakebin/curl"
+          chmod +x "$WORK/fakebin/curl"
+          rm -f "$MARC_STATE_DIR/outdated-check-last-run"
+          out4="$(bash "$RECHECK")"
+          [ -z "$out4" ] || { echo "::error::patch-only drift must not nudge (anti-nag), got: $out4"; exit 1; }
+
+          echo "outdated-version hooks: OK (shellcheck-clean; 7-day gate suppresses+fires; anti-nag holds)."
+
       # 7. Wordmark parity gate: the block-letter "mARC" wordmark is a copy-paste
       #    duplicate across three surfaces (README banner, install.sh banner,
       #    docs/index.html hero). They MUST stay byte-identical so the brand mark
