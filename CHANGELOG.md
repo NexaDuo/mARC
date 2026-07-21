@@ -4,6 +4,19 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1] - 2026-07-21
+
+### Added
+- **Opportunistic >=7-day version re-check on PostToolUse (#52).** The outdated-plugin
+  nudge previously only fired at `SessionStart`, so a chat alive for a week or more never
+  re-checked. A new `hooks/outdated-recheck.sh` PostToolUse hook gates the check behind a
+  persisted last-run timestamp (`~/.claude/marc-state/outdated-check-last-run`, read
+  BEFORE any network call) and only fetches once >=7 days have elapsed — zero added
+  latency or network traffic on every other tool call. `hooks/outdated-check.sh` and the
+  new hook now share one implementation via `hooks/lib/version-check.sh` (semver compare
+  + fetch logic lives in exactly one place). Same warn-only, fail-silent, major/minor-only
+  anti-nag contract as before.
+
 ## [0.18.0] - 2026-07-20
 
 ### Added
