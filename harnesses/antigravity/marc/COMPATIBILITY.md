@@ -68,6 +68,26 @@ CFG="${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml"
 
 ---
 
+## Plugin Distribution / Install
+
+**No clone-free / marketplace install exists for third-party plugins (as of
+`agy` v1.1.4, 2026-07-21).** `agy plugin install <plugin>@<marketplace>` is a
+documented CLI form, but it resolves against a marketplace registry gated to
+Google-internal environments (`GetSkillMarketplaceLink is only available in
+Google environments`, per binary strings) — any non-built-in marketplace name
+(e.g. `marc@nexaduo`) fails with `unknown marketplace: <name>`. `agy plugin
+install` only accepts a **local directory path** in practice, and `agy` does
+not read mARC's `.claude-plugin/marketplace.json` (that manifest serves
+Claude Code and Copilot only). Consequently, installing mARC's Antigravity
+harness requires cloning the repo first, then running `agy plugin install
+./mARC/harnesses/antigravity/marc` — there is no shorter one-liner today. See
+the full research brief:
+[`docs/marc/2026-07-21-brief-agy-marketplace-clone-free-install.md`](../../../docs/marc/2026-07-21-brief-agy-marketplace-clone-free-install.md)
+([issue #151](https://github.com/NexaDuo/mARC/issues/151)). Re-check this if
+Google documents/opens a public marketplace-registration command.
+
+---
+
 ## Roadmap to Harness Parity
 
 - [x] Create Antigravity manifest `plugin.json` ([harnesses/antigravity/marc/plugin.json](plugin.json))
