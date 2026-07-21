@@ -45,6 +45,7 @@ from board import (  # noqa: E402
     SCHEMA_VERSION,
     build_digest,
     toml_get,
+    unbound_board_notice,
 )
 
 _failures: list[str] = []
@@ -419,14 +420,24 @@ def test_set_status_missing_project_scope_fails_loudly():
     check(raised, "set_status raises BoardError when gh project view fails")
 
 
-def _create_run(issue_create=None, item_add=None, project_view=None, field_list=None, item_list=None):
+def _create_run(issue_create=None, item_add=None, project_view=None, field_list=None,
+                 item_list=None, issue_list=None):
     """Builds a `run` callable covering the full `create_issue` call chain:
-    `gh issue create` -> `gh project item-add` -> (reused) `set_status`'s
-    `gh project {view,field-list,item-list,item-edit}`."""
+    (new, #135) `gh issue list --state open` dedup scan -> `gh issue create`
+    -> `gh project item-add` -> (reused) `set_status`'s `gh project
+    {view,field-list,item-list,item-edit}`. `issue_list` defaults to an empty
+    open-issues list (no duplicates found) so existing fixtures don't need to
+    know about the dedup scan unless they're testing it."""
     calls: list[list] = []
+    if issue_list is None:
+        issue_list = json.dumps([])
 
     def run(cmd: list) -> str:
         calls.append(cmd)
+        if cmd[:3] == ["gh", "issue", "list"]:
+            if isinstance(issue_list, Exception):
+                raise issue_list
+            return issue_list
         if cmd[:3] == ["gh", "issue", "create"]:
             if isinstance(issue_create, Exception):
                 raise issue_create
@@ -565,6 +576,103 @@ def test_create_issue_creation_failure_raises_loudly():
     check(raised, "create_issue raises BoardError when gh issue create itself fails")
 
 
+# --- #135: create-time dedup scan -------------------------------------------
+
+def _open_issues_fixture(*titles_and_numbers) -> str:
+    return json.dumps([
+        {"number": n, "title": t, "url": f"https://x/{n}"} for n, t in titles_and_numbers
+    ])
+
+
+def test_create_issue_finds_likely_duplicate_and_blocks_without_force():
+    """A near-identical open issue exists: create_issue must NOT create a
+    second issue, must return created=False with the candidate surfaced, and
+    must never even attempt `gh issue create`."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_list=_open_issues_fixture((50, "board create command silently loses labels")),
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.create_issue("board create silently loses labels", "", [], status=None)
+    check(result.created is False, "create_issue does not create the issue when a likely duplicate exists")
+    check(result.issue_number is None, "create_issue reports no issue_number when blocked by dedup")
+    check(len(result.duplicates) == 1 and result.duplicates[0]["number"] == 50,
+          "create_issue surfaces the matching open issue as a duplicate candidate")
+    check(any("likely duplicate" in w for w in result.warnings),
+          "create_issue warns that a likely duplicate was found")
+
+    create_calls = [c for c in run.calls if c[:3] == ["gh", "issue", "create"]]  # type: ignore[attr-defined]
+    check(len(create_calls) == 0, "create_issue never calls gh issue create when blocked by dedup")
+
+
+def test_create_issue_force_overrides_duplicate_block():
+    """`force=True` (the CLI's --force/--allow-duplicate) creates the issue
+    anyway despite a found duplicate, and notes it in warnings."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_list=_open_issues_fixture((50, "board create command silently loses labels")),
+        issue_create="https://github.com/YourOrg/your-repo/issues/300\n",
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.create_issue("board create silently loses labels", "", [], status=None, force=True)
+    check(result.created is True, "create_issue creates the issue when force=True despite a duplicate")
+    check(result.issue_number == 300, "create_issue still parses the issue number when forced through")
+    check(len(result.duplicates) == 1, "create_issue still reports the duplicate candidate when forced through")
+    check(any("created despite" in w for w in result.warnings),
+          "create_issue notes in warnings that it was created despite a likely duplicate")
+
+
+def test_create_issue_no_duplicates_creates_normally():
+    """An unrelated open issue title is not flagged, and create_issue
+    proceeds exactly as before (no dedup warnings)."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_list=_open_issues_fixture((51, "unrelated release automation task")),
+        issue_create="https://github.com/YourOrg/your-repo/issues/301\n",
+        item_add=json.dumps({"id": "PVTI_new2"}),
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.create_issue("board create silently loses labels", "", [], status=None)
+    check(result.created is True, "create_issue creates normally when no duplicate is found")
+    check(result.duplicates == [], "create_issue reports no duplicates when none match")
+    check(result.warnings == [], "create_issue carries no warnings when the dedup scan finds nothing")
+
+
+def test_create_issue_dedup_scan_degrades_gracefully_on_gh_failure():
+    """`gh issue list` failing (no scope/auth) never blocks issue creation —
+    it degrades to a warning, same discipline as the rest of create_issue."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_list=RuntimeError("HTTP 403: Resource not accessible"),
+        issue_create="https://github.com/YourOrg/your-repo/issues/302\n",
+        item_add=json.dumps({"id": "PVTI_new3"}),
+    )
+    provider = GitHubProvider(cfg, run=run)
+
+    result = provider.create_issue("some new issue", "", [], status=None)
+    check(result.created is True, "create_issue still creates the issue when the dedup scan itself fails")
+    check(any("dedup scan skipped" in w for w in result.warnings),
+          "create_issue warns that the dedup scan was skipped, never crashes")
+
+
+# --- #136: proactive unbound-board notice -----------------------------------
+
+def test_unbound_board_notice_when_project_number_missing():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=None, provider="github")
+    notice = unbound_board_notice(cfg)
+    check(notice is not None, "unbound_board_notice fires when project_number is unset (e.g. TODO placeholder)")
+    check("gh auth refresh -s project" in notice, "unbound_board_notice tells the operator how to bind the board")
+    check("project_number" in notice, "unbound_board_notice names the team.toml key to set")
+
+
+def test_unbound_board_notice_silent_when_board_configured():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    check(unbound_board_notice(cfg) is None, "unbound_board_notice is silent once the board is bound")
+
+
 def main() -> int:
     test_board_configured_happy_path()
     test_zero_config_fallback()
@@ -579,6 +687,12 @@ def main() -> int:
     test_create_issue_item_add_failure_keeps_the_issue()
     test_create_issue_status_failure_keeps_the_board_add()
     test_create_issue_creation_failure_raises_loudly()
+    test_create_issue_finds_likely_duplicate_and_blocks_without_force()
+    test_create_issue_force_overrides_duplicate_block()
+    test_create_issue_no_duplicates_creates_normally()
+    test_create_issue_dedup_scan_degrades_gracefully_on_gh_failure()
+    test_unbound_board_notice_when_project_number_missing()
+    test_unbound_board_notice_silent_when_board_configured()
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
