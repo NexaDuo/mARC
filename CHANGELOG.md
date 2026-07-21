@@ -4,6 +4,24 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-07-21
+
+### Added
+- **Compaction-triggered operating-invariants card re-injection (#41, #145).** A
+  new `hooks/invariants-card.sh` fires on `SessionStart` matched to
+  `source=compact` only (verified against the official Claude Code hooks docs:
+  `PostCompact` has no `additionalContext`/decision-control support and cannot
+  inject text, so `SessionStart(source=compact)` is the documented, reliable
+  carrier) and prints a concise, versioned card
+  (`skills/tech-lead/references/invariants-card.md`) restating the premises
+  most prone to post-compaction drift: the dual `@sec`+`@rev` merge gate,
+  board-reflects-reality, branch-from-fresh-`origin/main`, verify-before-act,
+  filtered-bash-content ban, and release-phases-to-done. Narrow and
+  event-triggered per the #41 decision — not a turn-count heartbeat, not
+  blanket per-turn re-injection. Warn-only: every path exits 0; a missing or
+  unreadable card file degrades silently. `token-guard.sh` stays in its own
+  isolated `PostToolUse` entry, untouched.
+
 ## [0.18.1] - 2026-07-21
 
 ### Added
