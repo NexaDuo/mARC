@@ -1,6 +1,6 @@
 {
   "name": "marc",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "mARC (Multi-Agent Relay Control) — an IRC/vaporwave-styled Copilot plugin with @techlead + specialist bench.",
   "author": {
     "name": "NexaDuo"
