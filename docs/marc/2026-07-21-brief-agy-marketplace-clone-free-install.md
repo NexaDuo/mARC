@@ -76,7 +76,7 @@ install docs for Antigravity as-is; no manifest change.
 6. **mARC's existing `.claude-plugin/marketplace.json` uses the Claude Code
    marketplace schema** (`name`, `metadata`, `owner`, `plugins[].source` as a
    relative path) — measured (Read of
-   `/home/ubuntu-24/repos/NexaDuo/mARC/.claude-plugin/marketplace.json`). `agy`
+   `.claude-plugin/marketplace.json`). `agy`
    gave `unknown marketplace: nexaduo` even when invoked from the repo root
    where this file sits directly on disk, i.e. `agy` made no attempt to read
    it. It is a different, incompatible shape from anything `agy` is shown to
