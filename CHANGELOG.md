@@ -4,6 +4,27 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-07-20
+
+### Added
+- **Board create-time dedup guardrail (#135).** `core/scripts/board.py create` now runs a
+  lightweight title-keyword (Jaccard) scan against open issues before opening a new one;
+  a match at or above threshold blocks creation and surfaces the likely duplicates unless
+  `--force`/`--allow-duplicate` is passed. Non-blocking by design — forces an explicit
+  "create anyway" decision.
+- **Proactive unbound-board notice (#136).** `board.py` prints a stderr notice from
+  `create`/`set-status`/`reconcile` when the project number is unset/TODO, so an
+  unconfigured board is surfaced instead of silently no-op'ing.
+
+### Changed
+- **Four governance rules added to the tech-lead skill / agent definitions (#133, #134,
+  #137, #139).** (#133) a terminal-state playbook for `REVIEW_REQUIRED` with no eligible
+  non-author approver; (#134) cross-service contract regression tests must traverse the
+  real serializer/payload builder, never a hand-built fixture; (#137) filtered-bash
+  output must never be ingested as content — use Read/Grep only (added to `@dev`, `@sec`,
+  `@rev`); (#139) mechanical HEAD-anchored adjudication of bot-review comments via
+  `gh api pulls/<N>/comments --paginate`.
+
 ## [0.17.1] - 2026-07-20
 
 ### Changed
