@@ -85,6 +85,21 @@ validation_command = "npm run test:all"
 # The health-check / smoke entrypoint `@sre` runs on a cadence, if any.
 health_check_command = "./scripts/health-check.sh"
 
+# --- Token-cost telemetry (optional, opt-in, origin: #149) ---
+[telemetry]
+# Opt-in, DEFAULT OFF: per-turn token-cost recorder for the Claude Code
+# harness only (Stop hook). Absent, `false`, or any non-"true" value means
+# nothing is recorded — no behavior change from today. Only numeric usage
+# metadata (token counts, timestamps, model name, session id, turn index, a
+# repo/cwd BASENAME) is ever written to
+# `~/.claude/marc-state/token-telemetry.jsonl` (honors `MARC_STATE_DIR`) —
+# prompt/response TEXT is never stored. See `scripts/token_telemetry.py` for
+# the full schema and privacy boundary. Set to `true` to start recording;
+# `scripts/token_telemetry_backfill.py` can mine existing (~30-day retention
+# ceiling) session history once enabled, and `scripts/token_telemetry_report.py`
+# prints a summary — both are manual/opt-in, never auto-run.
+enabled = false
+
 # --- Release-phase facts (what "done" requires in THIS repo) ---
 [release]
 # Does a real staging->prod pipeline exist? (true/false)

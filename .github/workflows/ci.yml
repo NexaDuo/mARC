@@ -624,6 +624,30 @@ jobs:
       - name: token-guard hook self-test
         run: python3 core/scripts/test_token_sentinel.py
 
+      # 8b-tel. Opt-in token-telemetry recorder (issue #149): shellcheck +
+      #     bash -n on the new Stop hook, then a stdlib-only Python self-test
+      #     that exercises the REAL hook script end-to-end via synthetic
+      #     team.toml/transcript fixtures (no real paths/names/session ids):
+      #     OFF by default (no team.toml, or `enabled = false`) writes NO
+      #     file; `enabled = true` writes exactly one well-formed JSONL line
+      #     per Stop firing with the whitelisted numeric-only schema (no
+      #     message-body field ever leaks); a missing transcript still exits
+      #     0 with no write. Deterministic, offline, zero token cost.
+      - name: token-telemetry hook — shellcheck + on/off self-test
+        run: |
+          shellcheck harnesses/claude-code/marc/hooks/token-telemetry.sh
+          bash -n harnesses/claude-code/marc/hooks/token-telemetry.sh
+          python3 core/scripts/test_token_telemetry.py
+
+      # 8b-tel2. Backfill idempotency (issue #149 AC#5): a stdlib-only test
+      #     synthesizes a fake `~/.claude/projects/**/*.jsonl` tree and
+      #     asserts the one-shot backfill writes one record per turn on a
+      #     first run, is IDEMPOTENT on a re-run against the same
+      #     transcripts (keyed on session_id+turn_index), still picks up
+      #     genuinely new turns/sessions, and `--dry-run` writes nothing.
+      - name: token-telemetry-backfill idempotency self-test
+        run: python3 core/scripts/test_token_telemetry_backfill.py
+
       # 8c. board_reconcile.py digest contract self-test (issue #103, extended
       #     #105 set-status, #113 create). Internal operator CLI, no E2E flow
       #     to assert on — instead this feeds `GitHubProvider` canned fixture
