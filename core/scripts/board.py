@@ -29,6 +29,14 @@ sequences. Three subcommands:
                     above. Degrades gracefully: a missing `project` scope or
                     unconfigured board never loses the created issue, it only
                     surfaces a `warnings` entry with `board_added=False`.
+                    Before opening the issue, `create` runs a lightweight
+                    dedup scan (origin: #135): the new title's keywords are
+                    matched against currently OPEN issues, and if likely
+                    duplicates are found the issue is NOT created — the
+                    candidates are surfaced and `--force`/`--allow-duplicate`
+                    is required to proceed anyway. Non-blocking by design (a
+                    failed/unauthorized scan never blocks creation, it just
+                    warns), but a found duplicate forces an explicit decision.
 
 Usage:
     python3 board.py reconcile [--json] [--team-toml PATH]
@@ -40,6 +48,7 @@ Usage:
     python3 board.py create --title TITLE
                                 [--body TEXT | --body-file PATH]
                                 [--labels a,b,c] [--status NAME]
+                                [--force | --allow-duplicate]
                                 [--team-toml PATH] [--repo-root PATH]
                                 [--json]
 
@@ -62,6 +71,17 @@ Usage:
     --status NAME     (set-status only) target status name, validated against
                       the project's actual Status field options (e.g. Todo,
                       "In Progress", Blocked, Done — exact match required).
+    --force, --allow-duplicate
+                      (create only) create the issue even if the dedup scan
+                      finds likely duplicate OPEN issues.
+
+Unbound board notice (origin: #136): every board-touching subcommand
+(`reconcile`, `set-status`, `create`) prints a one-line proactive notice to
+stderr the moment `team.toml`'s `project_number` is missing/unresolved (e.g.
+left as the `TODO` placeholder) — status tracking is disabled and it says how
+to bind it (`gh auth refresh -s project` + set `project_number`). This keeps
+degradation honest instead of silently running Issues-only for a whole
+session.
 
 `reconcile` degrades gracefully: a missing `project` scope, a missing/
 ambiguous board, no `gh` auth, or no releases/tags never crashes the script —
@@ -120,6 +140,35 @@ def toml_get(text: str, key: str) -> Optional[str]:
     return val or None
 
 
+# --- create-time dedup scan (origin: #135) ----------------------------------
+# Zero-dependency keyword-overlap heuristic: no embeddings/NLP, just enough to
+# flag an obviously-repeated title before a duplicate issue gets filed. It is
+# deliberately conservative (Jaccard overlap on a stopword-stripped keyword
+# set) — false negatives (missed duplicates) are fine, this is a nudge, not a
+# guarantee; false positives just cost one extra `--force`.
+_DEDUP_STOPWORDS = {
+    "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "with",
+    "is", "are", "be", "this", "that", "as", "at", "by", "from", "it",
+    "fix", "add", "feat", "feature", "bug", "issue", "issues", "support",
+    "when", "into", "not", "should",
+}
+
+
+def _dedup_keywords(title: str) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", title.lower())
+    return {w for w in words if len(w) > 2 and w not in _DEDUP_STOPWORDS}
+
+
+def _title_similarity(a: str, b: str) -> float:
+    ka, kb = _dedup_keywords(a), _dedup_keywords(b)
+    if not ka or not kb:
+        return 0.0
+    union = ka | kb
+    if not union:
+        return 0.0
+    return len(ka & kb) / len(union)
+
+
 @dataclass
 class RepoConfig:
     gh_org: Optional[str] = None
@@ -144,6 +193,23 @@ class RepoConfig:
             provider=toml_get(text, "provider") or "github",
             plugin_manifest_path=toml_get(text, "agents_doc"),
         )
+
+
+def unbound_board_notice(config: "RepoConfig") -> Optional[str]:
+    """One-line proactive notice (origin: #136). `team.toml`'s
+    `project_number` left as the `TODO` placeholder (or any other
+    non-numeric/missing value) resolves to `None` in `RepoConfig` — same as
+    no board configured at all. Every board-touching subcommand calls this
+    at the top so the operator sees, at the FIRST board-touching action, that
+    status tracking is disabled for the whole session and how to bind it —
+    instead of the convention silently no-op'ing until someone notices."""
+    if config.project_number and config.gh_org:
+        return None
+    return (
+        "notice: board is unbound (project_number not set in team.toml) — "
+        "status tracking is disabled this session; run `gh auth refresh -s "
+        "project` and set project_number in team.toml to enable it"
+    )
 
 
 # --- normalized, provider-agnostic digest shapes ----------------------------
@@ -189,11 +255,13 @@ class StatusResult:
 
 @dataclass
 class CreateResult:
-    issue_number: int
-    issue_url: str
+    issue_number: Optional[int]
+    issue_url: Optional[str]
     board_added: bool
     board_item_id: Optional[str]
     status: Optional[str]
+    created: bool = True
+    duplicates: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -261,13 +329,20 @@ class BoardProvider(ABC):
 
     @abstractmethod
     def create_issue(self, title: str, body: str, labels: list[str],
-                      status: Optional[str]) -> CreateResult:
+                      status: Optional[str], force: bool = False) -> CreateResult:
         """Create an issue, best-effort add it to the configured board, and
         best-effort set its initial `status` (reusing `set_status`). MUST
         raise `BoardError` only if issue CREATION itself fails — a missing
         `project` scope, an unconfigured board, or a `set_status` failure
         must degrade to a `warnings` entry with `board_added=False`, never
-        lose the created issue."""
+        lose the created issue.
+
+        Before creating, runs a best-effort dedup scan (origin: #135)
+        matching `title`'s keywords against currently OPEN issues. If likely
+        duplicates are found and `force` is False, the issue is NOT created:
+        `created=False` and `duplicates` carries the candidates — the caller
+        must pass `force=True` to create anyway. A failed/unauthorized scan
+        never blocks creation, it only adds a `warnings` entry."""
 
 
 Runner = Callable[[list], str]
@@ -555,8 +630,56 @@ class GitHubProvider(BoardProvider):
             option_id=option["id"],
         )
 
+    def find_similar_open_issues(self, title: str, limit: int = 100,
+                                  threshold: float = 0.4) -> tuple[list[dict], list[str]]:
+        """Best-effort dedup scan (origin: #135): match `title`'s keywords
+        against currently OPEN issues. Returns (candidates, warnings) sorted
+        by score descending — never raises, a failed/unauthorized `gh issue
+        list` degrades to ([], [warning]) so it never blocks `create_issue`
+        on its own."""
+        warnings: list[str] = []
+        try:
+            raw = self._run(
+                ["gh", "issue", "list", "--state", "open", "--limit", str(limit),
+                 "--json", "number,title,url"] + self._repo_flag()
+            )
+            open_issues = json.loads(raw)
+        except Exception as e:  # noqa: BLE001 - dedup scan is best-effort, never blocks create
+            warnings.append(f"dedup scan skipped: gh issue list failed ({e})")
+            return [], warnings
+
+        candidates = []
+        for it in open_issues:
+            score = _title_similarity(title, it.get("title", ""))
+            if score >= threshold:
+                candidates.append({
+                    "number": it["number"],
+                    "title": it.get("title", ""),
+                    "url": it.get("url", ""),
+                    "score": round(score, 2),
+                })
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        return candidates, warnings
+
     def create_issue(self, title: str, body: str, labels: list[str],
-                      status: Optional[str] = None) -> CreateResult:
+                      status: Optional[str] = None, force: bool = False) -> CreateResult:
+        duplicates, dup_warnings = self.find_similar_open_issues(title)
+        if duplicates and not force:
+            summary = "; ".join(f"#{d['number']} {d['title']!r} (score {d['score']})" for d in duplicates[:5])
+            return CreateResult(
+                issue_number=None,
+                issue_url=None,
+                board_added=False,
+                board_item_id=None,
+                status=None,
+                created=False,
+                duplicates=duplicates,
+                warnings=dup_warnings + [
+                    f"found {len(duplicates)} likely duplicate open issue(s) — not created: "
+                    f"{summary} — pass --force/--allow-duplicate to create anyway"
+                ],
+            )
+
         cmd = ["gh", "issue", "create", "--title", title, "--body", body] + self._repo_flag()
         for label in labels:
             cmd += ["--label", label]
@@ -609,13 +732,22 @@ class GitHubProvider(BoardProvider):
                         f"{status!r} failed: {e}"
                     )
 
+        if duplicates and force:
+            summary = "; ".join(f"#{d['number']}" for d in duplicates[:5])
+            warnings.append(
+                f"created despite {len(duplicates)} likely duplicate open issue(s) ({summary}) "
+                f"— --force/--allow-duplicate was passed"
+            )
+
         return CreateResult(
             issue_number=issue_number,
             issue_url=url,
             board_added=board_added,
             board_item_id=board_item_id,
             status=result_status,
-            warnings=warnings,
+            created=True,
+            duplicates=duplicates,
+            warnings=dup_warnings + warnings,
         )
 
 
@@ -715,9 +847,19 @@ def _make_provider(config: RepoConfig) -> BoardProvider:
     return provider_cls(config)
 
 
+def _print_unbound_notice(config: RepoConfig) -> None:
+    """origin #136 — surface the proactive one-liner to stderr so it never
+    pollutes --json stdout, but is still seen at every board-touching CLI
+    invocation while the board is unbound."""
+    notice = unbound_board_notice(config)
+    if notice:
+        print(notice, file=sys.stderr)
+
+
 def _cmd_reconcile(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root).resolve()
     config = _resolve_config(args)
+    _print_unbound_notice(config)
     digest = build_digest(config, repo_root, args.open_limit, args.merges_limit)
 
     if args.json:
@@ -729,6 +871,7 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
 
 def _cmd_set_status(args: argparse.Namespace) -> int:
     config = _resolve_config(args)
+    _print_unbound_notice(config)
     provider = _make_provider(config)
     try:
         result = provider.set_status(args.issue, args.status)
@@ -746,6 +889,7 @@ def _cmd_set_status(args: argparse.Namespace) -> int:
 
 def _cmd_create(args: argparse.Namespace) -> int:
     config = _resolve_config(args)
+    _print_unbound_notice(config)
     provider = _make_provider(config)
 
     if args.body_file:
@@ -757,19 +901,29 @@ def _cmd_create(args: argparse.Namespace) -> int:
     labels = [l.strip() for l in args.labels.split(",") if l.strip()] if args.labels else []
 
     try:
-        result = provider.create_issue(args.title, body, labels, args.status)
+        result = provider.create_issue(args.title, body, labels, args.status, force=args.force)
     except BoardError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
-    else:
-        print(f"created issue #{result.issue_number}: {result.issue_url}")
-        print(f"  board_added={result.board_added} board_item_id={result.board_item_id} "
-              f"status={result.status!r}")
+        return 0 if result.created else 1
+
+    if not result.created:
+        print(f"NOT created — {len(result.duplicates)} likely duplicate open issue(s) found:")
+        for d in result.duplicates:
+            print(f"  - #{d['number']} {d['title']} (score {d['score']}) {d['url']}")
         for w in result.warnings:
             print(f"  ! {w}")
+        print("pass --force/--allow-duplicate to create anyway")
+        return 1
+
+    print(f"created issue #{result.issue_number}: {result.issue_url}")
+    print(f"  board_added={result.board_added} board_item_id={result.board_item_id} "
+          f"status={result.status!r}")
+    for w in result.warnings:
+        print(f"  ! {w}")
     return 0
 
 
@@ -807,6 +961,11 @@ def main() -> int:
         "--status", default=None,
         help="initial Status to set after adding to the board (requires a configured board; "
              "skipped with a warning if the board add fails or no board is configured)",
+    )
+    create_p.add_argument(
+        "--force", "--allow-duplicate", dest="force", action="store_true",
+        help="create the issue even if the dedup scan (origin: #135) finds likely duplicate "
+             "OPEN issues; without this flag a found duplicate blocks creation",
     )
     create_p.set_defaults(func=_cmd_create)
 
