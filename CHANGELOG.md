@@ -4,6 +4,35 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-07-21
+
+### Added
+- **Loop-engineering guardrails from the `@research` brief (#153).** Three
+  narrow gap-fills, all origin-tagged governed rules in
+  `skills/tech-lead/SKILL.md`'s dispatch cost-discipline section:
+  - **No-progress / no-diff stop-check (#154).** A specialist dispatch now
+    stops and reports "stuck" when a step (or a small window of consecutive
+    steps) yields no meaningful file diff and no new test pass/fail
+    transition, rather than continuing to spend its tool-call budget hoping
+    to converge.
+  - **Guarded mini-Ralph loop (#155).** Inside ONE bounded specialist
+    dispatch, an iterate-fix-then-retest loop is now permitted for
+    mechanical, test-verifiable fixes: a deterministic pass/fail oracle, an
+    explicit iteration cap on top of the existing tool-call budget, and the
+    #154 no-progress check still apply; it never spans dispatches or
+    sessions and the diff still goes through the unchanged `@sec`+`@rev`
+    gate. Framed explicitly as a scoped exception to, not a loosening of,
+    the #69 bounded-dispatch rule.
+  - **Rejected patterns recorded (#156).** `references/invariants-card.md`
+    now documents two patterns considered and rejected from the same
+    research: the raw unbounded "Ralph Wiggum" loop (conflicts #69) and
+    autonomous scheduled/cadence discovery-and-triage automation (conflicts
+    #123), each with a one-line rationale, cross-referenced from SKILL.md.
+- **Durable research-brief artifact (#153).** The `@research` brief backing
+  #154/#155/#156/#157 is materialized at
+  `docs/marc/2026-07-21-brief-loop-engineering-guardrails.md` per the PEF
+  durable-artifact policy (#46).
+
 ## [0.20.0] - 2026-07-21
 
 ### Added

@@ -18,3 +18,22 @@ after a summary — re-anchor before your next action:
   smoke/E2E -> prod deploy -> prod smoke/E2E, with real URLs. A PR merge is
   not "done."
 - **Stage explicit paths.** `git add <path>...`, never `-A`/`.`.
+
+## Rejected external patterns (supersede-not-delete)
+
+Considered and explicitly rejected against a standing mARC rule — recorded
+here so a future session or contributor doesn't have to re-derive the
+rejection from first principles or re-propose the same pattern:
+
+- **Raw unbounded "Ralph Wiggum" loop** (`while :; do cat PROMPT.md |
+  claude-code; done` — no memory, no stop condition, runs to exhaustion).
+  Conflicts with the bounded-dispatch rule: every dispatch carries stop
+  criteria and a tool-call budget, never an open-ended `continue` (origin
+  #69). A narrow, test-gated exception exists for mechanical fixes — the
+  guarded mini-Ralph loop inside one bounded dispatch (origin #155) — that is
+  a scoped carve-out of #69, not a reopening of the raw pattern. (origin:
+  #153 · 2026-07-21)
+- **Autonomous scheduled/cadence automation** (discovery/triage that runs on
+  its own timer, unprompted). Conflicts with the opt-in-only reconcile
+  stance: reconcile fires only on three explicit triggers — never session
+  start, never a background sweep (origin #123). (origin: #153 · 2026-07-21)
