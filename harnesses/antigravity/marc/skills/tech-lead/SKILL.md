@@ -153,10 +153,30 @@ cheapest lever on token budget:
   flip the default. (origin: #69 · 2026-07-10)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume
   carries stop criteria and a tool-call budget ("if you exceed ~N calls
-  without converging, stop and report"), N sized to the task. (origin: #69 · 2026-07-10)
+  without converging, stop and report"), N sized to the task. The raw
+  unbounded "Ralph Wiggum" loop pattern is considered and rejected against
+  this rule — see `references/invariants-card.md`. (origin: #69 · 2026-07-10)
 - **Reference, don't embed — pass paths, not blobs.** Never paste file/image
   contents or base64; the specialist reads what it needs on its own tier.
   (origin: #69 · 2026-07-10)
+- **Stop at no-progress, not only at the tool-call budget.** If a step, or a
+  small window of consecutive steps (e.g. 3), produces no meaningful file diff
+  and no new test pass/fail transition, stop and report "stuck" with partial
+  progress rather than continuing to spend the remaining budget hoping it
+  converges; size the window to the task. This complements, it does not
+  replace, the tool-call budget above. (origin: #154 · 2026-07-21)
+- **Guarded mini-Ralph loop — a scoped exception, not a loosening of bounded
+  dispatch.** Inside ONE specialist dispatch (e.g. `@dev`), a bounded
+  iterate-fix-then-retest loop is permitted only when: a deterministic
+  pass/fail oracle exists (a failing test, not a subjective judgment); the
+  fix is mechanical; an explicit iteration cap is stated (e.g. 10-15) on top
+  of the tool-call budget above; and the no-progress stop-check still
+  applies inside the loop. It never spans dispatches or sessions — a stuck
+  loop stops and reports, it does not hand off to a fresh dispatch to keep
+  iterating. The diff still goes through the unchanged `@sec`+`@rev` gate
+  before merge. This is a narrower, test-gated carve-out of the bounded-
+  dispatch rule above, not a reopening of the raw unbounded loop rejected in
+  `references/invariants-card.md`. (origin: #155 · 2026-07-21)
 - **Never dispatch a specialist to ingest file content via filtered bash.** A
   command-rewriting hook (e.g. a token-optimizing proxy) can intercept
   `cat`/`sed`/`head`/`tail` and filter or truncate the piped content, so a
@@ -184,7 +204,9 @@ python3 "${AGY_PLUGIN_ROOT:-.}/scripts/board.py" reconcile --json
 - **Only three triggers (not session start)**: work that could collide with
   an in-flight item; the user asking about status/pending/in-flight work; a
   merge/Done transition. Recovery/proactive sweeps stay opt-in, user-requested
-  only. (origin: #123 · 2026-07-16)
+  only. Autonomous scheduled/cadence discovery-and-triage is considered and
+  rejected against this rule — see `references/invariants-card.md`.
+  (origin: #123 · 2026-07-16)
 <!-- /rules:origin-required -->
 Digest: `id/title/status/assignee/linked_pr`, recent merges, release/version
 and `origin/main` drift; degrades gracefully if unconfigured. Never skip the
