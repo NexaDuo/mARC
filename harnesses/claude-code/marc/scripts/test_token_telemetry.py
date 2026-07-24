@@ -222,6 +222,26 @@ def main() -> int:
             lines2 = [ln for ln in fh.read().splitlines() if ln.strip()]
         check(len(lines2) == 2, f"ON: second Stop firing APPENDS a second line, got {len(lines2)}")
 
+    # --- End-to-end: ON (.claude/team.toml fallback) ------------------------
+    with tempfile.TemporaryDirectory() as base:
+        project = os.path.join(base, "proj-fallback")
+        os.makedirs(os.path.join(project, ".claude"), exist_ok=True)
+        write_team_toml(os.path.join(project, ".claude", "team.toml"),
+                         "\n[telemetry]\nenabled = true\n")
+        state = os.path.join(base, "state-fallback")
+        plugin_root = setup_plugin_root(base)
+        transcript = os.path.join(base, "session.jsonl")
+        write_transcript(transcript, [
+            {"model": "claude-opus-4-8-20260101", "input": 1000, "output": 200,
+             "cache_read": 500, "cache_write": 0},
+        ])
+        rc, _ = run_hook_subprocess(project_dir=project, plugin_root=plugin_root,
+                                     state_dir=state, transcript_path=transcript,
+                                     session_id="sess-fallback")
+        telemetry_file = os.path.join(state, "token-telemetry.jsonl")
+        check(rc == 0, "ON (.claude fallback): hook exits 0")
+        check(os.path.isfile(telemetry_file), "ON (.claude fallback): telemetry file created")
+
     # --- End-to-end: enabled = true but missing transcript -> exit 0, no write
     with tempfile.TemporaryDirectory() as base:
         project = os.path.join(base, "proj-missing")

@@ -20,6 +20,12 @@
 set -u
 
 TEAM_TOML="${CLAUDE_PROJECT_DIR:-$PWD}/.agents/team.toml"
+if [ ! -f "$TEAM_TOML" ]; then
+  FALLBACK_TOML="${CLAUDE_PROJECT_DIR:-$PWD}/.claude/team.toml"
+  if [ -f "$FALLBACK_TOML" ]; then
+    TEAM_TOML="$FALLBACK_TOML"
+  fi
+fi
 
 [ -f "$TEAM_TOML" ] || exit 0
 

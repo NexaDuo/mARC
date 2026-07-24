@@ -827,6 +827,10 @@ def render_human(digest: NormalizedDigest) -> str:
 def _resolve_config(args: argparse.Namespace) -> RepoConfig:
     repo_root = Path(args.repo_root).resolve()
     team_toml = Path(args.team_toml) if args.team_toml else repo_root / ".agents" / "team.toml"
+    if not args.team_toml and not team_toml.exists():
+        fallback = repo_root / ".claude" / "team.toml"
+        if fallback.exists():
+            team_toml = fallback
     config = RepoConfig.from_team_toml(team_toml)
 
     if not config.gh_repo:

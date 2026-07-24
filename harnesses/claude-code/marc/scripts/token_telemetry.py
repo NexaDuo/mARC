@@ -90,6 +90,10 @@ def telemetry_enabled_for_project(project_dir: str) -> bool:
     `[telemetry] enabled = true`. Any failure (missing file, unreadable,
     malformed) -> disabled (fail-closed for an opt-in feature)."""
     path = os.path.join(project_dir, ".agents", "team.toml")
+    if not os.path.exists(path):
+        fallback = os.path.join(project_dir, ".claude", "team.toml")
+        if os.path.exists(fallback):
+            path = fallback
     try:
         with open(path, "r", encoding="utf-8") as fh:
             text = fh.read()
