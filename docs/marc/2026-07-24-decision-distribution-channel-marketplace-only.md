@@ -19,7 +19,7 @@ multi-file skills, six subagents (`agents/*.md`), plugin-level hooks
 (`hooks/hooks.json`), and bundled scripts resolved at runtime via
 `${CLAUDE_PLUGIN_ROOT}`. The Claude Code plugin marketplace install
 (`claude plugin marketplace add NexaDuo/mARC && claude plugin install
-marc@marc`, or the git-clone equivalent documented in the repo's own
+marc@nexaduo`, or the git-clone equivalent documented in the repo's own
 `README.md`) is the only channel mARC has ever supported. Two issues asked
 whether a lighter-weight, `npx`-style, clone-free channel — matching the
 single-command ergonomics some competing ecosystems advertise — was
@@ -41,7 +41,8 @@ available or worth building.
   namespace prefix, and the "nest a `.claude-plugin/plugin.json` inside a
   skill folder" workaround (unverified, undocumented anywhere as an actual
   skills.sh workflow) would still resolve to `<name>@skills-dir`, not
-  `marc:`.
+  `marc:`. This is closed: do not re-evaluate absent the Revisit conditions
+  below.
 - **Third-party plugin manager (`npx claude-plugins`, `Kamalnrf/claude-plugins`,
   `claude-plugins.dev`)** — rejected. Per #160, read directly from the CLI's
   source (`packages/cli/src/commands/install.ts`, `src/core/resolver.ts`,
@@ -57,16 +58,16 @@ available or worth building.
   Val Town, a hobbyist-tier host) — raw URLs are explicitly rejected. Using
   it would require restructuring mARC into a plugin-manifest-at-repo-root
   layout and getting listed in a registry with no visible vetting pipeline,
-  for a channel with no capability gain over the native marketplace.
+  for a channel with no capability gain over the native marketplace. Closed;
+  do not re-evaluate absent the Revisit conditions below.
 - **A self-owned `npx` installer (option c)** — rejected. Buildable (roughly
   350-450 lines of Node/TypeScript by comparison with `claude-plugins`'
   equivalent modules, per #160), and it would carry all four component
   classes since it's mARC's own code. But it reinvents what
   `claude plugin marketplace add` / `claude plugin install` already do, and
-  introduces the exact failure mode the motivating issue flagged: a
-  project-owned script mutating `~/.claude/settings.json` outside Claude
-  Code's own validated install path, for a team that is, per this repo's own
-  `AGENTS.md`, already entirely inside the Claude Code plugin ecosystem.
+  introduces the exact failure mode the motivating issue flagged — see
+  "Security note" below. Closed; do not re-evaluate absent the Revisit
+  conditions below.
 - **MCP registry distribution** — out of scope by design, not by gap. Per
   #160 (`modelcontextprotocol.io/registry/about`, fetched 2026-07-24), the MCP
   registry hosts metadata for MCP servers only and is "not intended to be
@@ -79,15 +80,30 @@ available or worth building.
   no subagent or hooks concept comparable to Claude Code's, and Antigravity's
   `agy plugin install` has no discovered clone-free/marketplace path for
   third-party repos.
-- **Native Claude Code plugin marketplace (current channel)** — kept. It is
-  the one data model in this survey natively defined to carry all four
-  component classes together, already supports a non-interactive, scriptable,
-  two-command install (`claude plugin marketplace add` + `claude plugin
-  install`) with no `npx` and no user-side clone, and additionally offers a
-  zero-command declarative path via `extraKnownMarketplaces` /
-  `enabledPlugins` in `.claude/settings.json` for team onboarding. It also has
-  a reserved-namespace anti-impersonation check with no equivalent in any
-  third-party channel surveyed.
+- **Native Claude Code plugin marketplace (current channel)** — kept. See
+  "Why the native marketplace already wins" below.
+
+## Why the native marketplace already wins
+
+It is the one data model in this survey natively defined to carry all four
+component classes together, already supports a non-interactive, scriptable,
+two-command install (`claude plugin marketplace add` + `claude plugin
+install`) with no `npx` and no user-side clone, and additionally offers a
+zero-command declarative path via `extraKnownMarketplaces` /
+`enabledPlugins` in `.claude/settings.json` for team onboarding. It also has
+a reserved-namespace anti-impersonation check with no equivalent in any
+third-party channel surveyed.
+
+## Security note
+
+The self-owned `npx` installer option (rejected above) would work the way
+`npx`-style installers in this survey do: by mutating the user's
+`~/.claude/settings.json` outside Claude Code's own validated install path,
+for a team that is, per this repo's own `AGENTS.md`, already entirely inside
+the Claude Code plugin ecosystem. This is not the same as the declarative
+`.claude/settings.json` config path (`extraKnownMarketplaces` /
+`enabledPlugins`) mARC already documents: that file is authored by the user
+themselves, not mutated by a fetched script.
 
 ## Decision
 
@@ -99,9 +115,12 @@ material change in the underlying facts (see "Revisit conditions" below).
 
 ## Constraints carried into implementation
 
-- No plugin manifest, harness code, or `README.md` install/update
-  instructions change as a result of this decision — the existing
-  marketplace install path was already correct and is left as-is.
+- This decision does not change which install channel mARC supports, nor any
+  plugin manifest or harness code — the marketplace install path was already
+  correct. Sibling PR #165 separately surfaces the already-supported
+  non-interactive and declarative install paths more prominently in
+  `README.md`; that is a presentation change to an existing, already-correct
+  path, not a channel change.
 - Any future skill or subagent authoring must not assume a lighter-weight
   install channel exists; dispatch text (e.g. `subagent_type: marc:engineer`)
   and `${CLAUDE_PLUGIN_ROOT}`-relative script paths remain valid only under a
