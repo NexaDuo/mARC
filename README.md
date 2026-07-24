@@ -96,13 +96,46 @@ mARC is built by the team it ships. Every spec, dispatch, security review, and d
 - the [issues](https://github.com/NexaDuo/mARC/issues?q=is%3Aissue) and [pull requests](https://github.com/NexaDuo/mARC/pulls?q=is%3Apr), with inline spec details and security reviews,
 - [`docs/marc/`](docs/marc/), the durable decision records and research briefs.
 
-## Install (user-scope)
+## Install
 
-The quick-start blocks above cover the full installation. If you are using Claude Code, you can also run the installer script. This script adds the marketplace and installs the plugin.
+The quick-start block above covers the interactive path: `/plugin marketplace add` and `/plugin install` run inside a Claude Code session. If you are using Claude Code, you can also run the installer script, which does the same two steps non-interactively:
 
 ```bash
 ./install.sh
 ```
+
+### Non-interactive install (CLI)
+
+Claude Code also exposes the marketplace-add and plugin-install steps as shell commands, useful for scripting or for onboarding a machine without an interactive session:
+
+```bash
+claude plugin marketplace add NexaDuo/mARC
+claude plugin install marc@nexaduo
+```
+
+`claude plugin install` installs to user scope by default; pass `--scope project` to share the install with collaborators via the repo's `.claude/settings.json`, or `--scope local` to keep it local to your checkout only. This requires Claude Code 2.0.0 or later (the `minimumVersion` declared in [`harnesses/claude-code/marc/.claude-plugin/plugin.json`](harnesses/claude-code/marc/.claude-plugin/plugin.json)).
+
+### Zero-command install (declarative, for teams)
+
+To have mARC install itself for every collaborator with no command at all, declare the marketplace and the plugin in the project's `.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "nexaduo": {
+      "source": {
+        "source": "github",
+        "repo": "NexaDuo/mARC"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "marc@nexaduo": true
+  }
+}
+```
+
+When a team member trusts the repository folder, Claude Code prompts them to install the declared marketplace and plugin; from then on mARC loads automatically in that repo, with no `/plugin` or `claude plugin install` step required on their part.
 
 After installation, `@techlead` is available as `/marc:tech-lead` (or `agy /marc:tech-lead` under Google Antigravity) in any repository, and it dispatches the specialist subagents on demand.
 
