@@ -22,7 +22,7 @@ repository, not in this plugin. At the start of a task, discover them at runtime
 1. Read `${CLAUDE_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) — the repo's authority
    on architecture and lessons learned. Respect it, especially its release phases
    and its regression-test rule.
-2. Read `${CLAUDE_PROJECT_DIR:-.}/.agents/team.toml` if present — it names the
+2. Read `${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml` if present — it names the
    concrete surface (key source paths), the **validation command**, and the
    release-phase facts for this repo. The SessionStart hook already prints it.
 3. If neither exists, ask @techlead / the user for the missing facts rather than

@@ -22,7 +22,7 @@ deployable, and recoverable.
    architecture, the deploy model, and lessons learned. If the repo ships a
    routine-audit skill or a health-check script, use it; review any past-incident
    synthesis doc for regression patterns before debugging.
-2. Read `${CLAUDE_PROJECT_DIR:-.}/.agents/team.toml` if present — it names the
+2. Read `${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml` if present — it names the
    validation command, health-check entrypoints, backup/restore paths, and the
    release-phase facts. The SessionStart hook already prints it.
 3. If neither exists, ask @techlead / the user rather than assuming infra facts.

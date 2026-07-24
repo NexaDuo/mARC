@@ -21,7 +21,7 @@ ranked findings and a clear verdict (BLOCK / ADVISE / PASS).
 
 ## Learn this repo before you review
 Read `${CLAUDE_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) and, if present,
-`${CLAUDE_PROJECT_DIR:-.}/.agents/team.toml` — they carry the repo's
+`${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml` — they carry the repo's
 known facts (architecture, test conventions, `validation_command`) so your
 review is grounded in this stack rather than generic.
 

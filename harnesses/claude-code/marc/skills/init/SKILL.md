@@ -7,7 +7,7 @@ description: >-
   config — without ever writing a file silently. Discovers the repo's org/repo/
   project at runtime via `gh`, prefills `.agents/team.toml`, and (optionally)
   a lean `AGENTS.md` skeleton and the `enabledPlugins` pin in
-  `.agents/settings.json`. Each artifact is independently opt-in and is shown to
+  `.claude/settings.json`. Each artifact is independently opt-in and is shown to
   you before anything is written. Invoke with /marc:init.
 ---
 
@@ -209,7 +209,7 @@ exists, **do not touch it** — show the user it exists and stop for that artifa
 
 ---
 
-## Artifact 3 — `enabledPlugins` pin in `.agents/settings.json`  (adopt for good)
+## Artifact 3 — `enabledPlugins` pin in `.claude/settings.json`  (adopt for good)
 
 This is the **heaviest commitment** — it pins mARC on for this repo for everyone
 who works in it. Frame it deliberately as the *"adopt mARC for good"* step, not a
@@ -220,7 +220,7 @@ casual default. Offer it last and only if the user wants durable enablement.
 existing settings, preserving all other keys.
 
 ```bash
-SETTINGS="$ROOT/.agents/settings.json"
+SETTINGS="$ROOT/.claude/settings.json"
 
 # Discover the installed plugin id (e.g. marc@<marketplace>) at runtime.
 PLUGIN_ID="$(claude plugin list --json 2>/dev/null \
@@ -237,7 +237,7 @@ printf '%s' "$BASE" | jq --arg id "$PLUGIN_ID" \
 
 Show the merged JSON (the full resulting file, so the user sees nothing else
 changed), and on an explicit "yes" write that exact JSON to
-`$ROOT/.agents/settings.json`. Verify it still parses (`jq . "$SETTINGS"`) after
+`$ROOT/.claude/settings.json`. Verify it still parses (`jq . "$SETTINGS"`) after
 writing. If `PLUGIN_ID` is empty, do not write — ask the user for the correct
 `<plugin>@<marketplace>` id first.
 

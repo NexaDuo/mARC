@@ -5,7 +5,7 @@ description: >-
   Opt-in onboarding for the mARC agent team. Scaffolds a per-repo team binding so
   the team graduates from ephemeral session-memory to persistent, versioned
   config — without ever writing a file silently. Discovers the repo's org/repo/
-  project at runtime via `gh`, prefills `{{ config_dir }}/team.toml`, and (optionally)
+  project at runtime via `gh`, prefills `{{ agents_dir }}/team.toml`, and (optionally)
   a lean `AGENTS.md` skeleton and the `enabledPlugins` pin in
   `{{ config_dir }}/settings.json`. Each artifact is independently opt-in and is shown to
   you before anything is written. Invoke with /marc:init.
@@ -16,7 +16,7 @@ description: >-
 You are running the **mARC onboarding flow**. Your job is to help the user turn a
 zero-config repo into one with a **persistent, versioned team binding**, so
 `@techlead` and the specialists stop relying on ephemeral session memory and read
-the repo's concrete facts from `{{ config_dir }}/team.toml` (and optionally `AGENTS.md`)
+the repo's concrete facts from `{{ agents_dir }}/team.toml` (and optionally `AGENTS.md`)
 at the start of every session.
 
 ## The one rule that overrides everything
@@ -87,7 +87,7 @@ repo — match its sections, keys, and comments. Use generic placeholders (e.g.
 
 ---
 
-## Artifact 1 — `{{ config_dir }}/team.toml`  (the core binding)
+## Artifact 1 — `{{ agents_dir }}/team.toml`  (the core binding)
 
 Prefill **only** the fields you discovered. Leave every other field as a clearly
 labelled `TODO` — source paths, validation command, and release facts are
@@ -158,8 +158,8 @@ EOF
 Show the rendered content, then on an explicit "yes":
 
 ```bash
-mkdir -p "$ROOT/{{ config_dir }}"
-# ... write the shown content to "$ROOT/{{ config_dir }}/team.toml" ...
+mkdir -p "$ROOT/{{ agents_dir }}"
+# ... write the shown content to "$ROOT/{{ agents_dir }}/team.toml" ...
 ```
 
 Never overwrite an existing `team.toml` without showing the user the current

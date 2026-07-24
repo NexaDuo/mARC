@@ -9,10 +9,13 @@
 # (team.config is the pre-0.11.0 legacy format — keep ignoring stray copies.)
 .agents/team.toml
 .agents/team.config
+.claude/team.toml
+.claude/team.config
 # Personal, per-machine Claude Code overrides (e.g. a local ANTHROPIC_BASE_URL
 # proxy). Never commit — it would force everyone's settings. The shared
-# .agents/settings.json (enabledPlugins) IS committed; only the *.local one is not.
+# .claude/settings.json (enabledPlugins) IS committed; only the *.local one is not.
 .agents/settings.local.json
+.claude/settings.local.json
 
 # --- OS / editor cruft ---
 .DS_Store
