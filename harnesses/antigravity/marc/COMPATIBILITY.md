@@ -16,7 +16,7 @@ The mARC team is designed to be harness-agnostic. The core specialist prompts ([
 | **Subagent Dispatch API** | Calls the native `Agent` tool (`subagent_type`, `prompt`, `run_in_background`). | Calls the native `invoke_subagent` tool (array of subagents with `TypeName`, `Role`, `Prompt`). | **Requires Adaptation** | Abstract the dispatch command in `@techlead`'s prompt based on the detected harness/tools. |
 | **Plugin Manifest** | Manifest defined at `.claude-plugin/plugin.json`. | Manifest defined at `plugin.json` in the plugin root. | **Partially Compatible** | Maintained as a sibling file under the specific harness folder. |
 | **Execution Hooks** | Defined in `hooks/hooks.json` (trigger: `SessionStart`). Runs shell commands. | Defined in `hooks/hooks.json` or manifest (triggers: `SessionStart`, `PreInvocation`, etc.). | **Highly Compatible** | Adjust environment variables (e.g., `CLAUDE_PROJECT_DIR` $\rightarrow$ `AGY_PROJECT_DIR`) in scripts. |
-| **Local Config Path** | Discovers workspace configurations under `.claude/` (e.g., [team.toml](../../../.claude/team.toml)). | Discovers workspace configurations under `.agents/` (e.g., `.agents/team.toml`). | **Requires Dual-Support** | Update config search scripts to fall back to `.agents/` when `.claude/` is missing. |
+| **Local Config Path** | Discovers workspace configurations under `.claude/` (e.g., [team.toml](../../../.agents/team.toml)). | Discovers workspace configurations under `.agents/` (e.g., `.agents/team.toml`). | **Requires Dual-Support** | Update config search scripts to fall back to `.agents/` when `.claude/` is missing. |
 | **Bash Helper Scripts** | Runs scripts inside `scripts/` via terminal command execution. | Runs identical scripts inside `scripts/` via terminal command execution. | **100% Compatible** | Ensure required CLI utilities (`gh`, `jq`) are present on the user's system. |
 | **Rich Output / Artifacts** | Standard Markdown console rendering. | HTML Auxiliary Pane supporting visual Artifacts, carousels, and image editing. | **Upgrade (Backward Compatible)** | `@techlead` can optionally write visual status reports to `<appDataDir>/brain/<conversation-id>`. |
 
@@ -62,7 +62,7 @@ In Google Antigravity, the equivalent is:
 To ensure zero-config scripts function identically under both platforms, scripts must resolve configurations dynamically:
 ```bash
 # Locate the active workspace configuration
-CFG="${CLAUDE_PROJECT_DIR:-.}/.claude/team.toml"
+CFG="${CLAUDE_PROJECT_DIR:-.}/.agents/team.toml"
 [ ! -f "$CFG" ] && CFG="${AGY_PROJECT_DIR:-$PWD}/.agents/team.toml"
 ```
 

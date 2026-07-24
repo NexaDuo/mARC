@@ -1,6 +1,6 @@
 {
   "harness_name": "Claude Code",
-  "config_dir": ".claude",
+  "config_dir": ".agents",
   "project_dir_env": "CLAUDE_PROJECT_DIR",
   "plugin_root_env": "CLAUDE_PLUGIN_ROOT",
   "plugin_manifest_path": "harnesses/claude-code/marc/.claude-plugin/plugin.json",

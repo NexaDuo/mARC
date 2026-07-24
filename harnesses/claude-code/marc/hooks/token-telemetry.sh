@@ -2,7 +2,7 @@
 # mARC :: opt-in per-turn token-cost telemetry recorder (Stop hook, origin: #149)
 # ---------------------------------------------------------------------------
 # OPT-IN, DEFAULT OFF. This hook is wired on every Stop event but writes
-# NOTHING unless the current repo's `.claude/team.toml` has
+# NOTHING unless the current repo's `.agents/team.toml` has
 #   [telemetry]
 #   enabled = true
 # Absent team.toml, absent [telemetry] section, `enabled = false`, or any
@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------------
 set -u
 
-TEAM_TOML="${CLAUDE_PROJECT_DIR:-$PWD}/.claude/team.toml"
+TEAM_TOML="${CLAUDE_PROJECT_DIR:-$PWD}/.agents/team.toml"
 
 [ -f "$TEAM_TOML" ] || exit 0
 

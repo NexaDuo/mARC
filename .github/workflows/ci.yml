@@ -94,7 +94,7 @@ jobs:
           echo "Copilot harness structure gate: OK (compile.json/plugin.json/hooks schema/self-contained scripts present)."
 
       # 3b. team.toml schema contract (issue #51). `/marc:init` (skills/init)
-      #     prefills a `.claude/team.toml` from this canonical example, so it
+      #     prefills a `.agents/team.toml` from this canonical example, so it
       #     must (a) parse as valid TOML, (b) keep the required GitHub-binding
       #     keys, (c) keep every KEY NAME UNIQUE across the whole file — the
       #     plugin's shell snippets extract values with ZERO dependencies (no

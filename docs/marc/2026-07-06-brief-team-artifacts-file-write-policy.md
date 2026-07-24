@@ -24,7 +24,7 @@
 - **Common folder names in the ADR community are plain, visible directories (`adr/`, `decisions/`)** [reported] — joelparkerhenderson/architecture-decision-record (widely-referenced ADR compendium), https://github.com/joelparkerhenderson/architecture-decision-record
   > "Create a directory for ADR files: … $ mkdir adr" … "When some teams use the directory name \"decisions\", then it's as if a light bulb turns on"
 - **AI-tooling precedent: checked-in dot-directories are the established home for tool/team state** [reported] — Claude Code settings docs (current), https://code.claude.com/docs/en/settings
-  > "`.claude/settings.json` for settings that are checked into source control and shared with your team"
+  > "`.agents/settings.json` for settings that are checked into source control and shared with your team"
 
 ### B. GitHub Pages exposure of `docs/`
 

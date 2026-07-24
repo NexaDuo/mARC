@@ -43,7 +43,7 @@ MetaGPT, CrewAI, Claude Code Agent Teams) down to what holds for mARC:
 - **Anti-anchoring / genericization (hard gate):** everything under `harnesses/` must
   stay **stack-agnostic** — zero references to any consuming repo's stack. CI enforces
   this with a grep gate. Repo-specific facts belong in the *consuming* repo's
-  `AGENTS.md`/`.claude/team.toml`, read at runtime — never hardcoded here.
+  `AGENTS.md`/`.agents/team.toml`, read at runtime — never hardcoded here.
 - **Keep this file minimal.** Record only what isn't discoverable by reading the repo.
   If agents repeat a mistake, tighten the linter/CI/test — don't grow prose here. LLMs
   anchor on whatever sits in context, including deprecated caveats.

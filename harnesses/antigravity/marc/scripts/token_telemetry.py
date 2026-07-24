@@ -17,7 +17,7 @@ its own manual-CLI/report display — this module deliberately drops that
 field before persisting a record.
 
 OPT-IN, DEFAULT OFF: nothing is written unless the CONSUMING repo's
-`.claude/team.toml` has `[telemetry]` / `enabled = true`. Any other state
+`.agents/team.toml` has `[telemetry]` / `enabled = true`. Any other state
 (missing team.toml, missing section, `enabled = false`, malformed value) is
 treated as disabled — silent no-op, matching the plugin-wide warn-only/exit-0
 hook contract. This module never raises out of its own hook entrypoint.
@@ -86,10 +86,10 @@ def is_enabled(team_toml_text: str) -> bool:
 
 
 def telemetry_enabled_for_project(project_dir: str) -> bool:
-    """True only if `<project_dir>/.claude/team.toml` exists and has
+    """True only if `<project_dir>/.agents/team.toml` exists and has
     `[telemetry] enabled = true`. Any failure (missing file, unreadable,
     malformed) -> disabled (fail-closed for an opt-in feature)."""
-    path = os.path.join(project_dir, ".claude", "team.toml")
+    path = os.path.join(project_dir, ".agents", "team.toml")
     try:
         with open(path, "r", encoding="utf-8") as fh:
             text = fh.read()

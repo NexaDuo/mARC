@@ -156,7 +156,7 @@ def main() -> int:
     # --- End-to-end: OFF (enabled = false explicitly) ------------------------
     with tempfile.TemporaryDirectory() as base:
         project = os.path.join(base, "proj-off2")
-        write_team_toml(os.path.join(project, ".claude", "team.toml"),
+        write_team_toml(os.path.join(project, ".agents", "team.toml"),
                          "\n[telemetry]\nenabled = false\n")
         state = os.path.join(base, "state-off2")
         plugin_root = setup_plugin_root(base)
@@ -172,7 +172,7 @@ def main() -> int:
     # --- End-to-end: ON -> exactly one well-formed JSONL line ---------------
     with tempfile.TemporaryDirectory() as base:
         project = os.path.join(base, "proj-on")
-        write_team_toml(os.path.join(project, ".claude", "team.toml"),
+        write_team_toml(os.path.join(project, ".agents", "team.toml"),
                          "\n[telemetry]\nenabled = true\n")
         state = os.path.join(base, "state-on")
         plugin_root = setup_plugin_root(base)
@@ -225,7 +225,7 @@ def main() -> int:
     # --- End-to-end: enabled = true but missing transcript -> exit 0, no write
     with tempfile.TemporaryDirectory() as base:
         project = os.path.join(base, "proj-missing")
-        write_team_toml(os.path.join(project, ".claude", "team.toml"),
+        write_team_toml(os.path.join(project, ".agents", "team.toml"),
                          "\n[telemetry]\nenabled = true\n")
         state = os.path.join(base, "state-missing")
         plugin_root = setup_plugin_root(base)
