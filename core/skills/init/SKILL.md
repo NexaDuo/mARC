@@ -166,7 +166,7 @@ Never overwrite an existing `team.toml` without showing the user the current
 file and the proposed one and getting explicit confirmation to replace it.
 
 **Legacy migration (`team.config` → `team.toml`):** if the repo still has a
-pre-0.11.0 `{{ config_dir }}/team.config`, carry its values into the TOML you compose
+pre-0.11.0 `.claude/team.config`, carry its values into the TOML you compose
 (same key names; comma-separated path strings become native TOML arrays), show
 the result as usual, and on the user's "yes" write `team.toml` **and offer to
 delete the obsolete `team.config`** (it is no longer parsed by any mARC

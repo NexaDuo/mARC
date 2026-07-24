@@ -11,7 +11,7 @@
 
 ## Context
 
-The per-repo team binding lived in `.agents/team.config`, a flat `key=value`
+The per-repo team binding lived in `.claude/team.config`, a flat `key=value`
 file with a custom extension. The reported pain: `team.config` maps to no
 language in VS Code or GitHub, so keys/values/comments render colorless; the
 naïve `key=value` shell parsing also forbade inline comments and forced
@@ -29,7 +29,7 @@ added `workspace_dir`).
 
 ## Decision
 
-**TOML**, at `.agents/team.toml`, accepting the breaking change while the
+**TOML**, at `.claude/team.toml`, accepting the breaking change while the
 project is early. Rationale:
 
 - Native syntax highlighting in VS Code and on GitHub.
@@ -47,7 +47,7 @@ project is early. Rationale:
   file, so a key-anchored `sed` (tolerant of optional quotes and inline
   comments) extracts values without a TOML parser. CI enforces uniqueness and
   checks the sed extraction against `tomllib` on the canonical example.
-- **Legacy handling is loud, not silent:** if only `.agents/team.config`
+- **Legacy handling is loud, not silent:** if only `.claude/team.config`
   exists, the SessionStart hook and `@techlead` print a one-line deprecation
   notice pointing at `/marc:init` migration; the old file is no longer parsed
   by any component.

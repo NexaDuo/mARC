@@ -83,7 +83,7 @@ Think of your project as an IRC channel. **`@techlead`** holds channel-operator 
 The team carries no hardcoded stack facts. When running in a repository, the agents discover details dynamically at runtime:
 
 - They read the repository's `AGENTS.md` or `CLAUDE.md` to learn about the architecture and any lessons from previous issues.
-- They check the repository configuration file (either `.agents/team.toml` or `.agents/team.toml`) for settings like the GitHub organization, repository name, project number, source paths, and validation commands. See [`docs/team.toml.example`](docs/team.toml.example) for an example.
+- They check the repository configuration file (`.agents/team.toml`) for settings like the GitHub organization, repository name, project number, source paths, and validation commands. See [`docs/team.toml.example`](docs/team.toml.example) for an example.
 - If the configuration file is missing, `@techlead` automatically queries GitHub using `gh` commands to locate the correct repository and project board.
 
 A `SessionStart` hook outputs the active `team.toml` configuration into the context at the beginning of each session. If the configuration is missing, it prints a friendly note. If it finds a legacy `team.config` file, it prompts you to migrate by running `/marc:init`.
@@ -134,7 +134,7 @@ agy plugin install ./mARC/harnesses/antigravity/marc
 
 ## Bind mARC to a repo (optional but recommended)
 
-Run **`/marc:init`** in the consuming repo. It scaffolds the repository configuration (either `.agents/team.toml` for Claude Code or `.agents/team.toml` for Google Antigravity). This config pins the GitHub org and repo, the Project number, key source paths, and the validation command so `@techlead` and the specialists do not have to guess. It shows you every file before writing anything. If you prefer to set it up by hand, copy [`docs/team.toml.example`](docs/team.toml.example) and fill it in. Note that a repository's local `.claude/` or `.agents/` configuration folder overrides the plugin, which in turn overrides user config.
+Run **`/marc:init`** in the consuming repo. It scaffolds the repository configuration (`.agents/team.toml`). This config pins the GitHub org and repo, the Project number, key source paths, and the validation command so `@techlead` and the specialists do not have to guess. It shows you every file before writing anything. If you prefer to set it up by hand, copy [`docs/team.toml.example`](docs/team.toml.example) and fill it in. Note that a repository's local `.agents/` configuration folder overrides the plugin, which in turn overrides user config.
 
 ## Harness Architecture & Compatibility
 

@@ -48,7 +48,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ts`, `session_id`, `turn_index`, `model`, `input`, `output`, `cache_read`,
   `cache_write`, `weighted`, and a repo/cwd BASENAME — never any message-body
   content. OFF by default: nothing is written unless the consuming repo's
-  `.agents/team.toml` has `[telemetry]` / `enabled = true` (documented in
+  `.claude/team.toml` has `[telemetry]` / `enabled = true` (documented in
   `docs/team.toml.example`); the toggle is checked in bash BEFORE ever
   shelling out to python3, so the common (disabled) case costs nothing extra.
   Antigravity and Copilot are explicitly out of scope for the hook itself
@@ -487,8 +487,8 @@ the versioned skill/agent prose.
 
 ## [0.11.0] - 2026-07-06
 
-The per-repo team binding moves from flat `key=value` `.agents/team.config` to
-**TOML** at `.agents/team.toml` (#51 — decided on the issue; decision record in
+The per-repo team binding moves from flat `key=value` `.claude/team.config` to
+**TOML** at `.claude/team.toml` (#51 — decided on the issue; decision record in
 `docs/marc/2026-07-06-decision-team-config-toml.md`). **Breaking change**,
 accepted while the project is early: the old file is no longer parsed by any
 component — re-run `/marc:init` (or convert by hand from
@@ -514,7 +514,7 @@ component — re-run `/marc:init` (or convert by hand from
   extraction agrees with a real TOML parser (plus negative fixtures).
 
 ### Deprecated
-- **`.agents/team.config`** (legacy): detected loudly, not parsed — the hook
+- **`.claude/team.config`** (legacy): detected loudly, not parsed — the hook
   and the tech-lead skill print a one-line migration notice pointing at
   `/marc:init`.
 
@@ -583,7 +583,7 @@ issue → board → dispatch → `@sec` gate → merge loop for every change (#4
   (option A). Inline CSS only, zero new JS, mobile-safe stacking.
 - **Landing page wordmark + favicon polish** (#32, #29): hero wordmark
   (candidate A) on top of the #13 inline-SVG favicon; root `AGENTS.md`.
-- **Shared `.agents/settings.json` + dogfood lessons flush** (#37).
+- **Shared `.claude/settings.json` + dogfood lessons flush** (#37).
 
 ### Fixed
 - **Release workflow hardening** (#26 → #33, #34, #35, #36): tag-triggered
@@ -639,7 +639,7 @@ plugin or open autonomous upstream PRs from someone else's repo.
   self-edits + upstream PRs remain allowed. In **any other (consumer) repo** the
   operator **MUST NOT** edit the plugin's skill/agent files or open an autonomous
   upstream pull request; improvements land only in the consuming repo's
-  `AGENTS.md` / `.agents/team.config` / personal memory buffer, and genuinely
+  `AGENTS.md` / `.claude/team.config` / personal memory buffer, and genuinely
   upstream-worthy lessons are deferred to the sanctioned opt-in upstream channel
   (issue #22). Flush cadence updated to target the correct destination per context.
 
@@ -762,17 +762,17 @@ without changing the zero-config default.
 - `skills/init/SKILL.md` — the `/marc:init` onboarding skill. Discovers the
   repo's org/repo/project **at runtime via `gh`** and prefills three
   **independently opt-in** artifacts, each shown verbatim and written only on an
-  explicit "yes": `.agents/team.config` (prefilled from the
+  explicit "yes": `.claude/team.config` (prefilled from the
   `docs/team.config.example` schema, unknowns left as clearly-marked `TODO`
   placeholders), an optional lean `AGENTS.md` **skeleton of section headings
   only** (no placebo prose, per the anti-anchoring lesson), and an optional
-  `enabledPlugins` pin **merged** into `.agents/settings.json` (the deliberate
+  `enabledPlugins` pin **merged** into `.claude/settings.json` (the deliberate
   "adopt for good" step — merge, never clobber). Nothing is ever written
   silently.
 
 ### Changed
 - `skills/tech-lead/SKILL.md` — first-run offer: when **both** `AGENTS.md` and
-  `.agents/team.config` are absent, `@techlead` offers to run `/marc:init`
+  `.claude/team.config` are absent, `@techlead` offers to run `/marc:init`
   (explaining that session memory is ephemeral while `team.config` stabilizes
   board/paths across sessions) and proceeds only on confirmation. Zero-config
   behavior is byte-for-byte unchanged if declined.
@@ -793,17 +793,17 @@ brand layer.
   GitHub repo `NexaDuo/mARC` (the repo doubles as its own marketplace).
 - `skills/tech-lead/SKILL.md` — `@techlead` channel-operator skill (`/tech-lead`)
   with **runtime discovery** of the target repo and Project board (via
-  `.agents/team.config`, then `gh repo view` / `gh project list`) instead of
+  `.claude/team.config`, then `gh repo view` / `gh project list`) instead of
   hardcoded repo/project values.
 - `agents/{engineer,sre,design,security}.md` — the `@dev`, `@sre`, `@design`,
   `@sec` specialist subagents, fully genericized (no stack-specific facts) and
-  taught to read the consuming repo's `AGENTS.md` + `.agents/team.config` at
+  taught to read the consuming repo's `AGENTS.md` + `.claude/team.config` at
   runtime.
 - IRC `@handle` identities across the roster (`@techlead`/`@dev`/`@sre`/`@design`/
   `@sec`) and a vaporwave ASCII-art console brand in the README, banner, and
   installer.
 - `hooks/hooks.json` — a `SessionStart` hook that injects
-  `$CLAUDE_PROJECT_DIR/.agents/team.config` into context (warns, never fails, if
+  `$CLAUDE_PROJECT_DIR/.claude/team.config` into context (warns, never fails, if
   absent).
 - `install.sh` — a safe, auditable installer (adds the marketplace + installs the
   plugin, prints the banner; no `curl | sh` of remote code).
