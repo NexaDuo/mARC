@@ -961,7 +961,46 @@ jobs:
               total_refs=$((total_refs + 1))
               path_expr="${ref#\"}"
               path_expr="${path_expr%\"}"
-              resolved="$(env -i AGY_PLUGIN_ROOT="$CONFIG_DIR" AGY_PROJECT_DIR="$PWD" HOME="$HOME" PATH="$PATH" bash -c "echo $path_expr")"
+
+              # Resolve WITHOUT ever invoking a shell on file-derived content
+              # (no `bash -c`/eval). A crafted hooks.json command could embed
+              # shell metacharacters in this expression; refuse those outright
+              # rather than let them reach any interpreter. Only the two
+              # variables Antigravity itself declares (compile.json:
+              # plugin_root_env=AGY_PLUGIN_ROOT, project_dir_env=
+              # AGY_PROJECT_DIR) are substituted with real values — anything
+              # else (including CLAUDE_PLUGIN_ROOT/CLAUDE_PROJECT_DIR, which is
+              # exactly what the real hardcoded hooks.json uses) is an
+              # unexpected variable and is reported as a finding, not silently
+              # resolved.
+              case "$path_expr" in
+                *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*'>'*|*'<'*)
+                  echo "::error::hook script reference contains shell metacharacters and will not be evaluated — '$path_expr' (from command: $cmd) is refused outright rather than resolved, since injecting shell syntax into a hook-script path reference is itself a security finding"
+                  fail=1
+                  continue
+                  ;;
+              esac
+
+              if [[ "$path_expr" =~ ^\$\{([A-Z_]+)(:-([^}]*))?\}(.*)$ ]]; then
+                var_name="${BASH_REMATCH[1]}"
+                var_default="${BASH_REMATCH[3]}"
+                path_rest="${BASH_REMATCH[4]}"
+                case "$var_name" in
+                  AGY_PLUGIN_ROOT) var_value="$CONFIG_DIR" ;;
+                  AGY_PROJECT_DIR) var_value="$PWD" ;;
+                  *)
+                    echo "::error::hook script reference does NOT resolve under Antigravity's own declared env vars — '$path_expr' (from command: $cmd) references '\$$var_name', which Antigravity's compile.json does not declare (only AGY_PLUGIN_ROOT/AGY_PROJECT_DIR are expected). Antigravity does not set Claude-Code-only variables, so this reference cannot resolve at runtime. This is the tracked product defect: hooks/hooks.json (shared via the PR #80 symlink) still hardcodes CLAUDE_PLUGIN_ROOT with no fallback; COMPATIBILITY.md's own 'Action Needed' column says this env-var adaptation was required but it was never applied."
+                    fail=1
+                    continue
+                    ;;
+                esac
+                resolved="${var_value}${path_rest}"
+              else
+                echo "::error::hook script reference '$path_expr' (from command: $cmd) does not match the expected \${VAR}/path.sh or \${VAR:-default}/path.sh form — refusing to resolve"
+                fail=1
+                continue
+              fi
+
               if [ -f "$resolved" ]; then
                 echo "OK: '$path_expr' (from command: $cmd) resolves to a real file ($resolved) under Antigravity's own env vars"
               else
