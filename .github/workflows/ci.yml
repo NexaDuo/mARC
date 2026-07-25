@@ -778,15 +778,77 @@ jobs:
           done
           echo "In-repo: plugin + tech-lead skill + engineer/sre/design/security/research agents all registered."
 
+          # 10. Bundled-script + hook resolution against the INSTALLED copy
+          #     (issue #167 AC#1/AC#2). Everything above proves the plugin is
+          #     *registered*; it never proves a script referenced from a
+          #     compiled SKILL.md, or a hook script referenced from
+          #     hooks.json, actually resolves once installed. Resolve
+          #     `${CLAUDE_PLUGIN_ROOT}` the same way the CLI does at runtime:
+          #     via `plugin list --json`'s `installPath` field, which is the
+          #     real on-disk cache location (verified empirically:
+          #     $CLAUDE_CONFIG_DIR/plugins/cache/nexaduo/marc/<version>).
+          INSTALL_PATH="$(claude plugin list --json | jq -r '.[] | select(.id=="marc@nexaduo") | .installPath')"
+          test -n "$INSTALL_PATH" && test -d "$INSTALL_PATH" \
+            || { echo "::error::could not resolve installPath for marc@nexaduo from 'plugin list --json'"; exit 1; }
+          echo "Installed copy resolved at: $INSTALL_PATH"
+
+          echo "== assert bundled scripts resolve via \${CLAUDE_PLUGIN_ROOT} against the INSTALLED copy =="
+          SCRIPT_REFS="$(grep -rhoE '\$\{CLAUDE_PLUGIN_ROOT:-\.\}/scripts/[A-Za-z0-9_.-]+' "$INSTALL_PATH"/skills/*/SKILL.md | sed -E 's#.*/scripts/##' | sort -u)"
+          test -n "$SCRIPT_REFS" || { echo "::error::no \${CLAUDE_PLUGIN_ROOT}/scripts/* references found in installed SKILL.md files"; exit 1; }
+          while IFS= read -r name; do
+            resolved="$INSTALL_PATH/scripts/$name"
+            test -f "$resolved" || { echo "::error::installed script '$name' referenced from SKILL.md is missing at $resolved"; exit 1; }
+            python3 "$resolved" --help > /dev/null \
+              || { echo "::error::installed script '$name' at $resolved is not executable via python3 (--help failed)"; exit 1; }
+            echo "OK: \${CLAUDE_PLUGIN_ROOT}/scripts/$name resolves and runs from the installed copy ($resolved)"
+          done <<< "$SCRIPT_REFS"
+
+          echo "== assert hooks resolve via \${CLAUDE_PLUGIN_ROOT} against the INSTALLED copy =="
+          HOOKS_JSON="$INSTALL_PATH/hooks/hooks.json"
+          test -f "$HOOKS_JSON" || { echo "::error::installed hooks.json missing at $HOOKS_JSON"; exit 1; }
+          jq -e . "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json at $HOOKS_JSON is not valid JSON"; exit 1; }
+          HOOK_REFS="$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/hooks/[A-Za-z0-9_.-]+' "$HOOKS_JSON" | sed -E 's#.*/hooks/##' | sort -u)"
+          test -n "$HOOK_REFS" || { echo "::error::no \${CLAUDE_PLUGIN_ROOT}/hooks/* references found in installed hooks.json"; exit 1; }
+          while IFS= read -r name; do
+            resolved="$INSTALL_PATH/hooks/$name"
+            test -f "$resolved" || { echo "::error::installed hook script '$name' referenced from hooks.json is missing at $resolved"; exit 1; }
+            bash -n "$resolved" || { echo "::error::installed hook script '$name' at $resolved fails bash syntax check"; exit 1; }
+            echo "OK: \${CLAUDE_PLUGIN_ROOT}/hooks/$name resolves and parses from the installed copy ($resolved)"
+          done <<< "$HOOK_REFS"
+
+          echo "NOTE: this proves hook/script *resolution* (file present, syntactically valid,"
+          echo "and for scripts, runnable via python3 --help) against the real installed copy."
+          echo "It does NOT prove a hook actually *fires* end-to-end through Claude Code's own"
+          echo "SessionStart/PostToolUse/Stop dispatch — no Tier 1/2 step anywhere exercises that;"
+          echo "the hook-logic self-tests below (search this log for 'invariants-card'/'outdated')"
+          echo "cover the scripts' own behavior standalone, with CLAUDE_PLUGIN_ROOT set by hand."
+
+      # Trusted-context gate (issue #167 AC#3): GitHub Actions never exposes
+      # secrets to `pull_request` runs from forks, so a fork PR genuinely
+      # cannot run this step — that is an honest, visible SKIP via `if:`, not
+      # a silent pass. On a trusted context (push, or a same-repo PR) the
+      # secret is expected to exist; if it's missing THERE, that's a real
+      # regression (rotation/expiry/misconfig), and the step below hard-fails
+      # instead of exiting 0 — coverage that didn't run must never read as
+      # green. See the "Antigravity coverage status" step further down for
+      # the fork-skip case, which is also made explicit rather than silent.
       - name: Tier 2 — Antigravity harness install + component registration
+        id: antigravity_install
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           ANTIGRAVITY_API_KEY: ${{ secrets.ANTIGRAVITY_API_KEY }}
           HOME: ${{ github.workspace }}/.agy-home
         run: |
           set -euo pipefail
           if [ -z "${ANTIGRAVITY_API_KEY:-}" ]; then
-            echo "ANTIGRAVITY_API_KEY is absent. Skipping Antigravity harness tests cleanly."
-            exit 0
+            {
+              echo "### :x: Antigravity Tier 2 coverage NOT RUN"
+              echo "ANTIGRAVITY_API_KEY is absent on a trusted context (push, or a same-repo PR)."
+              echo "No Antigravity install/component/script/hooks assertions ran in this build."
+              echo "This is a real regression (secret missing/rotated/expired), not an expected skip."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::ANTIGRAVITY_API_KEY is absent on a trusted context. Failing loudly instead of skipping silently — absent coverage must never read as a pass."
+            exit 1
           fi
 
           echo "Installing Google Antigravity CLI..."
@@ -820,7 +882,54 @@ jobs:
             exit 1
           }
 
-          echo "Antigravity harness check: OK (plugin installed, and all seven components registered successfully)."
+          # Bundled-script resolution against the INSTALLED copy (issue #167
+          # AC#1). Antigravity's plugin-root equivalent is AGY_PLUGIN_ROOT
+          # (compile.json); the installed on-disk equivalent is CONFIG_DIR
+          # above (verified: `agy plugin install` places the plugin at
+          # $HOME/.gemini/config/plugins/marc, mirroring Claude Code's cache
+          # layout).
+          echo "== assert bundled scripts resolve via \${AGY_PLUGIN_ROOT} against the INSTALLED copy =="
+          SCRIPT_REFS="$(grep -rhoE '\$\{AGY_PLUGIN_ROOT:-\.\}/scripts/[A-Za-z0-9_.-]+' "$CONFIG_DIR"/skills/*/SKILL.md | sed -E 's#.*/scripts/##' | sort -u)"
+          test -n "$SCRIPT_REFS" || { echo "::error::no \${AGY_PLUGIN_ROOT}/scripts/* references found in installed SKILL.md files"; exit 1; }
+          while IFS= read -r name; do
+            resolved="$CONFIG_DIR/scripts/$name"
+            test -f "$resolved" || { echo "::error::installed script '$name' referenced from SKILL.md is missing at $resolved"; exit 1; }
+            python3 "$resolved" --help > /dev/null \
+              || { echo "::error::installed script '$name' at $resolved is not executable via python3 (--help failed)"; exit 1; }
+            echo "OK: \${AGY_PLUGIN_ROOT}/scripts/$name resolves and runs from the installed copy ($resolved)"
+          done <<< "$SCRIPT_REFS"
+
+          # Hooks: explicit N/A (issue #167 AC#2). Google Antigravity ships no
+          # hooks concept at all — verified: harnesses/antigravity/marc has no
+          # hooks/ directory, and compile.json declares no hook-equivalent
+          # field. Assert that absence stays true (so a future hooks/ addition
+          # here is caught as "needs new coverage", not silently unassessed)
+          # and say so loudly rather than leaving hooks coverage unmentioned.
+          if [ -d "$CONFIG_DIR/hooks" ]; then
+            echo "::error::Antigravity installed copy now has a hooks/ directory, but this job still treats hooks as N/A for this harness — add real hook-resolution assertions here."
+            exit 1
+          fi
+          echo "N/A: Antigravity has no hooks concept (no hooks/ directory shipped or installed) — nothing to assert here, by design, not by omission."
+
+          echo "Antigravity harness check: OK (plugin installed, all seven components registered, bundled scripts resolve against the installed copy, hooks explicitly N/A)."
+
+      # Always-visible status for the Antigravity step above, regardless of
+      # whether it ran, was skipped (fork PR — expected, honest SKIP), or
+      # failed (secret missing on a trusted context — real regression). This
+      # guarantees the fork-PR case is never mistaken for "ran and passed"
+      # just because the job stayed green.
+      - name: Antigravity coverage status (always visible)
+        if: always()
+        run: |
+          case "${{ steps.antigravity_install.outcome }}" in
+            success) echo "Antigravity Tier 2 coverage: RAN and PASSED." ;;
+            skipped) {
+                echo "### :large_yellow_circle: Antigravity Tier 2 coverage: SKIPPED (fork PR)"
+                echo "This run is a pull_request from a fork, so ANTIGRAVITY_API_KEY is not available (GitHub Actions never exposes secrets to fork PR runs). No Antigravity install/component/script assertions ran in this build. This is expected for fork PRs, not a pass."
+              } >> "$GITHUB_STEP_SUMMARY" ;;
+            failure) echo "Antigravity Tier 2 coverage: FAILED — see the step above and the job summary." ;;
+            *) echo "Antigravity Tier 2 coverage: outcome '${{ steps.antigravity_install.outcome }}' unrecognized." ;;
+          esac
 
       # Tier 2 — Copilot harness install + component registration (issue #127
       # AC#1). Unlike Antigravity, this needs NO secret: `copilot plugin
@@ -868,7 +977,56 @@ jobs:
             }
           done
 
-          echo "Copilot harness check: OK (plugin installed with no auth token, tech-lead+init skills and all six specialist agents registered)."
+          # Hooks resolution against the INSTALLED copy (issue #167 AC#2).
+          # Tier 1 only schema-checks hooks.json in the checked-out tree;
+          # nothing before this asserted the installed copy.
+          echo "== assert hooks.json present + well-formed against the INSTALLED copy =="
+          HOOKS_JSON="$HOME/.copilot/installed-plugins/nexaduo/marc/hooks/hooks.json"
+          test -f "$HOOKS_JSON" || { echo "::error::installed hooks.json missing at $HOOKS_JSON"; exit 1; }
+          jq -e '.version==1 and (.hooks|type=="object")' "$HOOKS_JSON" > /dev/null \
+            || { echo "::error::installed hooks.json at $HOOKS_JSON fails the version==1 / .hooks-is-object shape"; exit 1; }
+
+          # Bundled-script resolution against the INSTALLED copy (issue #167
+          # AC#1). Copilot's plugin-root equivalent, COPILOT_PLUGIN_DATA, is
+          # NOT installed-plugins/ itself: the sessionStart hook's own command
+          # (below) copies core/scripts/*.py from installed-plugins into
+          # COPILOT_PLUGIN_DATA (default $HOME/.copilot/plugin-data/marc) at
+          # runtime, and postToolUse then invokes scripts from THAT location.
+          # Proving resolution against the installed copy means actually
+          # running that documented copy step (extracted straight from the
+          # installed hooks.json), the same "exercise the hook's own command
+          # directly, not through the CLI's hook dispatcher" pattern already
+          # used for Claude Code's hook self-tests elsewhere in this file.
+          echo "== assert bundled scripts resolve via \${COPILOT_PLUGIN_DATA} against the INSTALLED copy =="
+          export COPILOT_PLUGIN_DATA="$HOME/.copilot/plugin-data/marc"
+          SESSION_START_BASH="$(jq -r '.hooks.sessionStart[0].bash' "$HOOKS_JSON")"
+          test -n "$SESSION_START_BASH" && [ "$SESSION_START_BASH" != "null" ] \
+            || { echo "::error::could not extract sessionStart hook 'bash' command from $HOOKS_JSON"; exit 1; }
+          bash -c "$SESSION_START_BASH"
+
+          SCRIPT_REFS="$(grep -rhoE '\$\{COPILOT_PLUGIN_DATA:-\.\}/scripts/[A-Za-z0-9_.-]+' "$HOME"/.copilot/installed-plugins/nexaduo/marc/skills/*/SKILL.md | sed -E 's#.*/scripts/##' | sort -u)"
+          test -n "$SCRIPT_REFS" || { echo "::error::no \${COPILOT_PLUGIN_DATA}/scripts/* references found in installed SKILL.md files"; exit 1; }
+          while IFS= read -r name; do
+            resolved="$COPILOT_PLUGIN_DATA/scripts/$name"
+            test -f "$resolved" || { echo "::error::installed script '$name' referenced from SKILL.md did not land at $resolved after running the sessionStart hook's own copy step"; exit 1; }
+            python3 "$resolved" --help > /dev/null \
+              || { echo "::error::installed script '$name' at $resolved is not executable via python3 (--help failed)"; exit 1; }
+            echo "OK: \${COPILOT_PLUGIN_DATA}/scripts/$name resolves and runs from the installed copy ($resolved), populated by the real sessionStart hook logic"
+          done <<< "$SCRIPT_REFS"
+
+          POST_TOOL_USE_BASH="$(jq -r '.hooks.postToolUse[0].bash' "$HOOKS_JSON")"
+          echo "$POST_TOOL_USE_BASH" | grep -q 'COPILOT_PLUGIN_DATA' \
+            || { echo "::error::postToolUse hook no longer references COPILOT_PLUGIN_DATA — update this assertion"; exit 1; }
+          test -f "$COPILOT_PLUGIN_DATA/scripts/token_sentinel.py" \
+            || { echo "::error::token_sentinel.py (referenced by the postToolUse hook) is not present at $COPILOT_PLUGIN_DATA/scripts/token_sentinel.py"; exit 1; }
+          echo "OK: postToolUse hook's \${COPILOT_PLUGIN_DATA}/scripts/token_sentinel.py resolves from the installed copy"
+
+          echo "NOTE: this executes the documented sessionStart/postToolUse hook COMMANDS directly"
+          echo "and proves their copy-then-resolve mechanism works end-to-end against the real"
+          echo "installed plugin. It does NOT prove the Copilot CLI itself dispatches these events"
+          echo "through hooks.json — no Tier 1/2 step anywhere triggers a real Copilot CLI hook event."
+
+          echo "Copilot harness check: OK (plugin installed with no auth token, tech-lead+init skills, all six specialist agents, hooks.json, and bundled scripts all resolve against the installed copy)."
 
       # 8. Cross-repo proof: from a working directory OUTSIDE the mARC checkout,
       #    with its OWN fresh config dir, add the marketplace by pointing at the
