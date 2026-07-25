@@ -899,19 +899,86 @@ jobs:
             echo "OK: \${AGY_PLUGIN_ROOT}/scripts/$name resolves and runs from the installed copy ($resolved)"
           done <<< "$SCRIPT_REFS"
 
-          # Hooks: explicit N/A (issue #167 AC#2). Google Antigravity ships no
-          # hooks concept at all — verified: harnesses/antigravity/marc has no
-          # hooks/ directory, and compile.json declares no hook-equivalent
-          # field. Assert that absence stays true (so a future hooks/ addition
-          # here is caught as "needs new coverage", not silently unassessed)
-          # and say so loudly rather than leaving hooks coverage unmentioned.
-          if [ -d "$CONFIG_DIR/hooks" ]; then
-            echo "::error::Antigravity installed copy now has a hooks/ directory, but this job still treats hooks as N/A for this harness — add real hook-resolution assertions here."
+          echo "Antigravity harness check: OK (plugin installed, all seven components registered, bundled scripts resolve against the installed copy). Hooks are asserted in the next step."
+
+      # Hooks (issue #167 AC#2). harnesses/antigravity/marc/hooks is a real,
+      # committed symlink to the Claude Code harness's hooks/ (git mode
+      # 120000, introduced in PR #80) — NOT an absent feature. COMPATIBILITY.md
+      # itself documents hooks as "Highly Compatible", with the one required
+      # adaptation being environment variables (CLAUDE_PROJECT_DIR ->
+      # AGY_PROJECT_DIR). This step asserts against the INSTALLED copy,
+      # using Antigravity's own declared vars (compile.json:
+      # project_dir_env=AGY_PROJECT_DIR, plugin_root_env=AGY_PLUGIN_ROOT) and
+      # its own confirmed-compatible trigger name (COMPATIBILITY.md:
+      # SessionStart), rather than assuming parity with Claude Code.
+      #
+      # continue-on-error: this assertion is intentionally allowed to go red
+      # without failing the job. The shared hooks.json currently hardcodes
+      # Claude Code's CLAUDE_PLUGIN_ROOT with no fallback in every one of its
+      # five hook commands (outdated-check.sh, invariants-card.sh,
+      # token-guard.sh, outdated-recheck.sh, token-telemetry.sh) — a real
+      # product defect in harnesses/**, not something this test step should
+      # paper over. Fixing it is a core/harnesses change requiring recompile +
+      # lockstep parity + a version bump, which is out of scope here. See PR
+      # #168 discussion / issue #167 for the tracked follow-up.
+      - name: Tier 2 — Antigravity hook-resolution assertion (issue #167 AC#2)
+        id: antigravity_hooks
+        if: steps.antigravity_install.outcome == 'success'
+        continue-on-error: true
+        env:
+          HOME: ${{ github.workspace }}/.agy-home
+        run: |
+          set -euo pipefail
+          CONFIG_DIR="$HOME/.gemini/config/plugins/marc"
+          HOOKS_JSON="$CONFIG_DIR/hooks/hooks.json"
+
+          echo "== assert the installed copy actually carries hooks/ (not N/A — COMPATIBILITY.md documents hooks as Highly Compatible) =="
+          test -d "$CONFIG_DIR/hooks" || { echo "::error::installed copy has no hooks/ directory — if hooks were genuinely removed from the harness, replace this assertion; do not silently drop coverage"; exit 1; }
+          test -f "$HOOKS_JSON" || { echo "::error::hooks/ exists but hooks.json is missing at $HOOKS_JSON"; exit 1; }
+
+          echo "== assert hooks.json declares Antigravity's own confirmed-compatible trigger name =="
+          jq -e '.hooks.SessionStart' "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json has no .hooks.SessionStart entry — COMPATIBILITY.md documents SessionStart as a trigger name Antigravity itself supports"; exit 1; }
+
+          echo "== assert every hook command's referenced script resolves to a real file UNDER ANTIGRAVITY'S OWN DECLARED ENV VARS (AGY_PLUGIN_ROOT / AGY_PROJECT_DIR per compile.json) — not Claude Code's =="
+
+          # Match quoted ${VAR...}/path references ending in ".sh" specifically
+          # — i.e. the actual hook-script invocation each command makes. This
+          # deliberately does NOT match the team.toml/team.config config-path
+          # lookups some commands also embed (that discovery path is #166's
+          # contested territory, out of scope here); anchoring on ".sh" keeps
+          # this assertion scoped to "does the hook's own script resolve". Not
+          # every hook command invokes an external script (one SessionStart
+          # entry is pure inline shell with no .sh reference) — that is a
+          # legitimate case, not a failure, so it is only counted, not flagged.
+          fail=0
+          total_refs=0
+          while IFS= read -r -d '' cmd; do
+            [ -z "$cmd" ] && continue
+            refs="$(grep -oE '"\$\{[A-Z_]+(:-[^}]*)?\}[^"]*\.sh"' <<< "$cmd")" || true
+            [ -z "$refs" ] && continue
+            while IFS= read -r ref; do
+              [ -z "$ref" ] && continue
+              total_refs=$((total_refs + 1))
+              path_expr="${ref#\"}"
+              path_expr="${path_expr%\"}"
+              resolved="$(env -i AGY_PLUGIN_ROOT="$CONFIG_DIR" AGY_PROJECT_DIR="$PWD" HOME="$HOME" PATH="$PATH" bash -c "echo $path_expr")"
+              if [ -f "$resolved" ]; then
+                echo "OK: '$path_expr' (from command: $cmd) resolves to a real file ($resolved) under Antigravity's own env vars"
+              else
+                echo "::error::hook script reference does NOT resolve under Antigravity's own declared env vars — '$path_expr' (from command: $cmd) expands to '$resolved' (not a real file) when only AGY_PLUGIN_ROOT/AGY_PROJECT_DIR are set and no CLAUDE_PLUGIN_ROOT/CLAUDE_PROJECT_DIR are present (Antigravity does not set Claude-Code-only variables). This is the tracked product defect: hooks/hooks.json (shared via the PR #80 symlink) still hardcodes CLAUDE_PLUGIN_ROOT with no fallback; COMPATIBILITY.md's own 'Action Needed' column says this env-var adaptation was required but it was never applied."
+                fail=1
+              fi
+            done <<< "$refs"
+          done < <(jq --raw-output0 '.. | .command? // empty' "$HOOKS_JSON")
+
+          test "$total_refs" -gt 0 || { echo "::error::found no \${VAR}/path.sh hook-script references anywhere in installed hooks.json — this assertion would be vacuous"; exit 1; }
+          echo "Checked $total_refs hook-script reference(s)."
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::Antigravity hook-resolution assertion FAILED. This step is continue-on-error so it does not block unrelated merges, but this is a real, tracked product defect in harnesses/antigravity/marc + harnesses/claude-code/marc/hooks, not a test bug — do not weaken this assertion to force a pass."
             exit 1
           fi
-          echo "N/A: Antigravity has no hooks concept (no hooks/ directory shipped or installed) — nothing to assert here, by design, not by omission."
-
-          echo "Antigravity harness check: OK (plugin installed, all seven components registered, bundled scripts resolve against the installed copy, hooks explicitly N/A)."
+          echo "Antigravity hook-resolution check: all hook commands resolve to real files under Antigravity's own declared env vars."
 
       # Always-visible status for the Antigravity step above, regardless of
       # whether it ran, was skipped (fork PR — expected, honest SKIP), or
@@ -929,6 +996,16 @@ jobs:
               } >> "$GITHUB_STEP_SUMMARY" ;;
             failure) echo "Antigravity Tier 2 coverage: FAILED — see the step above and the job summary." ;;
             *) echo "Antigravity Tier 2 coverage: outcome '${{ steps.antigravity_install.outcome }}' unrecognized." ;;
+          esac
+
+          case "${{ steps.antigravity_hooks.outcome }}" in
+            success) echo "Antigravity hook-resolution coverage: RAN and PASSED." ;;
+            skipped) echo "Antigravity hook-resolution coverage: SKIPPED (install step did not succeed — see above)." ;;
+            failure) {
+                echo "### :red_circle: Antigravity hook-resolution coverage: FAILED (known, tracked product defect)"
+                echo "hooks/hooks.json (shared with Claude Code via the PR #80 symlink) hardcodes CLAUDE_PLUGIN_ROOT with no fallback in every hook command. Antigravity does not set that variable (it sets AGY_PLUGIN_ROOT per compile.json), so these hooks do not resolve under real Antigravity runtime. This step is continue-on-error and does not block the job, but it is a real product defect, not a passing test — see issue #167 / PR #168 discussion."
+              } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "Antigravity hook-resolution coverage: outcome '${{ steps.antigravity_hooks.outcome }}' unrecognized." ;;
           esac
 
       # Tier 2 — Copilot harness install + component registration (issue #127
