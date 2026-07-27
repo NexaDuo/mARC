@@ -51,7 +51,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Antigravity, where `agents_dir` and `config_dir` are the same directory),
   shows the user what it found, and on confirmation moves it to the new path
   and offers to delete the obsolete file, mirroring the existing
-  `team.config` → `team.toml` migration.
+  `team.config` → `team.toml` migration. The Antigravity no-op (where
+  `agents_dir` and `config_dir` are literally the same path) is an
+  unconditional, string-comparison hard gate that sits first in the block and
+  precedes every destructive instruction, not a parenthetical a reader could
+  skim past — reaching the delete step requires the two paths to have
+  already been confirmed distinct. The instruction's stated reason to delete
+  the old file was also corrected: once `.agents/team.toml` exists,
+  the SessionStart hook's fallback branch never runs again, so a stale
+  legacy file goes silently stale, not "still nagging" — the real risk is
+  drift between two live configs once reads prefer the new path.
 - **Legacy-path fallback in the SessionStart hook was indistinguishable from
   the current path.** The Claude Code and Copilot `hooks.json` printed the
   same config output whether it was resolved from `{{ agents_dir }}/team.toml`
