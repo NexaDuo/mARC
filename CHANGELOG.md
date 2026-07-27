@@ -42,6 +42,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hook silently found nothing. It now checks `.agents/team.toml` first and
   falls back to `.github/copilot/team.toml`, mirroring the Claude Code hook's
   resolution order (PR #166).
+- **`/marc:init` could write a second, silently-stale `team.toml`.** The
+  "never overwrite without asking" check only looked at the new
+  `{{ agents_dir }}/team.toml` path, so a repo that already had a legacy
+  `{{ config_dir }}/team.toml` ended up with both files — reads prefer
+  `.agents/`, so the old one became a decoy that still looked live.
+  `core/skills/init/SKILL.md` now detects the legacy path first (skipped for
+  Antigravity, where `agents_dir` and `config_dir` are the same directory),
+  shows the user what it found, and on confirmation moves it to the new path
+  and offers to delete the obsolete file, mirroring the existing
+  `team.config` → `team.toml` migration.
+- **Legacy-path fallback in the SessionStart hook was indistinguishable from
+  the current path.** The Claude Code and Copilot `hooks.json` printed the
+  same config output whether it was resolved from `{{ agents_dir }}/team.toml`
+  or the legacy `{{ config_dir }}/team.toml`, so a repo sitting on the
+  fallback got no signal to migrate. Both hooks now emit one extra line
+  naming the deprecated path and pointing at `/marc:init` when the fallback
+  branch fires (Antigravity shares Claude Code's hooks via symlink and, since
+  its legacy fallback path is never populated in practice, is unaffected).
 
 ## [0.21.0] - 2026-07-21
 

@@ -164,6 +164,26 @@ mkdir -p "$ROOT/.agents"
 
 Never overwrite an existing `team.toml` without showing the user the current
 file and the proposed one and getting explicit confirmation to replace it.
+This check MUST cover both the new path (`.agents/team.toml`) and the
+legacy one (`.claude/team.toml`) — checking only the new path misses a
+pre-existing legacy file entirely and silently produces two live configs.
+
+**Legacy migration (`.claude/team.toml` → `.agents/team.toml`):**
+before composing a fresh file, check whether `.agents` differs from
+`.claude` for this harness (it does not for Antigravity, where both
+resolve to `.agents` — skip this step there, there is nothing to migrate) and,
+if so, whether `$ROOT/.claude/team.toml` already exists. If it does:
+- Show the user its content and tell them plainly what you're about to do:
+  move it to `$ROOT/.agents/team.toml` (same schema, only the location
+  changed — no field-level conversion needed, unlike the `team.config` case
+  below).
+- On an explicit "yes", write it to the new path and **offer to delete the
+  obsolete `.claude/team.toml`** — leaving it only re-triggers the
+  SessionStart deprecation notice on every session and risks it drifting out of
+  sync with the new file it no longer feeds.
+- Never write a fresh `.agents/team.toml` from discovered facts while
+  an unmigrated legacy file still exists; that is exactly the split-brain this
+  step prevents.
 
 **Legacy migration (`team.config` → `team.toml`):** if the repo still has a
 pre-0.11.0 `.claude/team.config`, carry its values into the TOML you compose
