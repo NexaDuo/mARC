@@ -167,7 +167,7 @@ agy plugin install ./mARC/harnesses/antigravity/marc
 
 ## Bind mARC to a repo (optional but recommended)
 
-Run **`/marc:init`** in the consuming repo. It scaffolds the repository configuration (`.agents/team.toml`). This config pins the GitHub org and repo, the Project number, key source paths, and the validation command so `@techlead` and the specialists do not have to guess. It shows you every file before writing anything. If you prefer to set it up by hand, copy [`docs/team.toml.example`](docs/team.toml.example) and fill it in. Note that a repository's local `.agents/` configuration folder overrides the plugin, which in turn overrides user config.
+Run **`/marc:init`** in the consuming repo. It scaffolds the repository configuration (`.agents/team.toml`). This config pins the GitHub org and repo, the Project number, key source paths, and the validation command so `@techlead` and the specialists do not have to guess. It shows you every file before writing anything. If you prefer to set it up by hand, copy [`docs/team.toml.example`](docs/team.toml.example) and fill it in. Note that a repository's local `.agents/` configuration folder overrides the plugin, which in turn overrides user config. For backward compatibility, a pre-existing `.claude/team.toml` is still read as a fallback if `.agents/team.toml` is absent (harness-dependent legacy path; see each harness's `COMPATIBILITY.md`).
 
 ## Harness Architecture & Compatibility
 

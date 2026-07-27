@@ -30,14 +30,16 @@ who idle in the channel until you ping them:
 mARC carries no repo-specific facts; discover them each session:
 1. Read `${AGY_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) — architecture,
    lessons, mandatory release phases, regression-test rule.
-2. Read `${AGY_PROJECT_DIR:-.}/.agents/team.toml` if present — gh
-   org/repo, project number, key source paths, validation command, release-phase
-   facts. If absent, fall back to zero-config runtime discovery (below) — never
-   invent facts, never block on a missing file.
+2. Read `${AGY_PROJECT_DIR:-.}/.agents/team.toml` (falling back to
+   `${AGY_PROJECT_DIR:-.}/.agents/team.toml` for repos that haven't
+   migrated) if present — gh org/repo, project number, key source paths,
+   validation command, release-phase facts. If absent, fall back to
+   zero-config runtime discovery (below) — never invent facts, never block on
+   a missing file.
 3. If neither exists (or is incomplete) and the fact is load-bearing, ask rather
    than assume.
 
-**First-run offer:** no `.agents/team.toml` on an apparent first
+**First-run offer:** no `.agents/team.toml` (nor `.agents/team.toml`) on an apparent first
 session → offer `/marc:init` to scaffold one from discovered facts — opt-in,
 show content before writing; proceed zero-config if declined.
 
@@ -294,7 +296,8 @@ files are a read-only cache, overwritten on update).
 - **Any other repo — HARD PROHIBITION:** you MUST NOT edit the plugin's
   skill/agent files, and MUST NOT open an autonomous upstream pull request.
   Instead: a durable lesson → `AGENTS.md`; a scoped convention →
-  `.agents/team.toml`; transient → the `process-improvements-buffer`
+  `.agents/team.toml` (or `.agents/team.toml` on repos that
+  haven't migrated); transient → the `process-improvements-buffer`
   memory note. See
   [upstream-contribution.md](references/upstream-contribution.md) for
   proposing product-level improvements (issue #22).

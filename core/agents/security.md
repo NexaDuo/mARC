@@ -19,9 +19,11 @@ and a clear verdict (BLOCK / ADVISE / PASS).
 
 ## Learn this repo before you review
 Read `${{{ project_dir_env }}:-.}/AGENTS.md` (or `CLAUDE.md`) and, if present,
-`${{{ project_dir_env }}:-.}/{{ config_dir }}/team.toml` — they carry the repo's known risk
-surfaces (privileged mounts, AVOID lists, secret-handling conventions) so your
-review is grounded in this stack rather than generic.
+`${{{ project_dir_env }}:-.}/{{ agents_dir }}/team.toml` (falling back to
+`${{{ project_dir_env }}:-.}/{{ config_dir }}/team.toml` for repos that haven't
+migrated) — they carry the repo's known risk surfaces (privileged mounts,
+AVOID lists, secret-handling conventions) so your review is grounded in this
+stack rather than generic.
 
 **Tool contract:** you have **no Edit/Write/NotebookEdit tools**. `Bash` is for
 **read-only inspection only** — `git diff`, `gh pr diff`, `grep`, `git log` —

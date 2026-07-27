@@ -4,6 +4,37 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-07-27
+
+### Changed
+- **Per-repo config default moves to `.agents/team.toml`, with `.claude/team.toml`
+  kept as a backward-compatible fallback (#163, PR #166).** `core/agents/*.md`
+  (all six specialists), `core/skills/tech-lead/SKILL.md`, and
+  `core/skills/init/SKILL.md` now read the new `{{ agents_dir }}/team.toml`
+  path first and fall back to the legacy `{{ config_dir }}/team.toml` path,
+  matching the fallback semantics already shipped in `hooks/hooks.json` and
+  `core/scripts/board.py` / `token_telemetry.py`. The GitHub Copilot harness
+  gained the missing `agents_dir` compile key so `/marc:init` no longer ships
+  a literal `{{ agents_dir }}` placeholder.
+
+### Fixed
+- **Cross-harness find-and-replace regressions from the `.agents/` migration.**
+  `harnesses/copilot/marc/compile.json` was missing `agents_dir`; the
+  legacy-migration line in `core/skills/init/SKILL.md` now templates the
+  correct per-harness legacy path (`.claude/team.config` for Claude Code,
+  `.agents/team.config` for Antigravity, `.github/copilot/team.config` for
+  Copilot) instead of a hardcoded `.claude/team.config`.
+- **Reverted an accidental `.claude/settings.json` → `.agents/settings.json`
+  rename.** Claude Code only reads `.claude/settings.json`; the rename had
+  silently disabled this repo's own `enabledPlugins.marc@nexaduo` pin. The
+  `.agents/team.toml` config-path migration is unaffected and stays.
+- Corrected the self-contradictory `hooks/hooks.json` deprecation message
+  (it claimed ".agents/team.toml only" while implementing a `.claude/`
+  fallback in the same command), the `COMPATIBILITY.md` table's mismatched
+  `team.toml` link, and the README's overstated hard-cutover wording.
+- Removed the one-off, unreferenced `fix_files.py` migration script from the
+  repo root.
+
 ## [0.21.0] - 2026-07-21
 
 ### Added
