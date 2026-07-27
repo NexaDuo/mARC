@@ -34,6 +34,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `team.toml` link, and the README's overstated hard-cutover wording.
 - Removed the one-off, unreferenced `fix_files.py` migration script from the
   repo root.
+- **Copilot `sessionStart` hook never learned the `.agents/team.toml` write
+  path.** `compile.json` gained `agents_dir` so `/marc:init` writes
+  `.agents/team.toml`, but `harnesses/copilot/marc/hooks/hooks.json` (hand-
+  maintained, not templated from `core/`) still only read
+  `.github/copilot/team.toml`, so a freshly-initialized repo's sessionStart
+  hook silently found nothing. It now checks `.agents/team.toml` first and
+  falls back to `.github/copilot/team.toml`, mirroring the Claude Code hook's
+  resolution order (PR #166).
 
 ## [0.21.0] - 2026-07-21
 
