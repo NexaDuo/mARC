@@ -56,6 +56,7 @@ practice).
 - [2026-07-21-brief-agy-marketplace-clone-free-install.md](2026-07-21-brief-agy-marketplace-clone-free-install.md) — research brief: no clone-free `agy` (Antigravity) marketplace install exists (#151).
 - [2026-07-21-brief-loop-engineering-guardrails.md](2026-07-21-brief-loop-engineering-guardrails.md) — research brief on loop-engineering guardrails (#154).
 - [2026-07-24-decision-distribution-channel-marketplace-only.md](2026-07-24-decision-distribution-channel-marketplace-only.md) — decision record: the Claude Code plugin marketplace remains mARC's only supported install channel; `skills.sh`, `npx claude-plugins`, and a self-owned `npx` installer considered and rejected (#159, #160, #161).
+- [2026-07-29-decision-ai-memory-rejected.md](2026-07-29-decision-ai-memory-rejected.md) — decision record: mARC does not adopt `akitaonrails/ai-memory` (install-channel conflict, no PR-review gate on its writes); three of its conventions tracked separately as a follow-up (#175, #176).
 
 ## Landing process (write policy)
 
