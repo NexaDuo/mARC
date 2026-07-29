@@ -26,8 +26,9 @@ truth and a `db/` directory holding SQLite (FTS5 + optional embeddings) purely
 for on-demand retrieval — not an always-loaded context. It supports a
 zero-LLM / no-embeddings mode, writes via automatic lifecycle hooks, an MCP
 tool, or a CLI (`ai-memory write-page`, with `--pinned` to exempt a page from
-decay), is MIT-licensed, has 1,297 stars, and shipped release `v1.19.2` as
-recently as 2026-07-28. It advertises portability across agent CLIs including
+decay), is MIT-licensed, has 1,297 stars, and its latest release tag is
+`v1.19.2`, with the repository last pushed 2026-07-28. It advertises
+portability across agent CLIs including
 Claude Code, Codex, Devin CLI, Cursor, Gemini CLI, Antigravity CLI, and VS Code
 Copilot. This is an actively maintained, competent project, and the rejection
 below is **not** a quality judgment.
