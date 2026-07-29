@@ -89,12 +89,14 @@ daemon, the install channel, or the unreviewed writes — tracked separately in
 
 ## Side observation
 
-Serena is already present in this repo (as a code-navigation MCP tool) and
-its project-memories feature — plain markdown files in `.serena/memories/`,
-agent-fetched on demand by inferred relevance, no daemon — is effectively
-unused (`.serena/memories/` is empty, gitignored). If on-demand, daemon-free
-project memory is ever wanted, that capability is already installed and paid
-for.
+Serena is available as an MCP server in some local dev environments (it is
+not tracked in this repo — `.serena/` is gitignored, and `git ls-files` shows
+no Serena paths). Where it is running, its project-memories feature — plain
+markdown files in `.serena/memories/`, agent-fetched on demand by inferred
+relevance, no daemon — offers exactly the on-demand, daemon-free pattern
+above. If daemon-free on-demand project memory is ever wanted repo-wide,
+that pattern is already reachable without adopting a new dependency, rather
+than one that would need to be built.
 
 ## Revisit conditions
 
