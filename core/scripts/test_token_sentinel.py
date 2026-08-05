@@ -128,12 +128,95 @@ def write_multiturn(dirpath: str, name: str, turns: list[dict]) -> str:
     return path
 
 
+def write_sum_heavy_turn(dirpath: str, name: str, model: str, requests: int,
+                         per_request: int) -> str:
+    """One turn of `requests` assistant tool calls, each with the SAME modest
+    per-request context (`per_request` fresh tokens).
+
+    The per-turn measure SUMS these, so the turn's total can cross the band while
+    no single request ever holds a large context — the sum-vs-snapshot shape the
+    headroom gate exists to filter.
+    """
+    path = os.path.join(dirpath, name)
+    lines: list[dict] = [{"type": "user", "message": {"role": "user", "content": "go"}}]
+    for i in range(requests):
+        lines.append({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": model,
+                "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {}}],
+                "usage": {"input_tokens": per_request,
+                          "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0},
+            },
+        })
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in lines:
+            fh.write(json.dumps(rec) + "\n")
+    return path
+
+
+def write_mixed_turn(dirpath: str, name: str, main_model: str, main_tokens: int,
+                     side_model: str, side_tokens: int) -> str:
+    """One real user turn containing ONE main-thread assistant tool-call
+    request (small context) followed DIRECTLY by ONE sidechain/subagent
+    assistant request (large context) — no intervening `type: user` record in
+    between, so both land in the SAME analyzed turn (mirrors a Task-tool
+    subagent dispatch happening inside the current turn). Exercises the exact
+    ordering bug from #178 follow-up: a sidechain assistant message must not
+    inflate `max_context`, though it must still count toward the turn's cost
+    totals (e.g. `raw_tokens`).
+    """
+    path = os.path.join(dirpath, name)
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": "do a thing"}},
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": main_model,
+                "content": [{"type": "tool_use", "id": "m0", "name": "Bash", "input": {}}],
+                "usage": {"input_tokens": main_tokens, "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0},
+            },
+        },
+        {
+            "type": "assistant",
+            "isSidechain": True,
+            "message": {
+                "role": "assistant",
+                "model": side_model,
+                "content": [{"type": "tool_use", "id": "s0", "name": "Task", "input": {}}],
+                "usage": {"input_tokens": side_tokens, "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0},
+            },
+        },
+    ]
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in lines:
+            fh.write(json.dumps(rec) + "\n")
+    return path
+
+
 def run_hook(env_tmp: str, transcript_path: str | None, session_id: str,
-             stdin_override: str | None = None) -> tuple[int, str]:
+             stdin_override: str | None = None,
+             extra_env: dict | None = None,
+             tokens_threshold: int | None = TOKENS_THRESHOLD) -> tuple[int, str]:
     env = dict(os.environ)
     env["TMPDIR"] = env_tmp                       # isolate the debounce state dir
     env["MARC_TOKEN_GUARD_THRESHOLD"] = str(THRESHOLD)
-    env["MARC_TOKEN_GUARD_TOKENS_THRESHOLD"] = str(TOKENS_THRESHOLD)
+    # Inherited MARC_CONTEXT_WINDOW from the developer's shell would silently
+    # change the derived band, so pin it unless a test overrides it on purpose.
+    env.pop("MARC_CONTEXT_WINDOW", None)
+    if tokens_threshold is None:
+        # Exercise the DERIVED band (from the context window) rather than an
+        # explicit override.
+        env.pop("MARC_TOKEN_GUARD_TOKENS_THRESHOLD", None)
+    else:
+        env["MARC_TOKEN_GUARD_TOKENS_THRESHOLD"] = str(tokens_threshold)
+    if extra_env:
+        env.update({k: str(v) for k, v in extra_env.items()})
     if stdin_override is not None:
         stdin_text = stdin_override
     else:
@@ -342,6 +425,109 @@ def main() -> int:
             ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
             check("generation-dominated" in ctx,
                   "generation-dominated advisory names the dominant token type")
+
+        # ---- Context-window awareness + headroom gate ----------------------
+        #
+        # Reported live: on a 1M-window session the guard fired repeatedly while
+        # the statusline showed ~10% context used, so its advice ("consider
+        # /compact") was wrong -- there was nothing to reclaim. Two distinct
+        # causes, one test each.
+        #
+        # (a) The band was an ABSOLUTE calibrated for a 200K window. Derived from
+        #     MARC_CONTEXT_WINDOW instead, a 1M session gets a 650K band, so a
+        #     turn weighing ~200K (past the old 130K absolute) stays quiet.
+        big_window_turn = write_multiturn(fixtures, "big_window.jsonl", [
+            {"model": SONNET, "cw": 200_000, "cr": 0, "calls": moderate_calls},
+        ])
+        rc, out = run_hook(state_tmp, big_window_turn, "sess-bigwindow",
+                           tokens_threshold=None,
+                           extra_env={"MARC_CONTEXT_WINDOW": 1_000_000})
+        check(rc == 0, "1M window, 200K weighted turn: exit 0")
+        check(out.strip() == "",
+              "1M-window session: a 200K-weighted turn is under the DERIVED "
+              "band (650K) and does not warn, though it passes the old 130K "
+              "absolute")
+
+        # The same fixture on a 200K window must still warn -- the derived band
+        # is 130K there, so this proves the change is window-relative and not
+        # just a blanket loosening.
+        rc, out = run_hook(state_tmp, big_window_turn, "sess-smallwindow",
+                           tokens_threshold=None,
+                           extra_env={"MARC_CONTEXT_WINDOW": 200_000})
+        check(rc == 0, "200K window, same 200K-weighted turn: exit 0")
+        check(out.strip() != "",
+              "200K-window session: the SAME turn crosses the derived 130K "
+              "band and warns (change is window-relative, not a loosening)")
+
+        # (b) The per-turn measure is a SUM over API requests, so many small
+        #     calls accumulate past the band while the real context stays small.
+        #     Compacting cannot help there, so the headroom gate suppresses it.
+        sum_heavy = write_sum_heavy_turn(fixtures, "sum_heavy.jsonl", SONNET,
+                                         requests=20, per_request=10_000)
+        rc, out = run_hook(state_tmp, sum_heavy, "sess-sumheavy",
+                           tokens_threshold=150_000,
+                           extra_env={"MARC_CONTEXT_WINDOW": 1_000_000})
+        check(rc == 0, "sum-heavy turn, small per-request context: exit 0")
+        check(out.strip() == "",
+              "20 requests x 10K = 200K summed crosses a 150K band, but the "
+              "largest single-request context (10K of 1M) is far under the "
+              "headroom floor: no warn")
+
+        # Same summed total, but concentrated in ONE large request: the context
+        # really is large, so the advisory must still fire. This is the guard's
+        # actual purpose and must not be gated away.
+        snapshot_heavy = write_sum_heavy_turn(fixtures, "snapshot_heavy.jsonl",
+                                              SONNET, requests=1,
+                                              per_request=600_000)
+        rc, out = run_hook(state_tmp, snapshot_heavy, "sess-snapheavy",
+                           tokens_threshold=150_000,
+                           extra_env={"MARC_CONTEXT_WINDOW": 1_000_000})
+        check(rc == 0, "snapshot-heavy turn: exit 0")
+        check(out.strip() != "",
+              "a single 600K-context request on a 1M window is past the "
+              "headroom floor and still warns")
+        if out.strip():
+            data = parse_advisory(out)
+            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
+            check("window" in ctx,
+                  "advisory reports the snapshot-vs-window figure, so the "
+                  "per-turn sum is not mistaken for the context size")
+
+        # ---- Sidechain contamination of max_context (origin: #178 follow-up) --
+        #
+        # A large subagent/sidechain request landing in the SAME turn as a
+        # small main-thread request must NOT inflate max_context (the
+        # statusline-snapshot measure): before the fix, the sidechain's huge
+        # single-request context won the max() and defeated the headroom
+        # gate, firing the context-size advisory even though the operator's
+        # own thread never held anywhere near that much context.
+        MAIN_CTX = 500
+        SIDE_CTX = 2_000_000
+        MIXED_WINDOW = 2_500_000  # headroom floor (0.5 * window) = 1_250_000
+        mixed = write_mixed_turn(fixtures, "mixed_sidechain.jsonl",
+                                 SONNET, MAIN_CTX, SONNET, SIDE_CTX)
+        rc, out = run_hook(state_tmp, mixed, "sess-mixed-sidechain",
+                           tokens_threshold=300_000,
+                           extra_env={"MARC_CONTEXT_WINDOW": MIXED_WINDOW})
+        check(rc == 0, "mixed main+sidechain turn: exit 0")
+        check(out.strip() == "",
+              "large sidechain request does NOT inflate max_context: the "
+              "small main-thread snapshot keeps the headroom gate suppressed "
+              "and no advisory fires (fails pre-fix, where the sidechain "
+              "value wins the max_context comparison)")
+
+        # Companion assertion: sidechain usage must still be counted in the
+        # turn's COST totals (raw_tokens) -- the fix must not silently drop
+        # subagent spend while fixing the snapshot. Driven through the real
+        # manual-CLI subprocess path (same script, non-hook mode).
+        cli = subprocess.run(
+            [sys.executable, SENTINEL, mixed, "--tokens", "1", "--calls", "1"],
+            capture_output=True, text=True,
+        )
+        check(cli.returncode in (0, 1), "manual CLI on mixed transcript: runs cleanly")
+        check(f"raw tokens: {MAIN_CTX + SIDE_CTX}" in cli.stdout,
+              "sidechain usage is still counted in the turn's raw-token cost "
+              "total, even though it's excluded from max_context")
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")

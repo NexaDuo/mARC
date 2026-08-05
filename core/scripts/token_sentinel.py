@@ -29,7 +29,10 @@ Two modes share ONE counting implementation (DRY):
       - context-size (#81): the CURRENT turn's tokens-processed has crossed a
         threshold regardless of model tier or call count -> catches the case a
         MODERATE call count still drags in an oversized re-read context, below
-        the runaway-loop band. Suggest `/compact` or a fresh session.
+        the runaway-loop band. Suggest `/compact` or a fresh session. The band
+        DERIVES from MARC_CONTEXT_WINDOW, and is additionally gated on real
+        window headroom (the largest single-request context in the turn), so it
+        does not fire on a 1M-window session sitting at ~10% of its window.
         <hook-json-on-stdin> | python3 token_sentinel.py --hook
 
 Usage (CLI):
@@ -39,13 +42,20 @@ Usage (CLI):
                       ~/.claude/projects/<encoded>/ is used (falling back to the
                       newest log across all projects).
 
-    Thresholds (override with flags):
+    Thresholds (override with flags; the CLI reads only these flags, not the
+    env vars below — those apply to the `--hook` path):
       --calls N       flag a turn with more than N assistant tool calls  (default 25)
-      --tokens N      flag a turn processing more than N tokens           (default 150000)
+      --tokens N      flag a turn processing more than N tokens           (default 130000)
 
-    Env vars (shared with the hook, see below):
+    Env vars (`--hook` path only; NOT read by the manual CLI's --tokens/--calls flags):
       MARC_TOKEN_GUARD_THRESHOLD          call-count band (default 25)
-      MARC_TOKEN_GUARD_TOKENS_THRESHOLD   context-size / per-turn-token band (default 150000)
+      MARC_TOKEN_GUARD_TOKENS_THRESHOLD   context-size / per-turn-token band
+                                          (default: 65% of MARC_CONTEXT_WINDOW)
+      MARC_CONTEXT_WINDOW                 the session's context window in tokens
+                                          (default 200000). Set this to 1000000
+                                          on a 1M-window session; the token band
+                                          scales with it and the advisory stops
+                                          firing on turns with ample headroom.
 
 The per-turn token metric sums, over every assistant message in the turn,
 `usage.input_tokens + usage.cache_read_input_tokens +
@@ -102,8 +112,36 @@ CACHE_READ_WEIGHT = 0.1  # cache_read_input_tokens counted at ~1/10th rate; tune
 # threshold. A genuinely generation/cache-creation-dominated turn of the same
 # raw size weights close to its raw value and still crosses it. Override with
 # the env var if a repo's real workload needs a different band.
+#
+# This absolute stays as the back-compat floor, but it is no longer the primary
+# calibration: it equals CONTEXT_WINDOW_FRACTION * DEFAULT_CONTEXT_WINDOW, so
+# the derived default below reproduces it exactly on a 200K-window session.
 DEFAULT_HOOK_TOKENS_THRESHOLD = 130_000
 HOOK_TOKENS_THRESHOLD_ENV = "MARC_TOKEN_GUARD_TOKENS_THRESHOLD"
+
+# --- Context-window awareness (origin: #178 · 2026-08-05) -------------------
+# The band above was calibrated as an ABSOLUTE against a 200K context window,
+# where ~130K weighted tokens in one turn genuinely means "close to full". On a
+# 1M-window session the same absolute fires constantly while the session sits at
+# ~10% of its window: the advice ("consider /compact") is then actively wrong,
+# because there is nothing to reclaim and compaction would discard live context
+# for no benefit. Two fixes, both here:
+#
+#   1. The token band DERIVES from the window (CONTEXT_WINDOW_FRACTION) instead
+#      of being a fixed number, so a 1M session gets a 650K band. An explicit
+#      MARC_TOKEN_GUARD_TOKENS_THRESHOLD still wins over the derived value.
+#   2. A HEADROOM gate (MIN_CONTEXT_FRACTION_TO_WARN): the per-turn measure is a
+#      SUM over the turn's API requests, so a turn with many small tool calls
+#      accumulates past the band while the actual context stays small. That is
+#      the false positive users notice, because the statusline shows the real
+#      per-request context (a snapshot) and the two numbers disagree — the sum
+#      can exceed the snapshot several times over. The advisory now also
+#      requires the largest single-request context in the turn to be a
+#      meaningful fraction of the window before it suggests compacting.
+DEFAULT_CONTEXT_WINDOW = 200_000
+CONTEXT_WINDOW_ENV = "MARC_CONTEXT_WINDOW"
+CONTEXT_WINDOW_FRACTION = 0.65  # 0.65 * 200_000 == DEFAULT_HOOK_TOKENS_THRESHOLD
+MIN_CONTEXT_FRACTION_TO_WARN = 0.5  # suppress while real context is under half
 
 # --- Mid-session model-switch guard (origin: #73) --------------------------
 # Switching the model mid-session invalidates the prompt cache: the prefix
@@ -240,6 +278,18 @@ def analyze(path: str):
                           split rationale as `input_tokens`, #149)
       last_ts        ISO timestamp of the last assistant message seen in the
                      turn ("" if none) — additive field, origin: #149
+      max_context    the LARGEST single-request context among the turn's
+                     MAIN-THREAD (non-sidechain) assistant messages (flat
+                     input + cache_read + cache_creation of one message).
+                     Unlike `tokens`/`raw_tokens`, which SUM across the turn's
+                     requests (main-thread AND sidechain), this is a SNAPSHOT
+                     of the operator's own thread — it is the number the
+                     statusline shows as the current context size, and it is
+                     what actually determines whether compacting would help.
+                     A subagent/sidechain request, however large, never
+                     contributes here (origin: #178 follow-up), so it can't
+                     inflate the snapshot past what the statusline reports.
+                     Feeds the headroom gate on the context-size band.
 
     Plus MAIN-THREAD-only fields for the model-switch guard (origin: #73), which
     deliberately EXCLUDE subagent/sidechain assistant messages (`isSidechain` is
@@ -258,6 +308,7 @@ def analyze(path: str):
         t = {"prompt": prompt, "model": "-", "calls": 0, "requests": 0,
              "tokens": 0, "raw_tokens": 0, "fresh_tokens": 0, "cache_read_tokens": 0,
              "output_tokens": 0, "input_tokens": 0, "cache_write_tokens": 0, "last_ts": "",
+             "max_context": 0,
              "main_model": "-", "cw": 0, "cr": 0,
              "_main_seen": False}
         turns.append(t)
@@ -287,8 +338,13 @@ def analyze(path: str):
                 if n_calls:
                     current["requests"] += 1
                 usage = msg.get("usage")
+                this_context = 0
                 if isinstance(usage, dict):
-                    current["raw_tokens"] += usage_tokens(usage)
+                    this_context = usage_tokens(usage)
+                    # Cost accumulators count EVERY assistant message, main-thread
+                    # or sidechain: subagent spend is real spend (do not gate these
+                    # on isSidechain below, origin: #178 follow-up).
+                    current["raw_tokens"] += this_context
                     fresh, cache_read = usage_components(usage)
                     current["fresh_tokens"] += fresh
                     current["cache_read_tokens"] += cache_read
@@ -299,10 +355,16 @@ def analyze(path: str):
                 ts = rec.get("timestamp")
                 if isinstance(ts, str) and ts:
                     current["last_ts"] = ts
-                # Main-thread-only tracking for the switch guard (origin: #73):
-                # ignore subagent/sidechain messages entirely.
+                # Main-thread-only tracking (origin: #73, #178): ignore
+                # subagent/sidechain messages entirely for max_context (the
+                # statusline-snapshot measure), main_model, cw, and cr. A large
+                # sidechain/subagent request must NOT inflate max_context, or the
+                # context-size advisory fires on context the operator's main
+                # thread never actually holds.
                 if rec.get("isSidechain") is True:
                     continue
+                if this_context > current["max_context"]:
+                    current["max_context"] = this_context
                 if model:
                     current["main_model"] = model
                 if not current["_main_seen"] and isinstance(usage, dict):
@@ -328,13 +390,33 @@ def hook_threshold() -> int:
     return val if val > 0 else DEFAULT_HOOK_THRESHOLD
 
 
+def context_window() -> int:
+    """The session's context window in tokens (env-configurable).
+
+    Claude Code does not publish the window to hooks, so this is declared rather
+    than detected; the default reproduces the historical 200K calibration.
+    """
+    raw = os.environ.get(CONTEXT_WINDOW_ENV, "")
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_CONTEXT_WINDOW
+    return val if val > 0 else DEFAULT_CONTEXT_WINDOW
+
+
 def hook_tokens_threshold() -> int:
+    """Token band: an explicit env override wins; otherwise derive it from the
+    context window so a 1M-window session is not banded like a 200K one.
+    """
     raw = os.environ.get(HOOK_TOKENS_THRESHOLD_ENV, "")
     try:
         val = int(raw)
     except (TypeError, ValueError):
-        return DEFAULT_HOOK_TOKENS_THRESHOLD
-    return val if val > 0 else DEFAULT_HOOK_TOKENS_THRESHOLD
+        val = 0
+    if val > 0:
+        return val
+    derived = round(context_window() * CONTEXT_WINDOW_FRACTION)
+    return derived if derived > 0 else DEFAULT_HOOK_TOKENS_THRESHOLD
 
 
 def _state_path(session_key: str, kind: str = "") -> str:
@@ -420,16 +502,28 @@ def build_advisory(*, model: str, count: int, threshold: int) -> dict:
 # --- Context-size / per-turn-token guard (origin: #81) ----------------------
 
 def should_warn_tokens(*, tokens: int, threshold: int, turn_index: int,
-                       session_key: str) -> bool:
+                       session_key: str, max_context: int | None = None,
+                       window: int | None = None) -> bool:
     """Debounced band check on tokens processed this turn, independent of
     model tier or call count — catches a moderate-call-count turn that still
     dragged in an oversized context. Same band-debounce shape as `should_warn`,
     a separate state file (`kind="tokens"`) so the two guards never clobber
     each other's memory.
+
+    HEADROOM GATE: `tokens` is a SUM over the turn's API requests, so a turn made
+    of many small tool calls can cross the band while the real context stays
+    small. `max_context` (the largest single-request context — a snapshot) and
+    `window` gate that case out: below MIN_CONTEXT_FRACTION_TO_WARN of the
+    window there is nothing meaningful to reclaim, so advising `/compact` would
+    be wrong. Both are optional; omit them (or pass None) to skip the gate and
+    keep the pre-existing sum-only behaviour.
     """
     band = tokens // threshold  # 0 below N, 1 in [N,2N), 2 in [2N,3N), ...
     if band < 1:
         return False
+    if max_context is not None and window is not None and window > 0:
+        if max_context < window * MIN_CONTEXT_FRACTION_TO_WARN:
+            return False
     state_path = _state_path(session_key, kind="tokens")
     state = _load_state(state_path)
     same_turn = state.get("turn") == turn_index
@@ -441,7 +535,9 @@ def should_warn_tokens(*, tokens: int, threshold: int, turn_index: int,
 
 
 def build_tokens_advisory(*, model: str, tokens: int, threshold: int,
-                          fresh: int, cache_read: int) -> dict:
+                          fresh: int, cache_read: int,
+                          max_context: int | None = None,
+                          window: int | None = None) -> dict:
     """Non-blocking PostToolUse payload for the context-size / per-turn-token
     band (same channels as the other guards: no `decision`, no exit 2).
 
@@ -464,13 +560,32 @@ def build_tokens_advisory(*, model: str, tokens: int, threshold: int,
             "Most of that is fresh input or a cache write, both full-rate, "
             "so this turn's cost is real."
         )
+    # Name the SUM/SNAPSHOT distinction explicitly: the per-turn measure is a sum
+    # over API requests, while the statusline shows the current per-request
+    # context. Reporting only the sum invites the reader to compare two numbers
+    # that are not the same quantity and conclude one of them is broken.
+    if max_context and window:
+        pct = max(1, round(100 * max_context / window))
+        context_note = (
+            f" Largest single-request context this turn was ~"
+            f"{max(1, round(max_context / 1000))}K of a "
+            f"{max(1, round(window / 1000))}K window (~{pct}%) — that snapshot, "
+            f"not this per-turn sum, is what the statusline reports and what "
+            f"determines whether compacting reclaims anything."
+        )
+    else:
+        context_note = (
+            " Note this is a SUM across the turn's API requests, not the "
+            "current context size; set MARC_CONTEXT_WINDOW to have the guard "
+            "compare against real window headroom."
+        )
     advice = (
         f"[mARC token-guard] Context-size guard: this turn has processed "
         f"~{approx_k}K weighted tokens ({model}, {kind}), past the "
         f"{threshold_k}K-token threshold, even though the tool-call count may "
-        f"still be low. {shape_note} This is advisory only, nothing was "
-        f"blocked. Consider `/compact` to shrink context before continuing, "
-        f"or starting a fresh session for the next task."
+        f"still be low. {shape_note}{context_note} This is advisory only, "
+        f"nothing was blocked. Consider `/compact` to shrink context before "
+        f"continuing, or starting a fresh session for the next task."
     )
     return {
         "systemMessage": (
@@ -619,8 +734,10 @@ def run_hook(stdin_text: str) -> int:
     tokens = current.get("tokens", 0)  # weighted measure, origin: #100
     fresh_tokens = current.get("fresh_tokens", 0)
     cache_read_tokens = current.get("cache_read_tokens", 0)
+    max_context = current.get("max_context", 0)  # snapshot, not a sum
     threshold = hook_threshold()
     tokens_threshold = hook_tokens_threshold()
+    window = context_window()
     session_key = str(payload.get("session_id") or transcript_path)
 
     advisories: list[dict] = []
@@ -644,10 +761,12 @@ def run_hook(stdin_text: str) -> int:
     # call-count band above — catches a moderate-call-count turn with an
     # oversized re-read context.
     if should_warn_tokens(tokens=tokens, threshold=tokens_threshold,
-                          turn_index=turn_index, session_key=session_key):
+                          turn_index=turn_index, session_key=session_key,
+                          max_context=max_context, window=window):
         advisories.append(build_tokens_advisory(
             model=model, tokens=tokens, threshold=tokens_threshold,
-            fresh=fresh_tokens, cache_read=cache_read_tokens))
+            fresh=fresh_tokens, cache_read=cache_read_tokens,
+            max_context=max_context, window=window))
 
     merged = _merge_advisories(advisories)
     if merged is not None:
