@@ -42,11 +42,12 @@ Usage (CLI):
                       ~/.claude/projects/<encoded>/ is used (falling back to the
                       newest log across all projects).
 
-    Thresholds (override with flags):
+    Thresholds (override with flags; the CLI reads only these flags, not the
+    env vars below — those apply to the `--hook` path):
       --calls N       flag a turn with more than N assistant tool calls  (default 25)
       --tokens N      flag a turn processing more than N tokens           (default 130000)
 
-    Env vars (shared with the hook, see below):
+    Env vars (`--hook` path only; NOT read by the manual CLI's --tokens/--calls flags):
       MARC_TOKEN_GUARD_THRESHOLD          call-count band (default 25)
       MARC_TOKEN_GUARD_TOKENS_THRESHOLD   context-size / per-turn-token band
                                           (default: 65% of MARC_CONTEXT_WINDOW)
@@ -277,12 +278,17 @@ def analyze(path: str):
                           split rationale as `input_tokens`, #149)
       last_ts        ISO timestamp of the last assistant message seen in the
                      turn ("" if none) — additive field, origin: #149
-      max_context    the LARGEST single-request context in the turn (flat
-                     input + cache_read + cache_creation of one assistant
-                     message). Unlike `tokens`/`raw_tokens`, which SUM across
-                     the turn's requests, this is a SNAPSHOT — it is the number
-                     the statusline shows as the current context size, and it is
+      max_context    the LARGEST single-request context among the turn's
+                     MAIN-THREAD (non-sidechain) assistant messages (flat
+                     input + cache_read + cache_creation of one message).
+                     Unlike `tokens`/`raw_tokens`, which SUM across the turn's
+                     requests (main-thread AND sidechain), this is a SNAPSHOT
+                     of the operator's own thread — it is the number the
+                     statusline shows as the current context size, and it is
                      what actually determines whether compacting would help.
+                     A subagent/sidechain request, however large, never
+                     contributes here (origin: #178 follow-up), so it can't
+                     inflate the snapshot past what the statusline reports.
                      Feeds the headroom gate on the context-size band.
 
     Plus MAIN-THREAD-only fields for the model-switch guard (origin: #73), which
@@ -332,11 +338,13 @@ def analyze(path: str):
                 if n_calls:
                     current["requests"] += 1
                 usage = msg.get("usage")
+                this_context = 0
                 if isinstance(usage, dict):
                     this_context = usage_tokens(usage)
+                    # Cost accumulators count EVERY assistant message, main-thread
+                    # or sidechain: subagent spend is real spend (do not gate these
+                    # on isSidechain below, origin: #178 follow-up).
                     current["raw_tokens"] += this_context
-                    if this_context > current["max_context"]:
-                        current["max_context"] = this_context
                     fresh, cache_read = usage_components(usage)
                     current["fresh_tokens"] += fresh
                     current["cache_read_tokens"] += cache_read
@@ -347,10 +355,16 @@ def analyze(path: str):
                 ts = rec.get("timestamp")
                 if isinstance(ts, str) and ts:
                     current["last_ts"] = ts
-                # Main-thread-only tracking for the switch guard (origin: #73):
-                # ignore subagent/sidechain messages entirely.
+                # Main-thread-only tracking (origin: #73, #178): ignore
+                # subagent/sidechain messages entirely for max_context (the
+                # statusline-snapshot measure), main_model, cw, and cr. A large
+                # sidechain/subagent request must NOT inflate max_context, or the
+                # context-size advisory fires on context the operator's main
+                # thread never actually holds.
                 if rec.get("isSidechain") is True:
                     continue
+                if this_context > current["max_context"]:
+                    current["max_context"] = this_context
                 if model:
                     current["main_model"] = model
                 if not current["_main_seen"] and isinstance(usage, dict):
@@ -507,7 +521,7 @@ def should_warn_tokens(*, tokens: int, threshold: int, turn_index: int,
     band = tokens // threshold  # 0 below N, 1 in [N,2N), 2 in [2N,3N), ...
     if band < 1:
         return False
-    if max_context is not None and window:
+    if max_context is not None and window is not None and window > 0:
         if max_context < window * MIN_CONTEXT_FRACTION_TO_WARN:
             return False
     state_path = _state_path(session_key, kind="tokens")

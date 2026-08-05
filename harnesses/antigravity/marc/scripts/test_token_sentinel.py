@@ -157,6 +157,48 @@ def write_sum_heavy_turn(dirpath: str, name: str, model: str, requests: int,
     return path
 
 
+def write_mixed_turn(dirpath: str, name: str, main_model: str, main_tokens: int,
+                     side_model: str, side_tokens: int) -> str:
+    """One real user turn containing ONE main-thread assistant tool-call
+    request (small context) followed DIRECTLY by ONE sidechain/subagent
+    assistant request (large context) — no intervening `type: user` record in
+    between, so both land in the SAME analyzed turn (mirrors a Task-tool
+    subagent dispatch happening inside the current turn). Exercises the exact
+    ordering bug from #178 follow-up: a sidechain assistant message must not
+    inflate `max_context`, though it must still count toward the turn's cost
+    totals (e.g. `raw_tokens`).
+    """
+    path = os.path.join(dirpath, name)
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": "do a thing"}},
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": main_model,
+                "content": [{"type": "tool_use", "id": "m0", "name": "Bash", "input": {}}],
+                "usage": {"input_tokens": main_tokens, "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0},
+            },
+        },
+        {
+            "type": "assistant",
+            "isSidechain": True,
+            "message": {
+                "role": "assistant",
+                "model": side_model,
+                "content": [{"type": "tool_use", "id": "s0", "name": "Task", "input": {}}],
+                "usage": {"input_tokens": side_tokens, "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 0},
+            },
+        },
+    ]
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in lines:
+            fh.write(json.dumps(rec) + "\n")
+    return path
+
+
 def run_hook(env_tmp: str, transcript_path: str | None, session_id: str,
              stdin_override: str | None = None,
              extra_env: dict | None = None,
@@ -450,6 +492,42 @@ def main() -> int:
             check("window" in ctx,
                   "advisory reports the snapshot-vs-window figure, so the "
                   "per-turn sum is not mistaken for the context size")
+
+        # ---- Sidechain contamination of max_context (origin: #178 follow-up) --
+        #
+        # A large subagent/sidechain request landing in the SAME turn as a
+        # small main-thread request must NOT inflate max_context (the
+        # statusline-snapshot measure): before the fix, the sidechain's huge
+        # single-request context won the max() and defeated the headroom
+        # gate, firing the context-size advisory even though the operator's
+        # own thread never held anywhere near that much context.
+        MAIN_CTX = 500
+        SIDE_CTX = 2_000_000
+        MIXED_WINDOW = 2_500_000  # headroom floor (0.5 * window) = 1_250_000
+        mixed = write_mixed_turn(fixtures, "mixed_sidechain.jsonl",
+                                 SONNET, MAIN_CTX, SONNET, SIDE_CTX)
+        rc, out = run_hook(state_tmp, mixed, "sess-mixed-sidechain",
+                           tokens_threshold=300_000,
+                           extra_env={"MARC_CONTEXT_WINDOW": MIXED_WINDOW})
+        check(rc == 0, "mixed main+sidechain turn: exit 0")
+        check(out.strip() == "",
+              "large sidechain request does NOT inflate max_context: the "
+              "small main-thread snapshot keeps the headroom gate suppressed "
+              "and no advisory fires (fails pre-fix, where the sidechain "
+              "value wins the max_context comparison)")
+
+        # Companion assertion: sidechain usage must still be counted in the
+        # turn's COST totals (raw_tokens) -- the fix must not silently drop
+        # subagent spend while fixing the snapshot. Driven through the real
+        # manual-CLI subprocess path (same script, non-hook mode).
+        cli = subprocess.run(
+            [sys.executable, SENTINEL, mixed, "--tokens", "1", "--calls", "1"],
+            capture_output=True, text=True,
+        )
+        check(cli.returncode in (0, 1), "manual CLI on mixed transcript: runs cleanly")
+        check(f"raw tokens: {MAIN_CTX + SIDE_CTX}" in cli.stdout,
+              "sidechain usage is still counted in the turn's raw-token cost "
+              "total, even though it's excluded from max_context")
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
