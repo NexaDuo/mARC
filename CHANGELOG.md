@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.2] - 2026-08-05
+
 ### Changed
 - **Context-size advisory is now fail-closed and opt-in by default (#181).**
   `token_sentinel.py`'s hook path no longer falls back to `DEFAULT_CONTEXT_WINDOW`
