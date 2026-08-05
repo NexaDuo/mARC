@@ -26,13 +26,16 @@ Two modes share ONE counting implementation (DRY):
         cache-read collapse) -> note the context was re-cached and suggest
         switching at a natural break / `/compact`. Subagent/sidechain model
         differences (`isSidechain`) are ignored — separate context and cache.
-      - context-size (#81): the CURRENT turn's tokens-processed has crossed a
-        threshold regardless of model tier or call count -> catches the case a
-        MODERATE call count still drags in an oversized re-read context, below
-        the runaway-loop band. Suggest `/compact` or a fresh session. The band
-        DERIVES from MARC_CONTEXT_WINDOW, and is additionally gated on real
-        window headroom (the largest single-request context in the turn), so it
-        does not fire on a 1M-window session sitting at ~10% of its window.
+      - context-size (#81, fail-closed #181): the CURRENT turn's tokens-processed
+        has crossed a threshold regardless of model tier or call count -> catches
+        the case a MODERATE call count still drags in an oversized re-read
+        context, below the runaway-loop band. Suggest `/compact` or a fresh
+        session. The band DERIVES from MARC_CONTEXT_WINDOW when it is set, and is
+        additionally gated on real window headroom (the largest single-request
+        context in the turn), so it does not fire on a 1M-window session sitting
+        at ~10% of its window. FAIL-CLOSED: with no MARC_CONTEXT_WINDOW and no
+        explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD, there is no trustworthy band
+        to check against and this guard is silent -- it never assumes 200K.
         <hook-json-on-stdin> | python3 token_sentinel.py --hook
 
 Usage (CLI):
@@ -48,14 +51,26 @@ Usage (CLI):
       --tokens N      flag a turn processing more than N tokens           (default 130000)
 
     Env vars (`--hook` path only; NOT read by the manual CLI's --tokens/--calls flags):
-      MARC_TOKEN_GUARD_THRESHOLD          call-count band (default 25)
-      MARC_TOKEN_GUARD_TOKENS_THRESHOLD   context-size / per-turn-token band
-                                          (default: 65% of MARC_CONTEXT_WINDOW)
+      MARC_TOKEN_GUARD_THRESHOLD          call-count band (default 25) -- unrelated
+                                          to the context window; always active.
+      MARC_TOKEN_GUARD_TOKENS_THRESHOLD   context-size / per-turn-token band,
+                                          an explicit override. Set this and the
+                                          context-size advisory works with NO
+                                          window known at all (the escape hatch).
       MARC_CONTEXT_WINDOW                 the session's context window in tokens
-                                          (default 200000). Set this to 1000000
-                                          on a 1M-window session; the token band
-                                          scales with it and the advisory stops
-                                          firing on turns with ample headroom.
+                                          (e.g. 1000000 on a 1M-window session).
+                                          FAIL-CLOSED (origin: #181): Claude Code
+                                          does not publish the real window to
+                                          hooks, so with neither this var NOR
+                                          MARC_TOKEN_GUARD_TOKENS_THRESHOLD set,
+                                          the context-size advisory has nothing
+                                          trustworthy to band against and stays
+                                          COMPLETELY SILENT -- it does NOT assume
+                                          200K. A wrong window makes the advice
+                                          ("consider /compact") actively wrong on
+                                          a large-window session, so guessing is
+                                          worse than saying nothing. Set either
+                                          var to opt back in.
 
 The per-turn token metric sums, over every assistant message in the turn,
 `usage.input_tokens + usage.cache_read_input_tokens +
@@ -116,6 +131,13 @@ CACHE_READ_WEIGHT = 0.1  # cache_read_input_tokens counted at ~1/10th rate; tune
 # This absolute stays as the back-compat floor, but it is no longer the primary
 # calibration: it equals CONTEXT_WINDOW_FRACTION * DEFAULT_CONTEXT_WINDOW, so
 # the derived default below reproduces it exactly on a 200K-window session.
+#
+# As of #181 this constant no longer feeds the `--hook` path either (see the
+# fail-closed note further down): with no known window and no explicit
+# MARC_TOKEN_GUARD_TOKENS_THRESHOLD, the hook emits no context-size advisory
+# rather than falling back to this number. It remains the manual CLI's
+# `--tokens` default (~line 782) — that path is an explicit, operator-invoked
+# diagnostic, not a silent hook assumption, so a documented default is fine there.
 DEFAULT_HOOK_TOKENS_THRESHOLD = 130_000
 HOOK_TOKENS_THRESHOLD_ENV = "MARC_TOKEN_GUARD_TOKENS_THRESHOLD"
 
@@ -138,6 +160,25 @@ HOOK_TOKENS_THRESHOLD_ENV = "MARC_TOKEN_GUARD_TOKENS_THRESHOLD"
 #      can exceed the snapshot several times over. The advisory now also
 #      requires the largest single-request context in the turn to be a
 #      meaningful fraction of the window before it suggests compacting.
+#
+# --- Fail-closed (origin: #181 · 2026-08-05) ---------------------------------
+# #178/#179 above still FELL BACK to DEFAULT_CONTEXT_WINDOW (200K) whenever
+# MARC_CONTEXT_WINDOW was unset, non-numeric, or <= 0 — so the original 1M-window
+# false positive survived for anyone who didn't set the var: it was observed
+# live firing the advisory against a 130K band derived from an assumed 200K on a
+# real 1M-window session. Decided (#181): a wrong window is worse than no
+# window, because the advice is then actively wrong rather than merely absent.
+# `context_window()` now returns `None` for "unknown" instead of silently
+# defaulting, and `hook_tokens_threshold()` / `run_hook()` treat "no explicit
+# threshold AND no known window" as "no band to check" — the context-size
+# advisory stays completely silent rather than assuming 200K. The call-count
+# guard (#71) and the model-switch guard (#73) do not depend on the window and
+# are unaffected.
+#
+# DEFAULT_CONTEXT_WINDOW is NOT deleted (supersede-not-delete): it still backs
+# DEFAULT_HOOK_TOKENS_THRESHOLD's derivation below as a documented calibration
+# reference, but as of #181 it no longer feeds the `--hook` path at all — the
+# hook fails closed instead of assuming it. See #181 for the decision record.
 DEFAULT_CONTEXT_WINDOW = 200_000
 CONTEXT_WINDOW_ENV = "MARC_CONTEXT_WINDOW"
 CONTEXT_WINDOW_FRACTION = 0.65  # 0.65 * 200_000 == DEFAULT_HOOK_TOKENS_THRESHOLD
@@ -390,23 +431,34 @@ def hook_threshold() -> int:
     return val if val > 0 else DEFAULT_HOOK_THRESHOLD
 
 
-def context_window() -> int:
-    """The session's context window in tokens (env-configurable).
+def context_window() -> int | None:
+    """The session's context window in tokens (env-configurable), or `None` if
+    unknown.
 
-    Claude Code does not publish the window to hooks, so this is declared rather
-    than detected; the default reproduces the historical 200K calibration.
+    Claude Code does not publish the window to hooks, so this is declared
+    rather than detected. FAIL-CLOSED (origin: #181): unset, non-numeric, or
+    <= 0 is UNKNOWN, distinct from any real value — it is deliberately NOT
+    coerced to DEFAULT_CONTEXT_WINDOW. A wrong window would make the
+    context-size advisory actively wrong (advising `/compact` when there is
+    nothing to reclaim), so the caller must treat `None` as "no band", not as
+    "assume 200K".
     """
     raw = os.environ.get(CONTEXT_WINDOW_ENV, "")
     try:
         val = int(raw)
     except (TypeError, ValueError):
-        return DEFAULT_CONTEXT_WINDOW
-    return val if val > 0 else DEFAULT_CONTEXT_WINDOW
+        return None
+    return val if val > 0 else None
 
 
-def hook_tokens_threshold() -> int:
-    """Token band: an explicit env override wins; otherwise derive it from the
-    context window so a 1M-window session is not banded like a 200K one.
+def hook_tokens_threshold() -> int | None:
+    """Token band: an explicit env override wins outright (a user who declares
+    a threshold has stated intent, regardless of the window). Otherwise derive
+    it from the context window — but ONLY if the window is known. With no
+    explicit threshold AND no known window there is no trustworthy band to
+    check against, so this returns `None` (origin: #181, fail-closed): the
+    caller must skip the context-size guard entirely rather than falling back
+    to DEFAULT_HOOK_TOKENS_THRESHOLD.
     """
     raw = os.environ.get(HOOK_TOKENS_THRESHOLD_ENV, "")
     try:
@@ -415,8 +467,11 @@ def hook_tokens_threshold() -> int:
         val = 0
     if val > 0:
         return val
-    derived = round(context_window() * CONTEXT_WINDOW_FRACTION)
-    return derived if derived > 0 else DEFAULT_HOOK_TOKENS_THRESHOLD
+    window = context_window()
+    if window is None:
+        return None
+    derived = round(window * CONTEXT_WINDOW_FRACTION)
+    return derived if derived > 0 else None
 
 
 def _state_path(session_key: str, kind: str = "") -> str:
@@ -736,8 +791,8 @@ def run_hook(stdin_text: str) -> int:
     cache_read_tokens = current.get("cache_read_tokens", 0)
     max_context = current.get("max_context", 0)  # snapshot, not a sum
     threshold = hook_threshold()
-    tokens_threshold = hook_tokens_threshold()
-    window = context_window()
+    tokens_threshold = hook_tokens_threshold()  # None -> no trustworthy band (#181)
+    window = context_window()  # None -> unknown, fail-closed (#181)
     session_key = str(payload.get("session_id") or transcript_path)
 
     advisories: list[dict] = []
@@ -757,16 +812,20 @@ def run_hook(stdin_text: str) -> int:
             advisories.append(build_switch_advisory(
                 from_model=from_model, to_model=to_model, cw=cw))
 
-    # Guard 3 (#81): context-size / per-turn-token band, independent of the
-    # call-count band above — catches a moderate-call-count turn with an
-    # oversized re-read context.
-    if should_warn_tokens(tokens=tokens, threshold=tokens_threshold,
-                          turn_index=turn_index, session_key=session_key,
-                          max_context=max_context, window=window):
-        advisories.append(build_tokens_advisory(
-            model=model, tokens=tokens, threshold=tokens_threshold,
-            fresh=fresh_tokens, cache_read=cache_read_tokens,
-            max_context=max_context, window=window))
+    # Guard 3 (#81, fail-closed #181): context-size / per-turn-token band,
+    # independent of the call-count band above — catches a moderate-call-count
+    # turn with an oversized re-read context. `tokens_threshold` is None when
+    # there is no explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD AND no known
+    # MARC_CONTEXT_WINDOW: no trustworthy band exists, so this guard is
+    # skipped entirely — no advisory, no debounce state written for it.
+    if tokens_threshold is not None:
+        if should_warn_tokens(tokens=tokens, threshold=tokens_threshold,
+                              turn_index=turn_index, session_key=session_key,
+                              max_context=max_context, window=window):
+            advisories.append(build_tokens_advisory(
+                model=model, tokens=tokens, threshold=tokens_threshold,
+                fresh=fresh_tokens, cache_read=cache_read_tokens,
+                max_context=max_context, window=window))
 
     merged = _merge_advisories(advisories)
     if merged is not None:

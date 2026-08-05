@@ -4,6 +4,22 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Context-size advisory is now fail-closed and opt-in by default (#181).**
+  `token_sentinel.py`'s hook path no longer falls back to `DEFAULT_CONTEXT_WINDOW`
+  (200K) when `MARC_CONTEXT_WINDOW` is unset, non-numeric, or `<= 0`: with no
+  trustworthy window value AND no explicit `MARC_TOKEN_GUARD_TOKENS_THRESHOLD`,
+  the context-size advisory stays completely silent instead of banding against
+  an assumed window. This closes the residual false positive from #178/PR #179,
+  where an unset `MARC_CONTEXT_WINDOW` still let the guard fire against a 130K
+  band derived from the assumed 200K on a session with a much larger real
+  window. Set either `MARC_CONTEXT_WINDOW` or `MARC_TOKEN_GUARD_TOKENS_THRESHOLD`
+  to opt back in. The call-count runaway guard (#71) and the mid-session
+  model-switch guard (#73) are unaffected — neither depends on the context
+  window.
+
 ## [0.22.1] - 2026-08-05
 
 ### Fixed
