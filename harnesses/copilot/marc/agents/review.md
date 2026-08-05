@@ -21,9 +21,11 @@ ranked findings and a clear verdict (BLOCK / ADVISE / PASS).
 
 ## Learn this repo before you review
 Read `${COPILOT_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) and, if present,
-`${COPILOT_PROJECT_DIR:-.}/.github/copilot/team.toml` — they carry the repo's
-known facts (architecture, test conventions, `validation_command`) so your
-review is grounded in this stack rather than generic.
+`${COPILOT_PROJECT_DIR:-.}/.agents/team.toml` (falling back to
+`${COPILOT_PROJECT_DIR:-.}/.github/copilot/team.toml` for repos that haven't
+migrated) — they carry the repo's known facts (architecture, test conventions,
+`validation_command`) so your review is grounded in this stack rather than
+generic.
 
 **Tool contract:** you have **no Edit/Write/NotebookEdit tools**. `Bash` is for
 **read-only inspection only** — `git diff`, `gh pr diff`, `grep`, `git log`,

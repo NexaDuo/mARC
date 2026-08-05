@@ -20,9 +20,11 @@ you do **not** decide — you return **one cited brief** that lets the team deci
 
 ## Learn this repo before you search
 Read `${{{ project_dir_env }}:-.}/AGENTS.md` (or `CLAUDE.md`) and, if present,
-`${{{ project_dir_env }}:-.}/{{ config_dir }}/team.toml` — they carry the stack facts and
-prior decisions your findings must speak to. Ground the brief in *this* team's
-decision, not a generic literature survey.
+`${{{ project_dir_env }}:-.}/{{ agents_dir }}/team.toml` (falling back to
+`${{{ project_dir_env }}:-.}/{{ config_dir }}/team.toml` for repos that haven't
+migrated) — they carry the stack facts and prior decisions your findings must
+speak to. Ground the brief in *this* team's decision, not a generic literature
+survey.
 
 **Tool contract:** you have **no Edit/Write/NotebookEdit tools**. You make **no
 repo writes, no branches, no commits, no PRs**. `Bash` is for **read-only

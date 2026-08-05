@@ -5,7 +5,7 @@ description: >-
   Opt-in onboarding for the mARC agent team. Scaffolds a per-repo team binding so
   the team graduates from ephemeral session-memory to persistent, versioned
   config — without ever writing a file silently. Discovers the repo's org/repo/
-  project at runtime via `gh`, prefills `.claude/team.toml`, and (optionally)
+  project at runtime via `gh`, prefills `.agents/team.toml`, and (optionally)
   a lean `AGENTS.md` skeleton and the `enabledPlugins` pin in
   `.claude/settings.json`. Each artifact is independently opt-in and is shown to
   you before anything is written. Invoke with /marc:init.
@@ -16,7 +16,7 @@ description: >-
 You are running the **mARC onboarding flow**. Your job is to help the user turn a
 zero-config repo into one with a **persistent, versioned team binding**, so
 `@techlead` and the specialists stop relying on ephemeral session memory and read
-the repo's concrete facts from `.claude/team.toml` (and optionally `AGENTS.md`)
+the repo's concrete facts from `.agents/team.toml` (and optionally `AGENTS.md`)
 at the start of every session.
 
 ## The one rule that overrides everything
@@ -87,7 +87,7 @@ repo — match its sections, keys, and comments. Use generic placeholders (e.g.
 
 ---
 
-## Artifact 1 — `.claude/team.toml`  (the core binding)
+## Artifact 1 — `.agents/team.toml`  (the core binding)
 
 Prefill **only** the fields you discovered. Leave every other field as a clearly
 labelled `TODO` — source paths, validation command, and release facts are
@@ -158,12 +158,50 @@ EOF
 Show the rendered content, then on an explicit "yes":
 
 ```bash
-mkdir -p "$ROOT/.claude"
-# ... write the shown content to "$ROOT/.claude/team.toml" ...
+mkdir -p "$ROOT/.agents"
+# ... write the shown content to "$ROOT/.agents/team.toml" ...
 ```
 
 Never overwrite an existing `team.toml` without showing the user the current
 file and the proposed one and getting explicit confirmation to replace it.
+This check MUST cover both the new path (`.agents/team.toml`) and the
+legacy one (`.claude/team.toml`) — checking only the new path misses a
+pre-existing legacy file entirely and silently produces two live configs.
+
+**Legacy migration (`.claude/team.toml` → `.agents/team.toml`):**
+
+STOP-FIRST GATE — read this before anything else in this block: compare the
+literal strings `.agents` and `.claude`. **If they are the
+same string, this entire block does not apply: there is no legacy path, there
+is no migration, do nothing here and do not delete anything — the file at
+that single path is the user's live, current config.** (This is the case for
+Antigravity, where both are `.agents`.) Only if the two strings differ do you
+continue to the steps below.
+
+Having confirmed `.agents` and `.claude` are genuinely
+different paths for this harness, check whether `$ROOT/.claude/team.toml`
+already exists. If it does:
+- Show the user its content and tell them plainly what you're about to do:
+  move it to `$ROOT/.agents/team.toml` (same schema, only the location
+  changed — no field-level conversion needed, unlike the `team.config` case
+  below).
+- On an explicit "yes", write it to the new path and **offer to delete the
+  obsolete `.claude/team.toml`** — but only because the gate above
+  already established `.claude` and `.agents` are two
+  distinct paths; if the path in this bullet reads identical to the one two
+  paragraphs up, the gate should already have stopped you before you got
+  here, and you must stop now instead of deleting anything. The reason to
+  delete it is NOT that
+  it re-triggers a notice (it doesn't: once `.agents/team.toml`
+  exists, the SessionStart hook's read-side fallback never even looks at the
+  legacy path again, so a stale copy goes silently, permanently stale) — the
+  reason is that two live config files can drift: the old one still exists,
+  looks legitimate, and is exactly the kind of file someone edits by habit,
+  but every mARC reader now prefers the new path, so those edits silently
+  stop taking effect.
+- Never write a fresh `.agents/team.toml` from discovered facts while
+  an unmigrated legacy file still exists; that is exactly the split-brain this
+  step prevents.
 
 **Legacy migration (`team.config` → `team.toml`):** if the repo still has a
 pre-0.11.0 `.claude/team.config`, carry its values into the TOML you compose

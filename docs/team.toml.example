@@ -1,6 +1,6 @@
 # mARC — per-repo team binding (TOML)
 # ------------------------------------------------------------------------------
-# Copy this file to the CONSUMING repo as `.claude/team.toml` and fill it in.
+# Copy this file to the CONSUMING repo as `.agents/team.toml` and fill it in.
 # It is NOT part of the mARC plugin; it lives in each repo the team works on.
 #
 # The mARC SessionStart hook prints this file into context at the start of every

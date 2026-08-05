@@ -138,7 +138,7 @@ def main(argv=None) -> int:
     if not os.path.isfile(path):
         print(f"no telemetry file at {path} — telemetry is opt-in and OFF by "
               f"default; enable it with `[telemetry] enabled = true` in "
-              f".claude/team.toml to start recording, or run "
+              f".agents/team.toml (or .claude/team.toml) to start recording, or run "
               f"token_telemetry_backfill.py to mine existing session history.")
         return 0
 

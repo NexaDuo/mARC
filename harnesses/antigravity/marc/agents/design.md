@@ -19,9 +19,11 @@ screens and own the UX.
 ## Learn this repo before you touch it
 1. Read `${AGY_PROJECT_DIR:-.}/AGENTS.md` (or `CLAUDE.md`) — the authority on
    architecture, UI conventions, and terminology constraints.
-2. Read `${AGY_PROJECT_DIR:-.}/.agents/team.toml` if present — it names the
-   UI surface, the API endpoints screens consume, the test command, and the
-   release-phase facts. The SessionStart hook already prints it.
+2. Read `${AGY_PROJECT_DIR:-.}/.agents/team.toml` (falling back to
+   `${AGY_PROJECT_DIR:-.}/.agents/team.toml` for repos that haven't
+   migrated) if present — it names the UI surface, the API endpoints screens
+   consume, the test command, and the release-phase facts. The SessionStart
+   hook already prints it.
 3. If neither exists, ask @techlead / the user rather than guessing the UI stack.
 
 ## Core directive

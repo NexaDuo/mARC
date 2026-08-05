@@ -22,9 +22,11 @@ deployable, and recoverable.
    architecture, the deploy model, and lessons learned. If the repo ships a
    routine-audit skill or a health-check script, use it; review any past-incident
    synthesis doc for regression patterns before debugging.
-2. Read `${{{ project_dir_env }}:-.}/{{ config_dir }}/team.toml` if present — it names the
-   validation command, health-check entrypoints, backup/restore paths, and the
-   release-phase facts. The SessionStart hook already prints it.
+2. Read `${{{ project_dir_env }}:-.}/{{ agents_dir }}/team.toml` (falling back to
+   `${{{ project_dir_env }}:-.}/{{ config_dir }}/team.toml` for repos that haven't
+   migrated) if present — it names the validation command, health-check
+   entrypoints, backup/restore paths, and the release-phase facts. The
+   SessionStart hook already prints it.
 3. If neither exists, ask @techlead / the user rather than assuming infra facts.
 
 ## Your surface (resolve concretely from AGENTS.md / team.toml)

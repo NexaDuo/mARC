@@ -4,6 +4,72 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-07-27
+
+### Changed
+- **Per-repo config default moves to `.agents/team.toml`, with `.claude/team.toml`
+  kept as a backward-compatible fallback (#163, PR #166).** `core/agents/*.md`
+  (all six specialists), `core/skills/tech-lead/SKILL.md`, and
+  `core/skills/init/SKILL.md` now read the new `{{ agents_dir }}/team.toml`
+  path first and fall back to the legacy `{{ config_dir }}/team.toml` path,
+  matching the fallback semantics already shipped in `hooks/hooks.json` and
+  `core/scripts/board.py` / `token_telemetry.py`. The GitHub Copilot harness
+  gained the missing `agents_dir` compile key so `/marc:init` no longer ships
+  a literal `{{ agents_dir }}` placeholder.
+
+### Fixed
+- **Cross-harness find-and-replace regressions from the `.agents/` migration.**
+  `harnesses/copilot/marc/compile.json` was missing `agents_dir`; the
+  legacy-migration line in `core/skills/init/SKILL.md` now templates the
+  correct per-harness legacy path (`.claude/team.config` for Claude Code,
+  `.agents/team.config` for Antigravity, `.github/copilot/team.config` for
+  Copilot) instead of a hardcoded `.claude/team.config`.
+- **Reverted an accidental `.claude/settings.json` → `.agents/settings.json`
+  rename.** Claude Code only reads `.claude/settings.json`; the rename had
+  silently disabled this repo's own `enabledPlugins.marc@nexaduo` pin. The
+  `.agents/team.toml` config-path migration is unaffected and stays.
+- Corrected the self-contradictory `hooks/hooks.json` deprecation message
+  (it claimed ".agents/team.toml only" while implementing a `.claude/`
+  fallback in the same command), the `COMPATIBILITY.md` table's mismatched
+  `team.toml` link, and the README's overstated hard-cutover wording.
+- Removed the one-off, unreferenced `fix_files.py` migration script from the
+  repo root.
+- **Copilot `sessionStart` hook never learned the `.agents/team.toml` write
+  path.** `compile.json` gained `agents_dir` so `/marc:init` writes
+  `.agents/team.toml`, but `harnesses/copilot/marc/hooks/hooks.json` (hand-
+  maintained, not templated from `core/`) still only read
+  `.github/copilot/team.toml`, so a freshly-initialized repo's sessionStart
+  hook silently found nothing. It now checks `.agents/team.toml` first and
+  falls back to `.github/copilot/team.toml`, mirroring the Claude Code hook's
+  resolution order (PR #166).
+- **`/marc:init` could write a second, silently-stale `team.toml`.** The
+  "never overwrite without asking" check only looked at the new
+  `{{ agents_dir }}/team.toml` path, so a repo that already had a legacy
+  `{{ config_dir }}/team.toml` ended up with both files — reads prefer
+  `.agents/`, so the old one became a decoy that still looked live.
+  `core/skills/init/SKILL.md` now detects the legacy path first (skipped for
+  Antigravity, where `agents_dir` and `config_dir` are the same directory),
+  shows the user what it found, and on confirmation moves it to the new path
+  and offers to delete the obsolete file, mirroring the existing
+  `team.config` → `team.toml` migration. The Antigravity no-op (where
+  `agents_dir` and `config_dir` are literally the same path) is an
+  unconditional, string-comparison hard gate that sits first in the block and
+  precedes every destructive instruction, not a parenthetical a reader could
+  skim past — reaching the delete step requires the two paths to have
+  already been confirmed distinct. The instruction's stated reason to delete
+  the old file was also corrected: once `.agents/team.toml` exists,
+  the SessionStart hook's fallback branch never runs again, so a stale
+  legacy file goes silently stale, not "still nagging" — the real risk is
+  drift between two live configs once reads prefer the new path.
+- **Legacy-path fallback in the SessionStart hook was indistinguishable from
+  the current path.** The Claude Code and Copilot `hooks.json` printed the
+  same config output whether it was resolved from `{{ agents_dir }}/team.toml`
+  or the legacy `{{ config_dir }}/team.toml`, so a repo sitting on the
+  fallback got no signal to migrate. Both hooks now emit one extra line
+  naming the deprecated path and pointing at `/marc:init` when the fallback
+  branch fires (Antigravity shares Claude Code's hooks via symlink and, since
+  its legacy fallback path is never populated in practice, is unaffected).
+
 ## [0.21.0] - 2026-07-21
 
 ### Added
