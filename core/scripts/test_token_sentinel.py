@@ -32,6 +32,19 @@ Context-size / per-turn-token guard (#81):
   * it is debounced the same way as the call-count band (once per N-band);
   * a turn below the tokens threshold never warns;
   * the hook ALWAYS exits 0.
+
+Fail-closed context-size guard (#181):
+  * with NO MARC_CONTEXT_WINDOW and NO explicit
+    MARC_TOKEN_GUARD_TOKENS_THRESHOLD, a turn that would previously have
+    tripped the context-size band on the assumed 200K default now stays
+    completely silent (the headline regression covered here);
+  * an explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD with NO window still fires
+    (the escape hatch survives fail-closed);
+  * invalid/garbage MARC_CONTEXT_WINDOW (non-numeric, zero, negative) is
+    treated as unknown/silent, NOT coerced to 200K;
+  * the #71 call-count guard and the #73 model-switch guard still fire under
+    their own conditions with the window unset (asserted explicitly here,
+    since they must NOT regress from this change).
 """
 from __future__ import annotations
 
@@ -528,6 +541,115 @@ def main() -> int:
         check(f"raw tokens: {MAIN_CTX + SIDE_CTX}" in cli.stdout,
               "sidechain usage is still counted in the turn's raw-token cost "
               "total, even though it's excluded from max_context")
+
+        # ---- Fail-closed context-size guard (origin: #181) -----------------
+        #
+        # Decision (#181): the guard only emits the context-size advisory when
+        # it has a context-window value it can trust. With neither
+        # MARC_CONTEXT_WINDOW nor an explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD
+        # set, it must stay silent rather than falling back to the old
+        # DEFAULT_CONTEXT_WINDOW (200K) assumption.
+
+        # HEADLINE REGRESSION: a turn weighing well past the old 130K absolute
+        # (calibrated against the assumed 200K default) fires NO advisory once
+        # neither var is set -- this is the exact false positive #181 exists to
+        # kill (a wrong 200K guess making /compact advice actively wrong on a
+        # session whose real window might be far larger).
+        would_have_fired = write_multiturn(fixtures, "would_have_fired.jsonl", [
+            {"model": SONNET, "cw": 250_000, "cr": 0, "calls": moderate_calls},
+        ])
+        rc, out = run_hook(state_tmp, would_have_fired, "sess-failclosed-none",
+                           tokens_threshold=None)  # no explicit threshold, no window
+        check(rc == 0, "no window, no explicit threshold: exit 0")
+        check(out.strip() == "",
+              "no MARC_CONTEXT_WINDOW and no MARC_TOKEN_GUARD_TOKENS_THRESHOLD: "
+              "the context-size advisory is SILENT even on a turn that would "
+              "have crossed the old 130K default-window absolute (fail-closed, "
+              "not 'assume 200K')")
+
+        # Escape hatch: an explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD with NO
+        # window still fires -- a user who declares a threshold has stated
+        # intent, and fail-closed must not swallow that.
+        escape_hatch = write_multiturn(fixtures, "escape_hatch.jsonl", [
+            {"model": SONNET, "cw": 250_000, "cr": 0, "calls": moderate_calls},
+        ])
+        rc, out = run_hook(state_tmp, escape_hatch, "sess-failclosed-explicit",
+                           tokens_threshold=100_000)  # explicit, no window
+        check(rc == 0, "explicit threshold, no window: exit 0")
+        check(out.strip() != "",
+              "explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD with NO window still "
+              "fires: the escape hatch survives fail-closed")
+        if out.strip():
+            parse_advisory(out)
+
+        # A large, TRUSTED window still derives a band and fires once past it
+        # and past the headroom gate -- fail-closed only removes the ASSUMED
+        # default, not the derived-band behaviour when the window is real.
+        big_window_fires = write_multiturn(fixtures, "big_window_fires.jsonl", [
+            {"model": SONNET, "cw": 700_000, "cr": 0, "calls": 1},
+        ])
+        rc, out = run_hook(state_tmp, big_window_fires, "sess-failclosed-bigwin",
+                           tokens_threshold=None,
+                           extra_env={"MARC_CONTEXT_WINDOW": 1_000_000})
+        check(rc == 0, "trusted 1M window, 700K single-request turn: exit 0")
+        check(out.strip() != "",
+              "MARC_CONTEXT_WINDOW=1000000 with a 700K single-request turn "
+              "crosses the derived 650K band and clears the headroom gate: "
+              "fires, proving the derived-band path still works when the "
+              "window is trustworthy")
+
+        # Invalid/garbage MARC_CONTEXT_WINDOW (non-numeric, zero, negative) is
+        # UNKNOWN, not 200K -- must stay silent just like the unset case.
+        for garbage in ("not-a-number", "0", "-5"):
+            garbage_win = write_multiturn(fixtures, f"garbage_{garbage}.jsonl", [
+                {"model": SONNET, "cw": 250_000, "cr": 0, "calls": moderate_calls},
+            ])
+            rc, out = run_hook(state_tmp, garbage_win,
+                               f"sess-failclosed-garbage-{garbage}",
+                               tokens_threshold=None,
+                               extra_env={"MARC_CONTEXT_WINDOW": garbage})
+            check(rc == 0, f"garbage MARC_CONTEXT_WINDOW={garbage!r}: exit 0")
+            check(out.strip() == "",
+                  f"garbage MARC_CONTEXT_WINDOW={garbage!r} is treated as "
+                  "unknown/silent, NOT coerced to the 200K default")
+
+        # The #71 call-count guard must keep firing with the window unset and
+        # no explicit tokens threshold -- it does not depend on the context
+        # window at all, and fail-closed must not regress it.
+        runaway_no_window = write_transcript(fixtures, "runaway_no_window.jsonl",
+                                             OPUS, THRESHOLD)
+        rc, out = run_hook(state_tmp, runaway_no_window, "sess-failclosed-runaway",
+                           tokens_threshold=None)
+        check(rc == 0, "call-count guard, window unset: exit 0")
+        check(out.strip() != "",
+              "#71 call-count guard still fires with no MARC_CONTEXT_WINDOW "
+              "and no explicit tokens threshold (unaffected by #181)")
+        if out.strip():
+            data = parse_advisory(out)
+            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
+            check("Runaway-loop" in ctx,
+                  "the advisory that fires with the window unset is the "
+                  "call-count guard, not a stray context-size one")
+
+        # The #73 model-switch guard must also keep firing with the window
+        # unset and no explicit tokens threshold -- it does not depend on the
+        # context window either.
+        switch_no_window = write_multiturn(fixtures, "switch_no_window.jsonl", [
+            {"model": SONNET, "cw": STEADY_CW, "cr": STEADY_CR},
+            {"model": OPUS, "cw": SPIKE_CW, "cr": 0},
+        ])
+        rc, out = run_hook(state_tmp, switch_no_window, "sess-failclosed-switch",
+                           tokens_threshold=None)
+        check(rc == 0, "model-switch guard, window unset: exit 0")
+        check(out.strip() != "",
+              "#73 model-switch guard still fires with no MARC_CONTEXT_WINDOW "
+              "and no explicit tokens threshold (unaffected by #181)")
+        if out.strip():
+            data = parse_advisory(out)
+            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
+            check("model-switch" in ctx and SONNET in ctx and OPUS in ctx,
+                  "the advisory that fires with the window unset is the "
+                  "model-switch guard, not a stray context-size one")
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
