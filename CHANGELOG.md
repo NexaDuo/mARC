@@ -4,6 +4,16 @@ All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.1] - 2026-08-05
+
+### Fixed
+- **Context-size guard was window-blind and measured a per-turn sum, so it fired
+  on large-window sessions at roughly 10% of real context usage (#178, PR
+  #179).** The advisory now derives its warning band from the session's actual
+  context window, gates on remaining headroom against a `max_context`
+  snapshot, and excludes subagent/sidechain requests from that snapshot
+  (subagent spend is still counted in cost totals).
+
 ## [0.22.0] - 2026-07-27
 
 ### Changed
