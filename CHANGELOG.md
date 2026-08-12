@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- **Context-size advisory retired (#181, decision recorded 2026-08-12).**
+  `token_sentinel.py`'s third PostToolUse guard — the one that watched
+  per-turn weighted tokens and suggested `/compact` on an oversized context —
+  is removed, along with `context_window()`, `MARC_CONTEXT_WINDOW`,
+  `DEFAULT_CONTEXT_WINDOW`, `CONTEXT_WINDOW_FRACTION`,
+  `MIN_CONTEXT_FRACTION_TO_WARN`, `hook_tokens_threshold()`,
+  `MARC_TOKEN_GUARD_TOKENS_THRESHOLD`, and the `max_context` snapshot added
+  for it in #178. Claude Code's own harness already knows the real per-model
+  context window, warns on it, and auto-compacts by default
+  (`autoCompactEnabled`/`autoCompactWindow`) — a strictly better mechanism
+  than a guard that could only guess the window and could never act itself.
+  This is a removal, not a fix: the harness's native auto-compact supersedes
+  it entirely. The `--tokens` manual CLI flag survives with a self-contained
+  default (`DEFAULT_CLI_TOKENS_THRESHOLD`, still 130000) — it's an explicit,
+  operator-invoked report column, not a silent hook assumption. The call-count
+  runaway guard (#71) and the mid-session model-switch guard (#73) are
+  unaffected; neither depended on the context window. See
+  `docs/marc/2026-08-12-decision-context-advisory-retired.md` for the full
+  decision record.
+
 ## [0.22.2] - 2026-08-05
 
 ### Changed

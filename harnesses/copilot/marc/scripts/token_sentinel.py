@@ -14,11 +14,11 @@ Two modes share ONE counting implementation (DRY):
     per-turn table. Unchanged behaviour.
         python3 token_sentinel.py [SESSION.jsonl] [--calls N] [--tokens N]
 
-  * PostToolUse HOOK (`--hook`, origin: #71, #73, #81) — warn-only, non-blocking
+  * PostToolUse HOOK (`--hook`, origin: #71, #73) — warn-only, non-blocking
     automatic guards. Reads the hook's stdin JSON, inspects `transcript_path`,
     and may emit a non-blocking advisory (Claude Code
     `hookSpecificOutput.additionalContext` + a top-level `systemMessage`). It
-    NEVER blocks, denies, or aborts a tool call, and ALWAYS exits 0. Three guards:
+    NEVER blocks, denies, or aborts a tool call, and ALWAYS exits 0. Two guards:
       - runaway-loop (#71): the CURRENT turn is on Opus AND has crossed a
         consecutive-tool-call threshold -> suggest `/compact` or a Sonnet drop.
       - model-switch (#73): a genuine MAIN-thread mid-session model switch
@@ -26,16 +26,13 @@ Two modes share ONE counting implementation (DRY):
         cache-read collapse) -> note the context was re-cached and suggest
         switching at a natural break / `/compact`. Subagent/sidechain model
         differences (`isSidechain`) are ignored — separate context and cache.
-      - context-size (#81, fail-closed #181): the CURRENT turn's tokens-processed
-        has crossed a threshold regardless of model tier or call count -> catches
-        the case a MODERATE call count still drags in an oversized re-read
-        context, below the runaway-loop band. Suggest `/compact` or a fresh
-        session. The band DERIVES from MARC_CONTEXT_WINDOW when it is set, and is
-        additionally gated on real window headroom (the largest single-request
-        context in the turn), so it does not fire on a 1M-window session sitting
-        at ~10% of its window. FAIL-CLOSED: with no MARC_CONTEXT_WINDOW and no
-        explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD, there is no trustworthy band
-        to check against and this guard is silent -- it never assumes 200K.
+
+    A third guard, context-size (#81, fail-closed #181), was RETIRED (#181 /
+    2026-08-12): Claude Code's own harness already knows the real context
+    window per model, warns on it natively, and auto-compacts by default
+    (`autoCompactEnabled`/`autoCompactWindow`) — a strictly better mechanism
+    than a guard that could only guess the window and could never act. See
+    docs/marc/2026-08-12-decision-context-advisory-retired.md.
         <hook-json-on-stdin> | python3 token_sentinel.py --hook
 
 Usage (CLI):
@@ -46,31 +43,15 @@ Usage (CLI):
                       newest log across all projects).
 
     Thresholds (override with flags; the CLI reads only these flags, not the
-    env vars below — those apply to the `--hook` path):
+    env var below — that applies to the `--hook` path):
       --calls N       flag a turn with more than N assistant tool calls  (default 25)
-      --tokens N      flag a turn processing more than N tokens           (default 130000)
+      --tokens N      flag a turn processing more than N tokens           (default 130000,
+                      a manual diagnostic default, self-contained — no context-window
+                      derivation; see DEFAULT_CLI_TOKENS_THRESHOLD)
 
     Env vars (`--hook` path only; NOT read by the manual CLI's --tokens/--calls flags):
       MARC_TOKEN_GUARD_THRESHOLD          call-count band (default 25) -- unrelated
                                           to the context window; always active.
-      MARC_TOKEN_GUARD_TOKENS_THRESHOLD   context-size / per-turn-token band,
-                                          an explicit override. Set this and the
-                                          context-size advisory works with NO
-                                          window known at all (the escape hatch).
-      MARC_CONTEXT_WINDOW                 the session's context window in tokens
-                                          (e.g. 1000000 on a 1M-window session).
-                                          FAIL-CLOSED (origin: #181): Claude Code
-                                          does not publish the real window to
-                                          hooks, so with neither this var NOR
-                                          MARC_TOKEN_GUARD_TOKENS_THRESHOLD set,
-                                          the context-size advisory has nothing
-                                          trustworthy to band against and stays
-                                          COMPLETELY SILENT -- it does NOT assume
-                                          200K. A wrong window makes the advice
-                                          ("consider /compact") actively wrong on
-                                          a large-window session, so guessing is
-                                          worse than saying nothing. Set either
-                                          var to opt back in.
 
 The per-turn token metric sums, over every assistant message in the turn,
 `usage.input_tokens + usage.cache_read_input_tokens +
@@ -96,93 +77,29 @@ import tempfile
 DEFAULT_HOOK_THRESHOLD = 25
 HOOK_THRESHOLD_ENV = "MARC_TOKEN_GUARD_THRESHOLD"
 
-# --- Context-size / per-turn-token guard (origin: #81, re-weighted #100) ----
-# The call-count band above misses the case where a MODERATE number of tool
-# calls (below the call-count threshold) still drags in an oversized context —
-# a handful of large file reads or a big re-read can blow the token budget
-# without ever crossing the call-count band. This band watches tokens
-# processed in the CURRENT turn, independent of model tier: a large re-read
-# costs real money on any tier, not just Opus. Override with the env var; a
-# turn that reaches N warns once, then again at 2N, 3N, ... (same band
-# debounce as the call-count guard, in its own state file so the two guards
-# never clobber each other).
-#
-# The measure is WEIGHTED (origin: #100), not a flat sum. Anthropic bills a
-# prompt-cache read (`cache_read_input_tokens`) at roughly 1/10th the rate of
-# fresh input or a cache write (`input_tokens` + `cache_creation_input_tokens`,
-# both full-rate). A flat `input + cache_read + cache_creation` sum treats a
-# cheap re-read of an already-cached skill/context identically to an expensive
-# fresh generation, so a normal large-skill session that reloads the same
-# cached context turn after turn (all cache-read, little fresh) trips the band
-# on tokens that cost a tenth of what they look like — a false positive, not a
-# real blowup. CACHE_READ_WEIGHT below discounts cache-read tokens toward that
-# real cost before banding.
+# --- Context-size advisory — RETIRED (origin: #81, #100, #178, #181; retired
+# by the decision at #181 / 2026-08-12) --------------------------------------
+# A third PostToolUse guard used to watch weighted tokens-processed per turn,
+# independent of call count, and suggest `/compact` when a turn's context grew
+# large. It is removed: Claude Code's own harness already knows the real
+# context window per model, warns on it natively, and auto-compacts by default
+# (`autoCompactEnabled`/`autoCompactWindow`) — a strictly better mechanism than
+# a guard that could only guess the window (via MARC_CONTEXT_WINDOW) and could
+# never act. See docs/marc/2026-08-12-decision-context-advisory-retired.md for
+# the full record. `CACHE_READ_WEIGHT` below is kept: it still feeds the
+# weighted-token measure used by cost accumulators / telemetry, which survive.
 CACHE_READ_WEIGHT = 0.1  # cache_read_input_tokens counted at ~1/10th rate; tune here only.
 
-# Re-tuned against the WEIGHTED measure (previously 150_000 against the flat
-# sum). Observed false positives pre-#100 were raw floors of ~213K-965K on
-# turns dominated by cache-read (large-skill dispatch, 6-9 tool calls): at a
-# 0.1x weight those turns land at roughly 20K-100K weighted tokens even in a
-# fairly mixed (not purely cache-read) split, comfortably under this
-# threshold. A genuinely generation/cache-creation-dominated turn of the same
-# raw size weights close to its raw value and still crosses it. Override with
-# the env var if a repo's real workload needs a different band.
-#
-# This absolute stays as the back-compat floor, but it is no longer the primary
-# calibration: it equals CONTEXT_WINDOW_FRACTION * DEFAULT_CONTEXT_WINDOW, so
-# the derived default below reproduces it exactly on a 200K-window session.
-#
-# As of #181 this constant no longer feeds the `--hook` path either (see the
-# fail-closed note further down): with no known window and no explicit
-# MARC_TOKEN_GUARD_TOKENS_THRESHOLD, the hook emits no context-size advisory
-# rather than falling back to this number. It remains the manual CLI's
-# `--tokens` default (~line 782) — that path is an explicit, operator-invoked
-# diagnostic, not a silent hook assumption, so a documented default is fine there.
-DEFAULT_HOOK_TOKENS_THRESHOLD = 130_000
-HOOK_TOKENS_THRESHOLD_ENV = "MARC_TOKEN_GUARD_TOKENS_THRESHOLD"
-
-# --- Context-window awareness (origin: #178 · 2026-08-05) -------------------
-# The band above was calibrated as an ABSOLUTE against a 200K context window,
-# where ~130K weighted tokens in one turn genuinely means "close to full". On a
-# 1M-window session the same absolute fires constantly while the session sits at
-# ~10% of its window: the advice ("consider /compact") is then actively wrong,
-# because there is nothing to reclaim and compaction would discard live context
-# for no benefit. Two fixes, both here:
-#
-#   1. The token band DERIVES from the window (CONTEXT_WINDOW_FRACTION) instead
-#      of being a fixed number, so a 1M session gets a 650K band. An explicit
-#      MARC_TOKEN_GUARD_TOKENS_THRESHOLD still wins over the derived value.
-#   2. A HEADROOM gate (MIN_CONTEXT_FRACTION_TO_WARN): the per-turn measure is a
-#      SUM over the turn's API requests, so a turn with many small tool calls
-#      accumulates past the band while the actual context stays small. That is
-#      the false positive users notice, because the statusline shows the real
-#      per-request context (a snapshot) and the two numbers disagree — the sum
-#      can exceed the snapshot several times over. The advisory now also
-#      requires the largest single-request context in the turn to be a
-#      meaningful fraction of the window before it suggests compacting.
-#
-# --- Fail-closed (origin: #181 · 2026-08-05) ---------------------------------
-# #178/#179 above still FELL BACK to DEFAULT_CONTEXT_WINDOW (200K) whenever
-# MARC_CONTEXT_WINDOW was unset, non-numeric, or <= 0 — so the original 1M-window
-# false positive survived for anyone who didn't set the var: it was observed
-# live firing the advisory against a 130K band derived from an assumed 200K on a
-# real 1M-window session. Decided (#181): a wrong window is worse than no
-# window, because the advice is then actively wrong rather than merely absent.
-# `context_window()` now returns `None` for "unknown" instead of silently
-# defaulting, and `hook_tokens_threshold()` / `run_hook()` treat "no explicit
-# threshold AND no known window" as "no band to check" — the context-size
-# advisory stays completely silent rather than assuming 200K. The call-count
-# guard (#71) and the model-switch guard (#73) do not depend on the window and
-# are unaffected.
-#
-# DEFAULT_CONTEXT_WINDOW is NOT deleted (supersede-not-delete): it still backs
-# DEFAULT_HOOK_TOKENS_THRESHOLD's derivation below as a documented calibration
-# reference, but as of #181 it no longer feeds the `--hook` path at all — the
-# hook fails closed instead of assuming it. See #181 for the decision record.
-DEFAULT_CONTEXT_WINDOW = 200_000
-CONTEXT_WINDOW_ENV = "MARC_CONTEXT_WINDOW"
-CONTEXT_WINDOW_FRACTION = 0.65  # 0.65 * 200_000 == DEFAULT_HOOK_TOKENS_THRESHOLD
-MIN_CONTEXT_FRACTION_TO_WARN = 0.5  # suppress while real context is under half
+# The manual CLI's `--tokens` diagnostic default. Self-contained (no
+# context-window derivation, no env var) — it is an explicit, operator-invoked
+# report column, not a silent hook assumption, so a fixed documented default
+# is fine here even though the hook-side context-size guard it used to share a
+# default with (DEFAULT_HOOK_TOKENS_THRESHOLD) is gone. The number itself
+# used to be derived from that guard's window calibration (0.65 x a 200K
+# window); the guard and that calibration are both gone (#181), so this is
+# now just an unanchored, hand-picked default for a manual report column —
+# do not go looking for a derivation to update, there isn't one anymore.
+DEFAULT_CLI_TOKENS_THRESHOLD = 130_000
 
 # --- Mid-session model-switch guard (origin: #73) --------------------------
 # Switching the model mid-session invalidates the prompt cache: the prefix
@@ -319,18 +236,6 @@ def analyze(path: str):
                           split rationale as `input_tokens`, #149)
       last_ts        ISO timestamp of the last assistant message seen in the
                      turn ("" if none) — additive field, origin: #149
-      max_context    the LARGEST single-request context among the turn's
-                     MAIN-THREAD (non-sidechain) assistant messages (flat
-                     input + cache_read + cache_creation of one message).
-                     Unlike `tokens`/`raw_tokens`, which SUM across the turn's
-                     requests (main-thread AND sidechain), this is a SNAPSHOT
-                     of the operator's own thread — it is the number the
-                     statusline shows as the current context size, and it is
-                     what actually determines whether compacting would help.
-                     A subagent/sidechain request, however large, never
-                     contributes here (origin: #178 follow-up), so it can't
-                     inflate the snapshot past what the statusline reports.
-                     Feeds the headroom gate on the context-size band.
 
     Plus MAIN-THREAD-only fields for the model-switch guard (origin: #73), which
     deliberately EXCLUDE subagent/sidechain assistant messages (`isSidechain` is
@@ -349,7 +254,6 @@ def analyze(path: str):
         t = {"prompt": prompt, "model": "-", "calls": 0, "requests": 0,
              "tokens": 0, "raw_tokens": 0, "fresh_tokens": 0, "cache_read_tokens": 0,
              "output_tokens": 0, "input_tokens": 0, "cache_write_tokens": 0, "last_ts": "",
-             "max_context": 0,
              "main_model": "-", "cw": 0, "cr": 0,
              "_main_seen": False}
         turns.append(t)
@@ -379,13 +283,11 @@ def analyze(path: str):
                 if n_calls:
                     current["requests"] += 1
                 usage = msg.get("usage")
-                this_context = 0
                 if isinstance(usage, dict):
-                    this_context = usage_tokens(usage)
                     # Cost accumulators count EVERY assistant message, main-thread
                     # or sidechain: subagent spend is real spend (do not gate these
                     # on isSidechain below, origin: #178 follow-up).
-                    current["raw_tokens"] += this_context
+                    current["raw_tokens"] += usage_tokens(usage)
                     fresh, cache_read = usage_components(usage)
                     current["fresh_tokens"] += fresh
                     current["cache_read_tokens"] += cache_read
@@ -396,16 +298,13 @@ def analyze(path: str):
                 ts = rec.get("timestamp")
                 if isinstance(ts, str) and ts:
                     current["last_ts"] = ts
-                # Main-thread-only tracking (origin: #73, #178): ignore
-                # subagent/sidechain messages entirely for max_context (the
-                # statusline-snapshot measure), main_model, cw, and cr. A large
-                # sidechain/subagent request must NOT inflate max_context, or the
-                # context-size advisory fires on context the operator's main
-                # thread never actually holds.
+                # Main-thread-only tracking (origin: #73): ignore subagent/
+                # sidechain messages entirely for main_model, cw, and cr — a
+                # specialist subagent runs on a different model in a SEPARATE
+                # context and cache, so it must never look like a mid-session
+                # switch of the operator's own thread.
                 if rec.get("isSidechain") is True:
                     continue
-                if this_context > current["max_context"]:
-                    current["max_context"] = this_context
                 if model:
                     current["main_model"] = model
                 if not current["_main_seen"] and isinstance(usage, dict):
@@ -429,49 +328,6 @@ def hook_threshold() -> int:
     except (TypeError, ValueError):
         return DEFAULT_HOOK_THRESHOLD
     return val if val > 0 else DEFAULT_HOOK_THRESHOLD
-
-
-def context_window() -> int | None:
-    """The session's context window in tokens (env-configurable), or `None` if
-    unknown.
-
-    Claude Code does not publish the window to hooks, so this is declared
-    rather than detected. FAIL-CLOSED (origin: #181): unset, non-numeric, or
-    <= 0 is UNKNOWN, distinct from any real value — it is deliberately NOT
-    coerced to DEFAULT_CONTEXT_WINDOW. A wrong window would make the
-    context-size advisory actively wrong (advising `/compact` when there is
-    nothing to reclaim), so the caller must treat `None` as "no band", not as
-    "assume 200K".
-    """
-    raw = os.environ.get(CONTEXT_WINDOW_ENV, "")
-    try:
-        val = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return val if val > 0 else None
-
-
-def hook_tokens_threshold() -> int | None:
-    """Token band: an explicit env override wins outright (a user who declares
-    a threshold has stated intent, regardless of the window). Otherwise derive
-    it from the context window — but ONLY if the window is known. With no
-    explicit threshold AND no known window there is no trustworthy band to
-    check against, so this returns `None` (origin: #181, fail-closed): the
-    caller must skip the context-size guard entirely rather than falling back
-    to DEFAULT_HOOK_TOKENS_THRESHOLD.
-    """
-    raw = os.environ.get(HOOK_TOKENS_THRESHOLD_ENV, "")
-    try:
-        val = int(raw)
-    except (TypeError, ValueError):
-        val = 0
-    if val > 0:
-        return val
-    window = context_window()
-    if window is None:
-        return None
-    derived = round(window * CONTEXT_WINDOW_FRACTION)
-    return derived if derived > 0 else None
 
 
 def _state_path(session_key: str, kind: str = "") -> str:
@@ -546,106 +402,6 @@ def build_advisory(*, model: str, count: int, threshold: int) -> dict:
         "systemMessage": (
             f"[mARC] token-guard: {count} consecutive Opus tool calls this turn "
             f"(>{threshold}). Advisory only. Consider /compact or Sonnet."
-        ),
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": advice,
-        },
-    }
-
-
-# --- Context-size / per-turn-token guard (origin: #81) ----------------------
-
-def should_warn_tokens(*, tokens: int, threshold: int, turn_index: int,
-                       session_key: str, max_context: int | None = None,
-                       window: int | None = None) -> bool:
-    """Debounced band check on tokens processed this turn, independent of
-    model tier or call count — catches a moderate-call-count turn that still
-    dragged in an oversized context. Same band-debounce shape as `should_warn`,
-    a separate state file (`kind="tokens"`) so the two guards never clobber
-    each other's memory.
-
-    HEADROOM GATE: `tokens` is a SUM over the turn's API requests, so a turn made
-    of many small tool calls can cross the band while the real context stays
-    small. `max_context` (the largest single-request context — a snapshot) and
-    `window` gate that case out: below MIN_CONTEXT_FRACTION_TO_WARN of the
-    window there is nothing meaningful to reclaim, so advising `/compact` would
-    be wrong. Both are optional; omit them (or pass None) to skip the gate and
-    keep the pre-existing sum-only behaviour.
-    """
-    band = tokens // threshold  # 0 below N, 1 in [N,2N), 2 in [2N,3N), ...
-    if band < 1:
-        return False
-    if max_context is not None and window is not None and window > 0:
-        if max_context < window * MIN_CONTEXT_FRACTION_TO_WARN:
-            return False
-    state_path = _state_path(session_key, kind="tokens")
-    state = _load_state(state_path)
-    same_turn = state.get("turn") == turn_index
-    warned_band = state.get("band", 0) if same_turn else 0
-    if band <= warned_band:
-        return False
-    _save_state(state_path, {"turn": turn_index, "band": band})
-    return True
-
-
-def build_tokens_advisory(*, model: str, tokens: int, threshold: int,
-                          fresh: int, cache_read: int,
-                          max_context: int | None = None,
-                          window: int | None = None) -> dict:
-    """Non-blocking PostToolUse payload for the context-size / per-turn-token
-    band (same channels as the other guards: no `decision`, no exit 2).
-
-    `tokens` is the WEIGHTED measure (origin: #100), and the advisory names
-    whether the turn is cache-read-dominated (likely a cheap re-read of
-    already-cached context, so treat this as a heads-up rather than alarm) or
-    generation-dominated (fresh tokens drove the size, so the cost is real).
-    """
-    approx_k = max(1, round(tokens / 1000))
-    threshold_k = max(1, round(threshold / 1000))
-    kind = dominant_token_type(fresh, cache_read)
-    if kind == "cache-read-dominated":
-        shape_note = (
-            "Most of that is discounted prompt-cache re-reads (cheap), not "
-            "fresh generation, so this is likely a large re-read rather than "
-            "a real cost spike."
-        )
-    else:
-        shape_note = (
-            "Most of that is fresh input or a cache write, both full-rate, "
-            "so this turn's cost is real."
-        )
-    # Name the SUM/SNAPSHOT distinction explicitly: the per-turn measure is a sum
-    # over API requests, while the statusline shows the current per-request
-    # context. Reporting only the sum invites the reader to compare two numbers
-    # that are not the same quantity and conclude one of them is broken.
-    if max_context and window:
-        pct = max(1, round(100 * max_context / window))
-        context_note = (
-            f" Largest single-request context this turn was ~"
-            f"{max(1, round(max_context / 1000))}K of a "
-            f"{max(1, round(window / 1000))}K window (~{pct}%) — that snapshot, "
-            f"not this per-turn sum, is what the statusline reports and what "
-            f"determines whether compacting reclaims anything."
-        )
-    else:
-        context_note = (
-            " Note this is a SUM across the turn's API requests, not the "
-            "current context size; set MARC_CONTEXT_WINDOW to have the guard "
-            "compare against real window headroom."
-        )
-    advice = (
-        f"[mARC token-guard] Context-size guard: this turn has processed "
-        f"~{approx_k}K weighted tokens ({model}, {kind}), past the "
-        f"{threshold_k}K-token threshold, even though the tool-call count may "
-        f"still be low. {shape_note}{context_note} This is advisory only, "
-        f"nothing was blocked. Consider `/compact` to shrink context before "
-        f"continuing, or starting a fresh session for the next task."
-    )
-    return {
-        "systemMessage": (
-            f"[mARC] token-guard: ~{approx_k}K weighted tokens processed this "
-            f"turn (>{threshold_k}K, {kind}). Advisory only. Consider /compact."
         ),
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
@@ -786,13 +542,7 @@ def run_hook(stdin_text: str) -> int:
     current = turns[turn_index]
     model = current.get("model", "-")
     count = current.get("requests", 0)
-    tokens = current.get("tokens", 0)  # weighted measure, origin: #100
-    fresh_tokens = current.get("fresh_tokens", 0)
-    cache_read_tokens = current.get("cache_read_tokens", 0)
-    max_context = current.get("max_context", 0)  # snapshot, not a sum
     threshold = hook_threshold()
-    tokens_threshold = hook_tokens_threshold()  # None -> no trustworthy band (#181)
-    window = context_window()  # None -> unknown, fail-closed (#181)
     session_key = str(payload.get("session_id") or transcript_path)
 
     advisories: list[dict] = []
@@ -812,20 +562,11 @@ def run_hook(stdin_text: str) -> int:
             advisories.append(build_switch_advisory(
                 from_model=from_model, to_model=to_model, cw=cw))
 
-    # Guard 3 (#81, fail-closed #181): context-size / per-turn-token band,
-    # independent of the call-count band above — catches a moderate-call-count
-    # turn with an oversized re-read context. `tokens_threshold` is None when
-    # there is no explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD AND no known
-    # MARC_CONTEXT_WINDOW: no trustworthy band exists, so this guard is
-    # skipped entirely — no advisory, no debounce state written for it.
-    if tokens_threshold is not None:
-        if should_warn_tokens(tokens=tokens, threshold=tokens_threshold,
-                              turn_index=turn_index, session_key=session_key,
-                              max_context=max_context, window=window):
-            advisories.append(build_tokens_advisory(
-                model=model, tokens=tokens, threshold=tokens_threshold,
-                fresh=fresh_tokens, cache_read=cache_read_tokens,
-                max_context=max_context, window=window))
+    # A third guard (context-size / per-turn-token band, origin: #81, #178,
+    # #181) used to run here. RETIRED at #181 / 2026-08-12 — Claude Code's own
+    # harness auto-compacts by default against the real per-model window,
+    # which this guard could only guess at. See
+    # docs/marc/2026-08-12-decision-context-advisory-retired.md.
 
     merged = _merge_advisories(advisories)
     if merged is not None:
@@ -838,9 +579,12 @@ def main(argv=None) -> int:
     ap.add_argument("session", nargs="?", help="path to a session .jsonl (default: newest for this project)")
     ap.add_argument("--calls", type=int, default=DEFAULT_HOOK_THRESHOLD,
                     help="flag turns above this tool-call count")
-    ap.add_argument("--tokens", type=int, default=DEFAULT_HOOK_TOKENS_THRESHOLD,
+    ap.add_argument("--tokens", type=int, default=DEFAULT_CLI_TOKENS_THRESHOLD,
                     help="flag turns above this WEIGHTED token count "
-                         "(context-size signal, origin: #81; weighting origin: #100)")
+                         "(a manual report column only, origin: #81; "
+                         "weighting origin: #100; the hook-side context-size "
+                         "guard this used to share a threshold with was "
+                         "retired at #181)")
     ap.add_argument("--hook", action="store_true",
                     help="run as a warn-only PostToolUse hook (reads hook JSON on stdin; always exits 0)")
     args = ap.parse_args(argv)
@@ -863,8 +607,9 @@ def main(argv=None) -> int:
     turns = analyze(path)
     print(f"session: {path}")
     print(f"turns:   {len(turns)}   thresholds: >{args.calls} calls, >{args.tokens} weighted "
-          f"tokens (context-size signal, origin: #81; cache-read weighted "
-          f"{CACHE_READ_WEIGHT}x, origin: #100)\n")
+          f"tokens (manual diagnostic only, origin: #81; the paired hook-side "
+          f"context-size guard was retired at #181 — Claude Code auto-compacts "
+          f"natively; cache-read weighted {CACHE_READ_WEIGHT}x, origin: #100)\n")
     print(f"{'#':>3}  {'model':<28} {'calls':>6} {'tokens':>12}  {'dominant':<20} {'flag':<14} prompt")
     flagged = 0
     total_tokens = 0
