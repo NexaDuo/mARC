@@ -24,27 +24,16 @@ Model-switch guard (#73):
   (d) the initial model of a session is never treated as a switch;
   (e) the hook ALWAYS exits 0.
 
-Context-size / per-turn-token guard (#81):
-  * a turn with a MODERATE call count (below the call-count band) but an
-    OVERSIZED context fires the context-size band while the call-count band
-    stays silent — the exact gap this guard closes;
-  * it fires regardless of model tier (Sonnet included, not Opus-only);
-  * it is debounced the same way as the call-count band (once per N-band);
-  * a turn below the tokens threshold never warns;
-  * the hook ALWAYS exits 0.
-
-Fail-closed context-size guard (#181):
-  * with NO MARC_CONTEXT_WINDOW and NO explicit
-    MARC_TOKEN_GUARD_TOKENS_THRESHOLD, a turn that would previously have
-    tripped the context-size band on the assumed 200K default now stays
-    completely silent (the headline regression covered here);
-  * an explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD with NO window still fires
-    (the escape hatch survives fail-closed);
-  * invalid/garbage MARC_CONTEXT_WINDOW (non-numeric, zero, negative) is
-    treated as unknown/silent, NOT coerced to 200K;
-  * the #71 call-count guard and the #73 model-switch guard still fire under
-    their own conditions with the window unset (asserted explicitly here,
-    since they must NOT regress from this change).
+A third guard — context-size / per-turn-token (origin: #81, window-aware
+#178, fail-closed #181) — used to be covered here. It was RETIRED at #184 /
+2026-08-12 (see docs/marc/2026-08-12-decision-context-advisory-retired.md):
+Claude Code's own harness already knows the real per-model context window,
+warns on it, and auto-compacts by default, so a guard that could only guess
+the window and never act was strictly worse. Its tests are removed with it.
+This file keeps explicit regression coverage that the #71 and #73 guards,
+which do NOT depend on the context window, still fire correctly on their own
+conditions now that the third guard's plumbing (env-var window, headroom
+gate, `max_context` snapshot, its own debounce-state kind) is gone.
 """
 from __future__ import annotations
 
@@ -57,9 +46,6 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 SENTINEL = os.path.join(HERE, "token_sentinel.py")
 THRESHOLD = 5  # small, so fixtures stay tiny
-TOKENS_THRESHOLD = 500_000  # above the switch-guard fixtures' ~130K steady state
-                             # (origin: #81), so the two guards' fixtures don't
-                             # cross-trip each other in this shared test file.
 OPUS = "claude-opus-4-8-20260101"
 SONNET = "claude-sonnet-4-5-20250101"
 
@@ -141,45 +127,15 @@ def write_multiturn(dirpath: str, name: str, turns: list[dict]) -> str:
     return path
 
 
-def write_sum_heavy_turn(dirpath: str, name: str, model: str, requests: int,
-                         per_request: int) -> str:
-    """One turn of `requests` assistant tool calls, each with the SAME modest
-    per-request context (`per_request` fresh tokens).
-
-    The per-turn measure SUMS these, so the turn's total can cross the band while
-    no single request ever holds a large context — the sum-vs-snapshot shape the
-    headroom gate exists to filter.
-    """
-    path = os.path.join(dirpath, name)
-    lines: list[dict] = [{"type": "user", "message": {"role": "user", "content": "go"}}]
-    for i in range(requests):
-        lines.append({
-            "type": "assistant",
-            "message": {
-                "role": "assistant",
-                "model": model,
-                "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {}}],
-                "usage": {"input_tokens": per_request,
-                          "cache_read_input_tokens": 0,
-                          "cache_creation_input_tokens": 0},
-            },
-        })
-    with open(path, "w", encoding="utf-8") as fh:
-        for rec in lines:
-            fh.write(json.dumps(rec) + "\n")
-    return path
-
-
 def write_mixed_turn(dirpath: str, name: str, main_model: str, main_tokens: int,
                      side_model: str, side_tokens: int) -> str:
     """One real user turn containing ONE main-thread assistant tool-call
     request (small context) followed DIRECTLY by ONE sidechain/subagent
     assistant request (large context) — no intervening `type: user` record in
     between, so both land in the SAME analyzed turn (mirrors a Task-tool
-    subagent dispatch happening inside the current turn). Exercises the exact
-    ordering bug from #178 follow-up: a sidechain assistant message must not
-    inflate `max_context`, though it must still count toward the turn's cost
-    totals (e.g. `raw_tokens`).
+    subagent dispatch happening inside the current turn). Confirms sidechain
+    usage still counts toward the turn's cost totals (e.g. `raw_tokens`) even
+    though it runs on a separate context/cache (origin: #178 follow-up).
     """
     path = os.path.join(dirpath, name)
     lines = [
@@ -214,20 +170,10 @@ def write_mixed_turn(dirpath: str, name: str, main_model: str, main_tokens: int,
 
 def run_hook(env_tmp: str, transcript_path: str | None, session_id: str,
              stdin_override: str | None = None,
-             extra_env: dict | None = None,
-             tokens_threshold: int | None = TOKENS_THRESHOLD) -> tuple[int, str]:
+             extra_env: dict | None = None) -> tuple[int, str]:
     env = dict(os.environ)
     env["TMPDIR"] = env_tmp                       # isolate the debounce state dir
     env["MARC_TOKEN_GUARD_THRESHOLD"] = str(THRESHOLD)
-    # Inherited MARC_CONTEXT_WINDOW from the developer's shell would silently
-    # change the derived band, so pin it unless a test overrides it on purpose.
-    env.pop("MARC_CONTEXT_WINDOW", None)
-    if tokens_threshold is None:
-        # Exercise the DERIVED band (from the context window) rather than an
-        # explicit override.
-        env.pop("MARC_TOKEN_GUARD_TOKENS_THRESHOLD", None)
-    else:
-        env["MARC_TOKEN_GUARD_TOKENS_THRESHOLD"] = str(tokens_threshold)
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items()})
     if stdin_override is not None:
@@ -364,292 +310,59 @@ def main() -> int:
         check(rc == 0, "sub-floor switch: exit 0")
         check(out.strip() == "", "switch without cache-write spike: no warn")
 
-        # ---- Context-size / per-turn-token guard (origin: #81) ------------
-
-        # The exact gap this guard closes: a MODERATE call count (well below
-        # the call-count band) that still drags in an OVERSIZED context. The
-        # call-count band must stay silent while the new context-size band
-        # fires. Uses Sonnet (not Opus) to prove the band is tier-independent.
-        moderate_calls = THRESHOLD - 2  # comfortably below the call-count band
-        big_ctx = write_multiturn(fixtures, "big_ctx.jsonl", [
-            {"model": SONNET, "cw": TOKENS_THRESHOLD * 2, "cr": 0,
-             "calls": moderate_calls},
-        ])
-        rc, out = run_hook(state_tmp, big_ctx, "sess-bigctx")
-        check(rc == 0, "moderate calls + oversized context: exit 0")
-        check(out.strip() != "",
-              "moderate calls + oversized context: context-size band FIRES")
-        if out.strip():
-            data = parse_advisory(out)
-            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
-            check("context-size" in ctx.lower() or "Context-size" in ctx,
-                  "context-size advisory names the guard")
-
-        # Sanity: the SAME fixture would NOT trip the call-count band on its
-        # own terms (moderate_calls < THRESHOLD, and it's Sonnet, not Opus) —
-        # confirms the two bands are independent signals, not one masking
-        # the other.
-        check(moderate_calls < THRESHOLD,
-              "fixture sanity: call count stays below the call-count band")
-
-        # Below the tokens threshold -> silent (no false positive on a small
-        # context, even with the same moderate call count).
-        small_ctx = write_multiturn(fixtures, "small_ctx.jsonl", [
-            {"model": SONNET, "cw": TOKENS_THRESHOLD // 10, "cr": 0,
-             "calls": moderate_calls},
-        ])
-        rc, out = run_hook(state_tmp, small_ctx, "sess-smallctx")
-        check(rc == 0, "moderate calls + small context: exit 0")
-        check(out.strip() == "",
-              "moderate calls + small context: no warn (below tokens threshold)")
-
-        # ---- Cache-read weighting (origin: #100) ---------------------------
+        # ---- Sidechain cost accounting (origin: #178 follow-up) ------------
         #
-        # Two turns with the IDENTICAL raw token size (input + cache_read +
-        # cache_creation), one cache-read-dominated (a re-read of already-
-        # cached context, cheap) and one generation/cache-creation-dominated
-        # (fresh tokens, expensive). Before #100 both flat-summed to the same
-        # number and both fired identically -- that flat sum is exactly the
-        # false-positive shape reported live (a large-skill session reloading
-        # cached context tripped the band on tokens billed at ~1/10th rate).
-        # After #100 they must diverge: only the generation-dominated turn
-        # should still cross the (weighted) threshold.
-        raw_size = TOKENS_THRESHOLD * 2  # 1,000,000: well above the flat-sum
-                                          # threshold either way pre-#100
-        cache_heavy = write_multiturn(fixtures, "cache_heavy.jsonl", [
-            {"model": SONNET, "cw": 0, "cr": raw_size, "calls": moderate_calls},
-        ])
-        rc, out = run_hook(state_tmp, cache_heavy, "sess-cacheheavy")
-        check(rc == 0, "cache-read-dominated, large raw size: exit 0")
-        check(out.strip() == "",
-              "cache-read-dominated turn (raw size far past threshold): "
-              "weighted measure stays under threshold, no warn")
-
-        gen_heavy = write_multiturn(fixtures, "gen_heavy.jsonl", [
-            {"model": SONNET, "cw": raw_size, "cr": 0, "calls": moderate_calls},
-        ])
-        rc, out = run_hook(state_tmp, gen_heavy, "sess-genheavy")
-        check(rc == 0, "generation-dominated, SAME raw size: exit 0")
-        check(out.strip() != "",
-              "generation-dominated turn (identical raw size to the "
-              "cache-read case above): weighted measure crosses threshold, warns")
-        if out.strip():
-            data = parse_advisory(out)
-            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
-            check("generation-dominated" in ctx,
-                  "generation-dominated advisory names the dominant token type")
-
-        # ---- Context-window awareness + headroom gate ----------------------
-        #
-        # Reported live: on a 1M-window session the guard fired repeatedly while
-        # the statusline showed ~10% context used, so its advice ("consider
-        # /compact") was wrong -- there was nothing to reclaim. Two distinct
-        # causes, one test each.
-        #
-        # (a) The band was an ABSOLUTE calibrated for a 200K window. Derived from
-        #     MARC_CONTEXT_WINDOW instead, a 1M session gets a 650K band, so a
-        #     turn weighing ~200K (past the old 130K absolute) stays quiet.
-        big_window_turn = write_multiturn(fixtures, "big_window.jsonl", [
-            {"model": SONNET, "cw": 200_000, "cr": 0, "calls": moderate_calls},
-        ])
-        rc, out = run_hook(state_tmp, big_window_turn, "sess-bigwindow",
-                           tokens_threshold=None,
-                           extra_env={"MARC_CONTEXT_WINDOW": 1_000_000})
-        check(rc == 0, "1M window, 200K weighted turn: exit 0")
-        check(out.strip() == "",
-              "1M-window session: a 200K-weighted turn is under the DERIVED "
-              "band (650K) and does not warn, though it passes the old 130K "
-              "absolute")
-
-        # The same fixture on a 200K window must still warn -- the derived band
-        # is 130K there, so this proves the change is window-relative and not
-        # just a blanket loosening.
-        rc, out = run_hook(state_tmp, big_window_turn, "sess-smallwindow",
-                           tokens_threshold=None,
-                           extra_env={"MARC_CONTEXT_WINDOW": 200_000})
-        check(rc == 0, "200K window, same 200K-weighted turn: exit 0")
-        check(out.strip() != "",
-              "200K-window session: the SAME turn crosses the derived 130K "
-              "band and warns (change is window-relative, not a loosening)")
-
-        # (b) The per-turn measure is a SUM over API requests, so many small
-        #     calls accumulate past the band while the real context stays small.
-        #     Compacting cannot help there, so the headroom gate suppresses it.
-        sum_heavy = write_sum_heavy_turn(fixtures, "sum_heavy.jsonl", SONNET,
-                                         requests=20, per_request=10_000)
-        rc, out = run_hook(state_tmp, sum_heavy, "sess-sumheavy",
-                           tokens_threshold=150_000,
-                           extra_env={"MARC_CONTEXT_WINDOW": 1_000_000})
-        check(rc == 0, "sum-heavy turn, small per-request context: exit 0")
-        check(out.strip() == "",
-              "20 requests x 10K = 200K summed crosses a 150K band, but the "
-              "largest single-request context (10K of 1M) is far under the "
-              "headroom floor: no warn")
-
-        # Same summed total, but concentrated in ONE large request: the context
-        # really is large, so the advisory must still fire. This is the guard's
-        # actual purpose and must not be gated away.
-        snapshot_heavy = write_sum_heavy_turn(fixtures, "snapshot_heavy.jsonl",
-                                              SONNET, requests=1,
-                                              per_request=600_000)
-        rc, out = run_hook(state_tmp, snapshot_heavy, "sess-snapheavy",
-                           tokens_threshold=150_000,
-                           extra_env={"MARC_CONTEXT_WINDOW": 1_000_000})
-        check(rc == 0, "snapshot-heavy turn: exit 0")
-        check(out.strip() != "",
-              "a single 600K-context request on a 1M window is past the "
-              "headroom floor and still warns")
-        if out.strip():
-            data = parse_advisory(out)
-            ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
-            check("window" in ctx,
-                  "advisory reports the snapshot-vs-window figure, so the "
-                  "per-turn sum is not mistaken for the context size")
-
-        # ---- Sidechain contamination of max_context (origin: #178 follow-up) --
-        #
-        # A large subagent/sidechain request landing in the SAME turn as a
-        # small main-thread request must NOT inflate max_context (the
-        # statusline-snapshot measure): before the fix, the sidechain's huge
-        # single-request context won the max() and defeated the headroom
-        # gate, firing the context-size advisory even though the operator's
-        # own thread never held anywhere near that much context.
+        # A large subagent/sidechain request must still be counted in the
+        # turn's COST totals (raw_tokens), even though it runs on a separate
+        # context/cache from the operator's main thread. Driven through the
+        # real manual-CLI subprocess path (same script, non-hook mode).
         MAIN_CTX = 500
         SIDE_CTX = 2_000_000
-        MIXED_WINDOW = 2_500_000  # headroom floor (0.5 * window) = 1_250_000
         mixed = write_mixed_turn(fixtures, "mixed_sidechain.jsonl",
                                  SONNET, MAIN_CTX, SONNET, SIDE_CTX)
-        rc, out = run_hook(state_tmp, mixed, "sess-mixed-sidechain",
-                           tokens_threshold=300_000,
-                           extra_env={"MARC_CONTEXT_WINDOW": MIXED_WINDOW})
-        check(rc == 0, "mixed main+sidechain turn: exit 0")
-        check(out.strip() == "",
-              "large sidechain request does NOT inflate max_context: the "
-              "small main-thread snapshot keeps the headroom gate suppressed "
-              "and no advisory fires (fails pre-fix, where the sidechain "
-              "value wins the max_context comparison)")
-
-        # Companion assertion: sidechain usage must still be counted in the
-        # turn's COST totals (raw_tokens) -- the fix must not silently drop
-        # subagent spend while fixing the snapshot. Driven through the real
-        # manual-CLI subprocess path (same script, non-hook mode).
         cli = subprocess.run(
             [sys.executable, SENTINEL, mixed, "--tokens", "1", "--calls", "1"],
             capture_output=True, text=True,
         )
         check(cli.returncode in (0, 1), "manual CLI on mixed transcript: runs cleanly")
         check(f"raw tokens: {MAIN_CTX + SIDE_CTX}" in cli.stdout,
-              "sidechain usage is still counted in the turn's raw-token cost "
-              "total, even though it's excluded from max_context")
+              "sidechain usage is still counted in the turn's raw-token cost total")
 
-        # ---- Fail-closed context-size guard (origin: #181) -----------------
-        #
-        # Decision (#181): the guard only emits the context-size advisory when
-        # it has a context-window value it can trust. With neither
-        # MARC_CONTEXT_WINDOW nor an explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD
-        # set, it must stay silent rather than falling back to the old
-        # DEFAULT_CONTEXT_WINDOW (200K) assumption.
-
-        # HEADLINE REGRESSION: a turn weighing well past the old 130K absolute
-        # (calibrated against the assumed 200K default) fires NO advisory once
-        # neither var is set -- this is the exact false positive #181 exists to
-        # kill (a wrong 200K guess making /compact advice actively wrong on a
-        # session whose real window might be far larger).
-        would_have_fired = write_multiturn(fixtures, "would_have_fired.jsonl", [
-            {"model": SONNET, "cw": 250_000, "cr": 0, "calls": moderate_calls},
-        ])
-        rc, out = run_hook(state_tmp, would_have_fired, "sess-failclosed-none",
-                           tokens_threshold=None)  # no explicit threshold, no window
-        check(rc == 0, "no window, no explicit threshold: exit 0")
-        check(out.strip() == "",
-              "no MARC_CONTEXT_WINDOW and no MARC_TOKEN_GUARD_TOKENS_THRESHOLD: "
-              "the context-size advisory is SILENT even on a turn that would "
-              "have crossed the old 130K default-window absolute (fail-closed, "
-              "not 'assume 200K')")
-
-        # Escape hatch: an explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD with NO
-        # window still fires -- a user who declares a threshold has stated
-        # intent, and fail-closed must not swallow that.
-        escape_hatch = write_multiturn(fixtures, "escape_hatch.jsonl", [
-            {"model": SONNET, "cw": 250_000, "cr": 0, "calls": moderate_calls},
-        ])
-        rc, out = run_hook(state_tmp, escape_hatch, "sess-failclosed-explicit",
-                           tokens_threshold=100_000)  # explicit, no window
-        check(rc == 0, "explicit threshold, no window: exit 0")
+        # ---- Retired context-size guard: regression coverage for the two ----
+        # guards that survive it (origin: #184 / 2026-08-12). The removed
+        # guard's own tests (band derivation, headroom gate, fail-closed
+        # window handling) are removed with it; what remains is proof that
+        # #71 and #73, which never depended on the context window, still fire
+        # correctly now that the third guard's plumbing is gone.
+        runaway_survives = write_transcript(fixtures, "runaway_survives.jsonl",
+                                            OPUS, THRESHOLD)
+        rc, out = run_hook(state_tmp, runaway_survives, "sess-retired-runaway")
+        check(rc == 0, "call-count guard after guard-3 removal: exit 0")
         check(out.strip() != "",
-              "explicit MARC_TOKEN_GUARD_TOKENS_THRESHOLD with NO window still "
-              "fires: the escape hatch survives fail-closed")
-        if out.strip():
-            parse_advisory(out)
-
-        # A large, TRUSTED window still derives a band and fires once past it
-        # and past the headroom gate -- fail-closed only removes the ASSUMED
-        # default, not the derived-band behaviour when the window is real.
-        big_window_fires = write_multiturn(fixtures, "big_window_fires.jsonl", [
-            {"model": SONNET, "cw": 700_000, "cr": 0, "calls": 1},
-        ])
-        rc, out = run_hook(state_tmp, big_window_fires, "sess-failclosed-bigwin",
-                           tokens_threshold=None,
-                           extra_env={"MARC_CONTEXT_WINDOW": 1_000_000})
-        check(rc == 0, "trusted 1M window, 700K single-request turn: exit 0")
-        check(out.strip() != "",
-              "MARC_CONTEXT_WINDOW=1000000 with a 700K single-request turn "
-              "crosses the derived 650K band and clears the headroom gate: "
-              "fires, proving the derived-band path still works when the "
-              "window is trustworthy")
-
-        # Invalid/garbage MARC_CONTEXT_WINDOW (non-numeric, zero, negative) is
-        # UNKNOWN, not 200K -- must stay silent just like the unset case.
-        for garbage in ("not-a-number", "0", "-5"):
-            garbage_win = write_multiturn(fixtures, f"garbage_{garbage}.jsonl", [
-                {"model": SONNET, "cw": 250_000, "cr": 0, "calls": moderate_calls},
-            ])
-            rc, out = run_hook(state_tmp, garbage_win,
-                               f"sess-failclosed-garbage-{garbage}",
-                               tokens_threshold=None,
-                               extra_env={"MARC_CONTEXT_WINDOW": garbage})
-            check(rc == 0, f"garbage MARC_CONTEXT_WINDOW={garbage!r}: exit 0")
-            check(out.strip() == "",
-                  f"garbage MARC_CONTEXT_WINDOW={garbage!r} is treated as "
-                  "unknown/silent, NOT coerced to the 200K default")
-
-        # The #71 call-count guard must keep firing with the window unset and
-        # no explicit tokens threshold -- it does not depend on the context
-        # window at all, and fail-closed must not regress it.
-        runaway_no_window = write_transcript(fixtures, "runaway_no_window.jsonl",
-                                             OPUS, THRESHOLD)
-        rc, out = run_hook(state_tmp, runaway_no_window, "sess-failclosed-runaway",
-                           tokens_threshold=None)
-        check(rc == 0, "call-count guard, window unset: exit 0")
-        check(out.strip() != "",
-              "#71 call-count guard still fires with no MARC_CONTEXT_WINDOW "
-              "and no explicit tokens threshold (unaffected by #181)")
+              "#71 call-count guard still fires after the context-size guard "
+              "was retired")
         if out.strip():
             data = parse_advisory(out)
             ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
             check("Runaway-loop" in ctx,
-                  "the advisory that fires with the window unset is the "
-                  "call-count guard, not a stray context-size one")
+                  "the advisory is the call-count guard, not a stray "
+                  "context-size one (which no longer exists)")
 
-        # The #73 model-switch guard must also keep firing with the window
-        # unset and no explicit tokens threshold -- it does not depend on the
-        # context window either.
-        switch_no_window = write_multiturn(fixtures, "switch_no_window.jsonl", [
+        switch_survives = write_multiturn(fixtures, "switch_survives.jsonl", [
             {"model": SONNET, "cw": STEADY_CW, "cr": STEADY_CR},
             {"model": OPUS, "cw": SPIKE_CW, "cr": 0},
         ])
-        rc, out = run_hook(state_tmp, switch_no_window, "sess-failclosed-switch",
-                           tokens_threshold=None)
-        check(rc == 0, "model-switch guard, window unset: exit 0")
+        rc, out = run_hook(state_tmp, switch_survives, "sess-retired-switch")
+        check(rc == 0, "model-switch guard after guard-3 removal: exit 0")
         check(out.strip() != "",
-              "#73 model-switch guard still fires with no MARC_CONTEXT_WINDOW "
-              "and no explicit tokens threshold (unaffected by #181)")
+              "#73 model-switch guard still fires after the context-size "
+              "guard was retired")
         if out.strip():
             data = parse_advisory(out)
             ctx = data.get("hookSpecificOutput", {}).get("additionalContext", "")
             check("model-switch" in ctx and SONNET in ctx and OPUS in ctx,
-                  "the advisory that fires with the window unset is the "
-                  "model-switch guard, not a stray context-size one")
+                  "the advisory is the model-switch guard, not a stray "
+                  "context-size one (which no longer exists)")
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
