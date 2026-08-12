@@ -674,6 +674,16 @@ jobs:
       - name: cross-harness script-parity self-test
         run: python3 core/scripts/test_script_parity.py
 
+      # 8d-2. Cross-harness hooks-parity self-test (issue #173, #170). Same
+      #       shape as the script-parity gate above, but for hooks.json: every
+      #       harness's compiled hooks/hooks.json must match what
+      #       core/hooks/hooks.spec.json compiles to (drift), every referenced
+      #       hook .sh must exist under that harness's own hooks/ (existence),
+      #       and no harness's hooks/ may be a symlink (the #170 defect
+      #       shape). Deterministic, offline, zero token cost.
+      - name: cross-harness hooks-parity self-test
+        run: python3 core/scripts/test_hooks_parity.py
+
       # 8e. release_gate.py self-test (issue #75). Feeds the pure
       #     `is_released()` decision synthetic tag/release lists (no `gh`/
       #     `git`/network) and asserts released-ok/missing-tag/no-release/
@@ -901,30 +911,25 @@ jobs:
 
           echo "Antigravity harness check: OK (plugin installed, all seven components registered, bundled scripts resolve against the installed copy). Hooks are asserted in the next step."
 
-      # Hooks (issue #167 AC#2). harnesses/antigravity/marc/hooks is a real,
-      # committed symlink to the Claude Code harness's hooks/ (git mode
-      # 120000, introduced in PR #80) — NOT an absent feature. COMPATIBILITY.md
-      # itself documents hooks as "Highly Compatible", with the one required
-      # adaptation being environment variables (CLAUDE_PROJECT_DIR ->
-      # AGY_PROJECT_DIR). This step asserts against the INSTALLED copy,
-      # using Antigravity's own declared vars (compile.json:
-      # project_dir_env=AGY_PROJECT_DIR, plugin_root_env=AGY_PLUGIN_ROOT) and
-      # its own confirmed-compatible trigger name (COMPATIBILITY.md:
-      # SessionStart), rather than assuming parity with Claude Code.
+      # Hooks (issue #167 AC#2, fixed by #173/#170). harnesses/antigravity/marc/
+      # hooks is now a real, compiled directory (scripts/compile_prompts.py,
+      # from core/hooks/hooks.spec.json) — no longer the bare symlink to the
+      # Claude Code harness's hooks/ introduced in PR #80. This step asserts
+      # against the INSTALLED copy, using Antigravity's own declared vars
+      # (compile.json: project_dir_env=AGY_PROJECT_DIR,
+      # plugin_root_env=AGY_PLUGIN_ROOT) and its own confirmed-compatible
+      # trigger name (COMPATIBILITY.md: SessionStart), rather than assuming
+      # parity with Claude Code.
       #
-      # continue-on-error: this assertion is intentionally allowed to go red
-      # without failing the job. The shared hooks.json currently hardcodes
-      # Claude Code's CLAUDE_PLUGIN_ROOT with no fallback in every one of its
-      # five hook commands (outdated-check.sh, invariants-card.sh,
-      # token-guard.sh, outdated-recheck.sh, token-telemetry.sh) — a real
-      # product defect in harnesses/**, not something this test step should
-      # paper over. Fixing it is a core/harnesses change requiring recompile +
-      # lockstep parity + a version bump, which is out of scope here. See PR
-      # #168 discussion / issue #167 for the tracked follow-up.
-      - name: Tier 2 — Antigravity hook-resolution assertion (issue #167 AC#2)
+      # `continue-on-error` REMOVED (#170 AC#3): this assertion previously
+      # went red because the shared hooks.json hardcoded Claude Code's
+      # CLAUDE_PLUGIN_ROOT with no fallback in every one of its five hook
+      # commands. #173/#170 fixed that at the source (core/hooks/
+      # hooks.spec.json renders each harness's own plugin_root_env), so this
+      # assertion is now load-bearing like every other Tier 2 step.
+      - name: Tier 2 — Antigravity hook-resolution assertion (issue #167 AC#2, #170)
         id: antigravity_hooks
         if: steps.antigravity_install.outcome == 'success'
-        continue-on-error: true
         env:
           HOME: ${{ github.workspace }}/.agy-home
         run: |
@@ -1041,8 +1046,8 @@ jobs:
             success) echo "Antigravity hook-resolution coverage: RAN and PASSED." ;;
             skipped) echo "Antigravity hook-resolution coverage: SKIPPED (install step did not succeed — see above)." ;;
             failure) {
-                echo "### :red_circle: Antigravity hook-resolution coverage: FAILED (known, tracked product defect)"
-                echo "hooks/hooks.json (shared with Claude Code via the PR #80 symlink) hardcodes CLAUDE_PLUGIN_ROOT with no fallback in every hook command. Antigravity does not set that variable (it sets AGY_PLUGIN_ROOT per compile.json), so these hooks do not resolve under real Antigravity runtime. This step is continue-on-error and does not block the job, but it is a real product defect, not a passing test — see issue #167 / PR #168 discussion."
+                echo "### :red_circle: Antigravity hook-resolution coverage: FAILED"
+                echo "Antigravity's compiled hooks/hooks.json (core/hooks/hooks.spec.json -> scripts/compile_prompts.py, #173/#170) no longer resolves under Antigravity's own env vars. This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
               } >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "Antigravity hook-resolution coverage: outcome '${{ steps.antigravity_hooks.outcome }}' unrecognized." ;;
           esac
@@ -1115,10 +1120,20 @@ jobs:
           # used for Claude Code's hook self-tests elsewhere in this file.
           echo "== assert bundled scripts resolve via \${COPILOT_PLUGIN_DATA} against the INSTALLED copy =="
           export COPILOT_PLUGIN_DATA="$HOME/.copilot/plugin-data/marc"
-          SESSION_START_BASH="$(jq -r '.hooks.sessionStart[0].bash' "$HOOKS_JSON")"
-          test -n "$SESSION_START_BASH" && [ "$SESSION_START_BASH" != "null" ] \
-            || { echo "::error::could not extract sessionStart hook 'bash' command from $HOOKS_JSON"; exit 1; }
-          bash -c "$SESSION_START_BASH"
+          # sessionStart now has TWO entries (#173: hooks.json is compiled from
+          # core/hooks/hooks.spec.json, one hook id per array entry — the
+          # team.toml dump and the plugin-data script-copy are separate hooks,
+          # not one combined command). Run BOTH, in order, the same way the
+          # real Copilot CLI dispatch would.
+          SESSION_START_COUNT="$(jq '.hooks.sessionStart | length' "$HOOKS_JSON")"
+          test "$SESSION_START_COUNT" -ge 1 \
+            || { echo "::error::installed hooks.json has no sessionStart entries"; exit 1; }
+          for i in $(seq 0 $((SESSION_START_COUNT - 1))); do
+            SESSION_START_BASH="$(jq -r ".hooks.sessionStart[$i].bash" "$HOOKS_JSON")"
+            test -n "$SESSION_START_BASH" && [ "$SESSION_START_BASH" != "null" ] \
+              || { echo "::error::could not extract sessionStart[$i] hook 'bash' command from $HOOKS_JSON"; exit 1; }
+            bash -c "$SESSION_START_BASH"
+          done
 
           SCRIPT_REFS="$(grep -rhoE '\$\{COPILOT_PLUGIN_DATA:-\.\}/scripts/[A-Za-z0-9_.-]+' "$HOME"/.copilot/installed-plugins/nexaduo/marc/skills/*/SKILL.md | sed -E 's#.*/scripts/##' | sort -u)"
           test -n "$SCRIPT_REFS" || { echo "::error::no \${COPILOT_PLUGIN_DATA}/scripts/* references found in installed SKILL.md files"; exit 1; }
