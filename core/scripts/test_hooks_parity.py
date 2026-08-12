@@ -131,7 +131,16 @@ def main() -> int:
         check(renderer is not None, f"{harness}: hook_dialect {dialect!r} has a known renderer")
         if renderer is None:
             continue
-        expected = renderer(selected_hooks, config)
+        try:
+            expected = renderer(selected_hooks, config)
+        except ValueError as e:
+            # The compiler's own fail-closed shell-safety validator
+            # (`_assert_shell_safe`, origin: #173) rejected a spec/config
+            # value — a quote/backtick/`$`/`;`/newline that would splice
+            # unescaped shell into hooks.json. Surface it as a normal gate
+            # failure rather than an uncaught traceback.
+            check(False, f"{harness}: hooks.spec.json/compile.json value is not shell-safe: {e}")
+            continue
 
         with open(dest_hooks_json, "r", encoding="utf-8") as f:
             actual = json.load(f)

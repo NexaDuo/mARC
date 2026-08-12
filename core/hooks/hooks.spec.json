@@ -50,7 +50,7 @@
       "event": "post_tool_use",
       "kind": "inline",
       "copilot_timeout_sec": 10,
-      "command": "sent=\"${{{ plugin_root_env }}:-$HOME/.copilot/plugin-data/marc}/scripts/token_sentinel.py\"; if [ -f \"$sent\" ]; then if command -v python3 >/dev/null 2>&1; then python3 \"$sent\" --hook 2>/dev/null || true; fi; else echo \"[mARC] hook script not found: $sent (has sessionStart run yet in this session?)\" >&2; fi; exit 0"
+      "command": "sent=\"${{{ plugin_root_env }}:-$HOME/.copilot/plugin-data/marc}/scripts/token_sentinel.py\"; if [ -f \"$sent\" ]; then if command -v python3 >/dev/null 2>&1; then python3 \"$sent\" --hook 2>/dev/null || true; fi; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token_sentinel.py\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $sent (has sessionStart run yet in this session?)\" >&2; touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
     }
   ]
 }

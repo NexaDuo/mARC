@@ -22,15 +22,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   accident). `scripts/compile_prompts.py` renders each harness's own
   `hooks/hooks.json` and copies only the `.sh` scripts it actually needs; the
   Antigravity symlink is gone in favor of a real compiled directory. A hook
-  whose script cannot be found now says so once, visibly, on stderr instead of
-  the old blanket `2>/dev/null; exit 0` that made a resolution failure
-  indistinguishable from "ran, nothing to report" — ordinary quiet no-ops
-  (e.g. no `team.toml` in a repo) are unaffected. `outdated-check.sh`/
-  `outdated-recheck.sh` also now find the plugin manifest at either
-  `.claude-plugin/plugin.json` (Claude Code) or a root-level `plugin.json`
-  (Antigravity/Copilot). A new `core/scripts/test_hooks_parity.py` gates CI
-  against hand-edit drift and missing hook scripts, alongside the existing
-  `test_script_parity.py`.
+  whose script cannot be found now says so once per session, visibly, on
+  stderr (deduped via a state-file marker keyed off the hook's own
+  `session_id`, so a broken install doesn't flood the transcript on every
+  `PostToolUse` call) instead of the old blanket `2>/dev/null; exit 0` that
+  made a resolution failure indistinguishable from "ran, nothing to report"
+  — ordinary quiet no-ops (e.g. no `team.toml` in a repo) are unaffected.
+  `outdated-check.sh`/`outdated-recheck.sh` also now find the plugin manifest
+  at either `.claude-plugin/plugin.json` (Claude Code) or a root-level
+  `plugin.json` (Antigravity/Copilot). The compiler validates every
+  spec/config value it interpolates into a hook command and refuses
+  (fail-closed) to render one containing a shell metacharacter, so a future
+  careless edit can't splice unescaped shell into the shipped `hooks.json`.
+  A new `core/scripts/test_hooks_parity.py` gates CI against hand-edit drift,
+  missing hook scripts, and that same class of unsafe interpolation,
+  alongside the existing `test_script_parity.py`.
 
 ## [0.23.0] - 2026-08-12
 

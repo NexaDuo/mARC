@@ -53,11 +53,69 @@ def sync_scripts(core_scripts_dir, dest_scripts_dir):
         shutil.copy2(source_file, dest_file)
         print(f"Copied script: {source_file} -> {dest_file}")
 
+# Characters that would let a spec/config value break out of the shell
+# contexts these values are interpolated into (bash variable *names* in
+# `${{{...}}}`, and path segments inside an already-double-quoted string).
+# Rejecting these outright (fail-closed) rather than `shlex.quote()`-ing them
+# is deliberate: quoting a bash variable *name* is a syntax error, not a fix,
+# and quoting a path segment that's already inside a double-quoted string
+# just relocates the metacharacter rather than neutralizing it. Every value
+# reaching a hook command comes from `core/hooks/hooks.spec.json` or a
+# harness's `compile.json` — repo-controlled today, but this is the sole
+# compiler for the shipped `hooks.json`, so it must refuse to emit broken or
+# splice-able shell rather than rely on reviewer discipline over raw JSON
+# diffs (origin: #173, flagged by `@sec` on PR #189).
+_UNSAFE_SHELL_CHARS = set('"\'`$;&|<>\n\r\\')
+
+
+def _assert_shell_safe(value, context):
+    value = str(value)
+    bad = _UNSAFE_SHELL_CHARS & set(value)
+    if bad:
+        raise ValueError(
+            f"unsafe shell metacharacter(s) {sorted(bad)!r} found in {context} ({value!r}) "
+            "— refusing to compile a hooks.json that splices this into a shell command"
+        )
+
+
 def _substitute(text, config):
     for key, value in config.items():
         placeholder = f"{{{{ {key} }}}}"
-        text = text.replace(placeholder, str(value))
+        if placeholder in text:
+            _assert_shell_safe(value, f"compile.json field {key!r}")
+            text = text.replace(placeholder, str(value))
     return text
+
+
+# `sed` pattern that pulls the `session_id` field out of a hook's stdin JSON
+# payload without a `jq` dependency (single quotes below are the shell's, so
+# the literal double quotes inside don't need JSON/shell escaping here).
+_SESSION_ID_SED = 's/.*"session_id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'
+
+
+def _report_once_fragment(marker_key, message_cmd):
+    """Shell fragment: run `message_cmd` (a full statement, semicolon-
+    terminated) at most once per session instead of once per invocation.
+
+    `token-guard`/`outdated-recheck` are `PostToolUse` hooks, so a genuinely
+    broken install (missing script) previously repeated its stderr line on
+    every single tool call — flooding the transcript and burning context on
+    exactly the kind of diagnostic that's supposed to be cheap (origin: #170
+    AC#2, dedup gap flagged by `@rev` on PR #189). This stays visible (never
+    silent — that was the #170 bug) but reports once per session by keying a
+    state-file marker off the hook's own stdin `session_id` (falling back to
+    a fixed "nosession" bucket if it can't be read, e.g. no stdin JSON or a
+    malformed payload — still reported at least once, never permanently
+    silent). `marker_key` must already be shell-safe (validated via
+    `_assert_shell_safe`, or a literal drawn from one)."""
+    return (
+        'st="${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing"; '
+        'mkdir -p "$st" 2>/dev/null; '
+        'sid="$(cat 2>/dev/null | LC_ALL=C sed -n \'' + _SESSION_ID_SED + '\' | head -n1)"; '
+        'mk="$st/$(printf \'%s\' "${sid:-nosession}_' + marker_key + '" '
+        '| LC_ALL=C tr -c \'A-Za-z0-9_.-\' \'_\')"; '
+        'if [ ! -f "$mk" ]; then ' + message_cmd + ' touch "$mk" 2>/dev/null; fi'
+    )
 
 
 def _script_hook_command(hook, config):
@@ -80,6 +138,10 @@ def _script_hook_command(hook, config):
     project_dir_env = config["project_dir_env"]
     script_name = hook["script"]
 
+    _assert_shell_safe(plugin_root_env, "compile.json field 'plugin_root_env'")
+    _assert_shell_safe(project_dir_env, "compile.json field 'project_dir_env'")
+    _assert_shell_safe(script_name, f"hooks.spec.json hook {hook.get('id')!r} field 'script'")
+
     is_native = plugin_root_env == "CLAUDE_PLUGIN_ROOT" and project_dir_env == "CLAUDE_PROJECT_DIR"
     prefix = ""
     if not is_native:
@@ -88,10 +150,15 @@ def _script_hook_command(hook, config):
             f'export CLAUDE_PROJECT_DIR="${{{project_dir_env}:-$PWD}}"; '
         )
 
+    not_found_msg = (
+        f'echo "[mARC] hook script not found: $script (is {plugin_root_env} set for this harness?)" >&2; '
+    )
+    not_found_branch = _report_once_fragment(script_name, not_found_msg)
+
     return (
         f'{prefix}script="${{{plugin_root_env}}}/hooks/{script_name}"; '
         'if [ -f "$script" ]; then bash "$script" 2>/dev/null; '
-        f'else echo "[mARC] hook script not found: $script (is {plugin_root_env} set for this harness?)" >&2; fi; '
+        f'else {not_found_branch}; fi; '
         'exit 0'
     )
 

@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/outdated-check.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2; fi; exit 0"
+            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/outdated-check.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_outdated-check.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       },
@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/invariants-card.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2; fi; exit 0"
+            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/invariants-card.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_invariants-card.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       }
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/token-guard.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2; fi; exit 0"
+            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/token-guard.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-guard.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       },
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/outdated-recheck.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2; fi; exit 0"
+            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/outdated-recheck.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_outdated-recheck.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       }
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/token-telemetry.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2; fi; exit 0"
+            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/token-telemetry.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-telemetry.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       }

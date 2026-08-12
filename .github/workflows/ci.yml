@@ -1019,7 +1019,7 @@ jobs:
           echo "Checked $total_refs hook-script reference(s)."
 
           if [ "$fail" -ne 0 ]; then
-            echo "::error::Antigravity hook-resolution assertion FAILED. This step is continue-on-error so it does not block unrelated merges, but this is a real, tracked product defect in harnesses/antigravity/marc + harnesses/claude-code/marc/hooks, not a test bug — do not weaken this assertion to force a pass."
+            echo "::error::Antigravity hook-resolution assertion FAILED. This step has no continue-on-error (removed, #170 AC#3) — it is load-bearing and fails the job. This is a real regression in harnesses/antigravity/marc + harnesses/claude-code/marc/hooks, not a test bug — do not weaken this assertion to force a pass."
             exit 1
           fi
           echo "Antigravity hook-resolution check: all hook commands resolve to real files under Antigravity's own declared env vars."
