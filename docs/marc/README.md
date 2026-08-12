@@ -58,6 +58,7 @@ practice).
 - [2026-07-24-decision-distribution-channel-marketplace-only.md](2026-07-24-decision-distribution-channel-marketplace-only.md) — decision record: the Claude Code plugin marketplace remains mARC's only supported install channel; `skills.sh`, `npx claude-plugins`, and a self-owned `npx` installer considered and rejected (#159, #160, #161).
 - [2026-07-29-decision-ai-memory-rejected.md](2026-07-29-decision-ai-memory-rejected.md) — decision record: mARC does not adopt `akitaonrails/ai-memory` (install-channel conflict, no PR-review gate on its writes); three of its conventions tracked separately as a follow-up (#175, #176).
 - [2026-08-12-decision-context-advisory-retired.md](2026-08-12-decision-context-advisory-retired.md) — decision record: the token sentinel's context-size advisory is retired (not fixed) — Claude Code's own harness already auto-compacts against the real per-model window; the runaway-loop (#71) and model-switch (#73) guards survive (#181).
+- [2026-08-12-brief-harness-context-management.md](2026-08-12-brief-harness-context-management.md) — research brief: how Claude Code, Antigravity (`agy`) and Copilot CLI each handle context windows and auto-compaction natively. Claude Code and Copilot CLI have confirmed native mechanisms; Antigravity's could not be confirmed from primary sources, which is the gap tracked in #186 (#181).
 
 ## Landing process (write policy)
 
