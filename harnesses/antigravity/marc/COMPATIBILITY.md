@@ -15,7 +15,7 @@ The mARC team is designed to be harness-agnostic. The core specialist prompts ([
 | **Skill Definition (`SKILL.md`)** | Progressive disclosure from `skills/<name>/SKILL.md` (YAML frontmatter + markdown instructions). | Natively supports `skills/<name>/SKILL.md` with identical YAML frontmatter metadata. | **100% Compatible** | None. Skills can be symlinked directly to share logic. |
 | **Subagent Dispatch API** | Calls the native `Agent` tool (`subagent_type`, `prompt`, `run_in_background`). | Calls the native `invoke_subagent` tool (array of subagents with `TypeName`, `Role`, `Prompt`). | **Requires Adaptation** | Abstract the dispatch command in `@techlead`'s prompt based on the detected harness/tools. |
 | **Plugin Manifest** | Manifest defined at `.claude-plugin/plugin.json`. | Manifest defined at `plugin.json` in the plugin root. | **Partially Compatible** | Maintained as a sibling file under the specific harness folder. |
-| **Execution Hooks** | Defined in `hooks/hooks.json` (trigger: `SessionStart`). Runs shell commands. | Defined in `hooks/hooks.json` or manifest (triggers: `SessionStart`, `PreInvocation`, etc.). | **Highly Compatible** | Adjust environment variables (e.g., `CLAUDE_PROJECT_DIR` $\rightarrow$ `AGY_PROJECT_DIR`) in scripts. |
+| **Execution Hooks** | Defined in `hooks/hooks.json` (trigger: `SessionStart`). Runs shell commands. | Defined in `hooks/hooks.json` or manifest (triggers: `SessionStart`, `PreInvocation`, etc.). | **100% Compatible** | None. `scripts/compile_prompts.py` compiles `core/hooks/hooks.spec.json` into each harness's own `hooks/hooks.json` and automatically translates `CLAUDE_PROJECT_DIR`/`CLAUDE_PLUGIN_ROOT` to `AGY_PROJECT_DIR`/`AGY_PLUGIN_ROOT` inline (`export` shim ahead of each `.sh` invocation) — no manual env-var adaptation needed (origin: #173, #170). |
 | **Local Config Path** | Discovers workspace configurations under `.claude/` (e.g., [team.toml](../../../.claude/team.toml), with `.agents/team.toml` preferred if present). | Discovers workspace configurations under `.agents/` (e.g., `.agents/team.toml`). | **Requires Dual-Support** | Update config search scripts to fall back to `.claude/` when `.agents/` is missing. |
 | **Bash Helper Scripts** | Runs scripts inside `scripts/` via terminal command execution. | Runs identical scripts inside `scripts/` via terminal command execution. | **100% Compatible** | Ensure required CLI utilities (`gh`, `jq`) are present on the user's system. |
 | **Rich Output / Artifacts** | Standard Markdown console rendering. | HTML Auxiliary Pane supporting visual Artifacts, carousels, and image editing. | **Upgrade (Backward Compatible)** | `@techlead` can optionally write visual status reports to `<appDataDir>/brain/<conversation-id>`. |
@@ -92,7 +92,13 @@ Google documents/opens a public marketplace-registration command.
 
 - [x] Create Antigravity manifest `plugin.json` ([harnesses/antigravity/marc/plugin.json](plugin.json))
 - [x] Create `COMPATIBILITY.md` tracker ([harnesses/antigravity/marc/COMPATIBILITY.md](COMPATIBILITY.md))
-- [ ] Establish symlinks for shared assets (`skills/`, `agents/`, `hooks/`)
+- [ ] Establish symlinks for shared assets (`skills/`, `agents/`)
+- [x] ~~Symlink `hooks/` to Claude Code's~~ — reversed on purpose (origin: #170): a bare
+      `hooks -> ../../claude-code/marc/hooks` symlink hardcoded `CLAUDE_PLUGIN_ROOT`
+      with no per-harness fallback, silently no-op'ing every Antigravity hook. `hooks/`
+      is now a real, self-contained, compiled directory per harness
+      (`scripts/compile_prompts.py` from `core/hooks/hooks.spec.json`) — do not
+      reintroduce the symlink.
 - [ ] Implement dual `.claude/` and `.agents/` directory lookup in all scripts
 - [ ] Add Antigravity validation and structural gates to the CI pipeline (`.github/workflows/ci.yml`)
 - [ ] Implement conditional tool-calling logic (Claude `Agent` vs Antigravity `invoke_subagent`) in `@techlead`'s prompt

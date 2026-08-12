@@ -1,0 +1,56 @@
+{
+  "$schema_note": "Harness-neutral hook catalog (origin: #173 · 2026-08-12). Compiled into each harness's native hooks.json by scripts/compile_prompts.py, using that harness's compile.json 'hook_dialect' (rendering schema) and 'hook_ids' (which of these hooks it ships — an explicit, reviewable capability declaration, not an accident of hand-maintenance).",
+  "hooks": [
+    {
+      "id": "team-toml-dump",
+      "event": "session_start",
+      "kind": "inline",
+      "copilot_timeout_sec": 15,
+      "command": "cfg=\"${{{ project_dir_env }}:-$PWD}/{{ agents_dir }}/team.toml\"; fallback=\"${{{ project_dir_env }}:-$PWD}/{{ config_dir }}/team.toml\"; legacy=\"${{{ project_dir_env }}:-$PWD}/{{ config_dir }}/team.config\"; if [ -f \"$cfg\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$cfg\"; printf '\\n=== end team.toml ===\\n'; elif [ -f \"$fallback\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$fallback\"; printf '\\n=== end team.toml ===\\n'; printf '[mARC] DEPRECATED path: {{ config_dir }}/team.toml — re-run /marc:init to migrate to {{ agents_dir }}/team.toml (it will offer to remove the old file).\\n'; elif [ -f \"$legacy\" ]; then printf '[mARC] DEPRECATED: {{ config_dir }}/team.config found but mARC now reads {{ agents_dir }}/team.toml (or {{ config_dir }}/team.toml as a fallback) — re-run /marc:init (or convert by hand from docs/team.toml.example) to migrate; the old {{ config_dir }}/team.config file is no longer parsed.\\n'; else printf '[mARC] no {{ agents_dir }}/team.toml (or {{ config_dir }}/team.toml) in this repo — @techlead will fall back to runtime discovery (gh repo view / gh project list). Add one from docs/team.toml.example to pin repo/project facts.\\n'; fi; exit 0"
+    },
+    {
+      "id": "outdated-check",
+      "event": "session_start",
+      "kind": "script",
+      "script": "outdated-check.sh"
+    },
+    {
+      "id": "invariants-card",
+      "event": "session_start_compact",
+      "kind": "script",
+      "script": "invariants-card.sh"
+    },
+    {
+      "id": "token-guard",
+      "event": "post_tool_use",
+      "kind": "script",
+      "script": "token-guard.sh"
+    },
+    {
+      "id": "outdated-recheck",
+      "event": "post_tool_use",
+      "kind": "script",
+      "script": "outdated-recheck.sh"
+    },
+    {
+      "id": "token-telemetry",
+      "event": "stop",
+      "kind": "script",
+      "script": "token-telemetry.sh"
+    },
+    {
+      "id": "copilot-plugin-data-sync",
+      "event": "session_start",
+      "kind": "inline",
+      "copilot_timeout_sec": 15,
+      "command": "data=\"${{{ plugin_root_env }}:-$HOME/.copilot/plugin-data/marc}\"; mkdir -p \"$data/scripts\"; if command -v jq >/dev/null 2>&1; then root=\"\"; while IFS= read -r cand; do [ -n \"$cand\" ] || continue; nm=\"$(jq -r '.name // empty' \"$cand\" 2>/dev/null)\"; [ \"$nm\" = \"marc\" ] || continue; rp=\"$(jq -r '.repository // empty' \"$cand\" 2>/dev/null)\"; hp=\"$(jq -r '.homepage // empty' \"$cand\" 2>/dev/null)\"; case \"$rp $hp\" in *NexaDuo/mARC*) root=\"${cand%/plugin.json}\"; break ;; esac; done < <(find \"$HOME/.copilot/installed-plugins\" -maxdepth 5 -type f -path '*/marc/plugin.json' 2>/dev/null | sort); if [ -n \"$root\" ] && [ -d \"$root/scripts\" ]; then cp -f \"$root\"/scripts/*.py \"$data/scripts/\" 2>/dev/null || true; fi; fi; exit 0"
+    },
+    {
+      "id": "token-sentinel-post-tool-use",
+      "event": "post_tool_use",
+      "kind": "inline",
+      "copilot_timeout_sec": 10,
+      "command": "sent=\"${{{ plugin_root_env }}:-$HOME/.copilot/plugin-data/marc}/scripts/token_sentinel.py\"; if [ -f \"$sent\" ]; then if command -v python3 >/dev/null 2>&1; then python3 \"$sent\" --hook 2>/dev/null || true; fi; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token_sentinel.py\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $sent (has sessionStart run yet in this session?)\" >&2; touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
+    }
+  ]
+}
