@@ -194,7 +194,7 @@ cheapest lever on token budget:
   execution/status (tests, git, gh), never content ingestion. (origin: #137 · 2026-07-20)
 <!-- /rules:origin-required -->
 
-**Automatic Token Guard:** You are protected by a background token sentinel. Do not manually check your token usage. If the background guard detects a runaway tool-call loop or a mid-session model switch, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to start a fresh session. (origin: #119 · 2026-07-16; context-size advisory retired at #184 · 2026-08-12 — the harness's own context/auto-compact handling supersedes it)
+**Automatic Token Guard:** You are protected by a background token sentinel. Do not manually check your token usage. If the background guard detects a runaway tool-call loop or a mid-session model switch, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to start a fresh session. (origin: #119 · 2026-07-16; context-size advisory retired at #181 · 2026-08-12 — the harness's own context/auto-compact handling supersedes it)
 Escalate to Opus at a natural break, not mid-session (cache invalidation). (origin: #73 · 2026-07-12)
 
 <!-- rules:origin-required -->

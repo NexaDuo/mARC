@@ -27,7 +27,7 @@ Two modes share ONE counting implementation (DRY):
         switching at a natural break / `/compact`. Subagent/sidechain model
         differences (`isSidechain`) are ignored — separate context and cache.
 
-    A third guard, context-size (#81, fail-closed #181), was RETIRED (#184 /
+    A third guard, context-size (#81, fail-closed #181), was RETIRED (#181 /
     2026-08-12): Claude Code's own harness already knows the real context
     window per model, warns on it natively, and auto-compacts by default
     (`autoCompactEnabled`/`autoCompactWindow`) — a strictly better mechanism
@@ -78,7 +78,7 @@ DEFAULT_HOOK_THRESHOLD = 25
 HOOK_THRESHOLD_ENV = "MARC_TOKEN_GUARD_THRESHOLD"
 
 # --- Context-size advisory — RETIRED (origin: #81, #100, #178, #181; retired
-# by the decision at #184 / 2026-08-12) --------------------------------------
+# by the decision at #181 / 2026-08-12) --------------------------------------
 # A third PostToolUse guard used to watch weighted tokens-processed per turn,
 # independent of call count, and suggest `/compact` when a turn's context grew
 # large. It is removed: Claude Code's own harness already knows the real
@@ -94,7 +94,11 @@ CACHE_READ_WEIGHT = 0.1  # cache_read_input_tokens counted at ~1/10th rate; tune
 # context-window derivation, no env var) — it is an explicit, operator-invoked
 # report column, not a silent hook assumption, so a fixed documented default
 # is fine here even though the hook-side context-size guard it used to share a
-# default with (DEFAULT_HOOK_TOKENS_THRESHOLD) is gone.
+# default with (DEFAULT_HOOK_TOKENS_THRESHOLD) is gone. The number itself
+# used to be derived from that guard's window calibration (0.65 x a 200K
+# window); the guard and that calibration are both gone (#181), so this is
+# now just an unanchored, hand-picked default for a manual report column —
+# do not go looking for a derivation to update, there isn't one anymore.
 DEFAULT_CLI_TOKENS_THRESHOLD = 130_000
 
 # --- Mid-session model-switch guard (origin: #73) --------------------------
@@ -559,7 +563,7 @@ def run_hook(stdin_text: str) -> int:
                 from_model=from_model, to_model=to_model, cw=cw))
 
     # A third guard (context-size / per-turn-token band, origin: #81, #178,
-    # #181) used to run here. RETIRED at #184 / 2026-08-12 — Claude Code's own
+    # #181) used to run here. RETIRED at #181 / 2026-08-12 — Claude Code's own
     # harness auto-compacts by default against the real per-model window,
     # which this guard could only guess at. See
     # docs/marc/2026-08-12-decision-context-advisory-retired.md.
@@ -580,7 +584,7 @@ def main(argv=None) -> int:
                          "(a manual report column only, origin: #81; "
                          "weighting origin: #100; the hook-side context-size "
                          "guard this used to share a threshold with was "
-                         "retired at #184)")
+                         "retired at #181)")
     ap.add_argument("--hook", action="store_true",
                     help="run as a warn-only PostToolUse hook (reads hook JSON on stdin; always exits 0)")
     args = ap.parse_args(argv)
@@ -603,8 +607,9 @@ def main(argv=None) -> int:
     turns = analyze(path)
     print(f"session: {path}")
     print(f"turns:   {len(turns)}   thresholds: >{args.calls} calls, >{args.tokens} weighted "
-          f"tokens (context-size signal, origin: #81; cache-read weighted "
-          f"{CACHE_READ_WEIGHT}x, origin: #100)\n")
+          f"tokens (manual diagnostic only, origin: #81; the paired hook-side "
+          f"context-size guard was retired at #181 — Claude Code auto-compacts "
+          f"natively; cache-read weighted {CACHE_READ_WEIGHT}x, origin: #100)\n")
     print(f"{'#':>3}  {'model':<28} {'calls':>6} {'tokens':>12}  {'dominant':<20} {'flag':<14} prompt")
     flagged = 0
     total_tokens = 0

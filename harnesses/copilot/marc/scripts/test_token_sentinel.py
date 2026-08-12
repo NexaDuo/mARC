@@ -25,7 +25,7 @@ Model-switch guard (#73):
   (e) the hook ALWAYS exits 0.
 
 A third guard — context-size / per-turn-token (origin: #81, window-aware
-#178, fail-closed #181) — used to be covered here. It was RETIRED at #184 /
+#178, fail-closed #181) — used to be covered here. It was RETIRED at #181 /
 2026-08-12 (see docs/marc/2026-08-12-decision-context-advisory-retired.md):
 Claude Code's own harness already knows the real per-model context window,
 warns on it, and auto-compacts by default, so a guard that could only guess
@@ -329,7 +329,7 @@ def main() -> int:
               "sidechain usage is still counted in the turn's raw-token cost total")
 
         # ---- Retired context-size guard: regression coverage for the two ----
-        # guards that survive it (origin: #184 / 2026-08-12). The removed
+        # guards that survive it (origin: #181 / 2026-08-12). The removed
         # guard's own tests (band derivation, headroom gate, fail-closed
         # window handling) are removed with it; what remains is proof that
         # #71 and #73, which never depended on the context window, still fire
