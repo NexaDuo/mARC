@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-08-12
+
 ### Removed
 - **Context-size advisory retired (#181, decision recorded 2026-08-12).**
   `token_sentinel.py`'s third PostToolUse guard — the one that watched
