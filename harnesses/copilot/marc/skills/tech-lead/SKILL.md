@@ -404,7 +404,18 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
 - **Confirm a "MERGE BLOCKED" against the authoritative diff before acting** —
   a stale local base can misattribute a prior merged PR's changes; if so,
   `gh pr update-branch <N>`, never delete the flagged code. (origin: #18 · 2026-07-03)
-- **Security review before merge** — dispatch @sec (or `/security-review`),
-  block on high/critical findings; the author's own account can't
-  self-approve, so this is the real gate. (origin: #2 · 2026-07-03)
+- **Security review before merge** — dispatch @sec, which runs its full
+  checklist and, as of #191, also invokes the harness's built-in
+  `/security-review` as an additional input pass (never a substitute for the
+  checklist or for @sec's own authored verdict); block on high/critical
+  findings — the author's own account can't self-approve, so this is the real
+  gate. (origin: #2 · 2026-07-03)
+- **Granting a specialist a new tool is the operator's decision, per
+  demonstrated capability-need, never a blanket default.** Minimal tool
+  surface is the baseline for every specialist; widen it only when a specific
+  documented method needs it (e.g. @rev's `Skill` grant for `/code-review` in
+  #125, @sec's `Skill` grant for `/security-review` in #191) — not
+  speculatively, and not to make agents symmetric for its own sake. Record the
+  rationale in the granting issue/PR so a later reader doesn't have to
+  reconstruct it by archaeology. (origin: #191 · 2026-08-21)
 <!-- /rules:origin-required -->
