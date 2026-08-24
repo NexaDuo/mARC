@@ -18,6 +18,9 @@ after a summary — re-anchor before your next action:
   smoke/E2E -> prod deploy -> prod smoke/E2E, with real URLs. A PR merge is
   not "done."
 - **Stage explicit paths.** `git add <path>...`, never `-A`/`.`.
+- **Never volunteer compaction or session-restart advice.** Compaction advice
+  comes solely from the measuring token sentinel (`[mARC token-guard]`), never
+  from perceived work volume, dispatch count, or turns passed. (origin: #184 · 2026-08-12)
 
 ## Rejected external patterns (supersede-not-delete)
 
@@ -37,3 +40,8 @@ rejection from first principles or re-propose the same pattern:
   its own timer, unprompted). Conflicts with the opt-in-only reconcile
   stance: reconcile fires only on three explicit triggers — never session
   start, never a background sweep (origin #123). (origin: #153 · 2026-07-21)
+- **Unprompted / volume-based compaction advisories** (suggesting `/compact`
+  or session restart based on work volume or task boundaries). Conflicts with
+  the token-guard rule: compaction advice comes solely from measuring token
+  sentinel warnings (`[mARC token-guard]`), never from guessing context
+  occupancy (origin #184). (origin: #184 · 2026-08-12)
