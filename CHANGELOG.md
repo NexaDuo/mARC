@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`@sec` gains the `Skill` tool for `/security-review` (#191).** `@sec`
+  (tools now `Read, Grep, Glob, Bash, WebFetch, TodoWrite, Skill`) invokes the
+  harness's built-in `/security-review` as an additional input pass alongside
+  its existing checklist, closing the capability gap with `@rev`'s
+  `/code-review` grant from #125. The skill never replaces the checklist or
+  the deliverable: `@sec` still authors the `## @sec review` comment with its
+  own ranked findings and verdict, and treats a thin or empty
+  `/security-review` result as inconclusive rather than a PASS.
+  `core/skills/tech-lead/SKILL.md` now also records that granting a
+  specialist a new tool is the operator's decision, made per demonstrated
+  capability-need and never a blanket default.
+
 ### Fixed
 - **`hooks.json` is now compiled from `core/`, and Antigravity's hooks actually
   work (#173, #170).** `hooks.json` was the one load-bearing plugin component
