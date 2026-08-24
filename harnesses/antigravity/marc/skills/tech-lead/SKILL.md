@@ -135,14 +135,19 @@ no-ops) if unresolvable — a non-zero exit means fix the board, don't move on.
 
 ### 4. Dispatch (automatic, in the background)
 Once an item is on the board, immediately ping the right specialist in the channel — do not wait for the user's confirmation. Use the invoke_subagent tool to spawn the specialist. Set the following fields:
-- `TypeName`: `research` for research, or `self` for developer, sre, design, security tasks.
+- `TypeName`: `research` for research, or `self` for developer, sre, design, security tasks (or dynamically defined subagents via `define_subagent`).
 - `Role`: the specialist's role (e.g. `engineer` for @dev, `sre` for @sre, `design` for @design, `security` for @sec, `review` for @rev, `research` for @research).
-- `Prompt`: the detailed prompt for the specialist. For `security` (@sec) dispatches, the prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @sec review`, so a later reader (or a grep) can verify a review actually happened without trusting a paraphrase. (origin: #105 · 2026-07-16) For `review` (@rev) dispatches — the second mandatory pre-merge gate alongside @sec, reviewing correctness rather than security — require the deliverable start with the fixed marker `## @rev review`. (origin: #125 · 2026-07-16)
-- `Workspace`: `inherit` (or `share` if you want to isolate parallel writing tasks, similar to worktrees).
+- `Prompt`: the detailed prompt for the specialist (include issue number + URL, acceptance criteria, affected files, constraints). For `security` (@sec) dispatches, the prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @sec review`, so a later reader (or a grep) can verify a review actually happened without trusting a paraphrase. (origin: #105 · 2026-07-16) For `review` (@rev) dispatches — the second mandatory pre-merge gate alongside @sec, reviewing correctness rather than security — require the deliverable start with the fixed marker `## @rev review`. (origin: #125 · 2026-07-16) For `research` (@research) dispatches — read-only evidence brief on the motivating issue, no code, no PRs.
+- `Workspace`: `share` for parallel mutating tasks to isolate changes without duplicating storage (or `inherit` for read-only tasks).
+- `Model`: Gemini model tier selection — use `flash` for `@research` (fast document lookups and web evidence gathering), and `pro` or `inherit` for `@dev`, `@sec`, `@rev`, `@sre` (deep reasoning, code generation, and reviews).
 
-Dispatch in the background by default — never block the channel on a specialist. The invoke_subagent tool spawns the subagent concurrently. You are re-invoked (notified) when a background agent finishes. Specialists' work can be slow, so you must stay responsive to the user while work runs. Concretely:
+**Dynamic specialization & ongoing coordination:**
+- For custom or specialized tasks requiring strict tool boundaries, dynamically define subagents using `define_subagent` (e.g. set `enable_write_tools: false` to enforce read-only tool access for reviewer/researcher roles).
+- Use `send_message` for ongoing agent-to-agent coordination, sending follow-up instructions, or checking progress with active or idle subagents rather than spawning redundant subagents.
+
+**Dispatch in the background by default — never block the channel on a specialist.** The invoke_subagent tool spawns the subagent concurrently. You are re-invoked (notified) when a background agent finishes. Specialists' work can be slow, so you must stay responsive to the user while work runs. Concretely:
 - Fire the dispatch using invoke_subagent, then keep the channel live.
-- Launch independent items in parallel.
+- Launch independent items in parallel with `Workspace: "share"` to avoid clobbering.
 - Dependent work stays sequenced, but sequence it via invoke_subagent dispatch and waiting for notifications, not by blocking synchronously.
 
 Include in each prompt: issue number + URL, full acceptance criteria, affected

@@ -73,6 +73,49 @@ def find_hook_script_refs(hooks_json_text: str) -> set[str]:
     return set(re.findall(r"/hooks/([A-Za-z0-9_.\-]+\.sh)", hooks_json_text))
 
 
+def validate_hook_schema(harness: str, dialect: str, hooks_obj: dict) -> None:
+    """Validate that the compiled hooks_obj conforms to the dialect's structural schema."""
+    if dialect == "antigravity":
+        check(isinstance(hooks_obj, dict), f"{harness}: antigravity hooks.json is a dict")
+        check("hooks" not in hooks_obj, f"{harness}: antigravity hooks.json does not use top-level 'hooks' key")
+        for hook_id, events in hooks_obj.items():
+            check(isinstance(events, dict), f"{harness}: hook '{hook_id}' maps to an event dict")
+            for event_name, handlers in events.items():
+                check(
+                    event_name in {"PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop"},
+                    f"{harness}: hook '{hook_id}' event '{event_name}' is a valid Antigravity event",
+                )
+                check(isinstance(handlers, list), f"{harness}: hook '{hook_id}' event '{event_name}' is a list")
+                if event_name in {"PreToolUse", "PostToolUse"}:
+                    for entry in handlers:
+                        check(
+                            isinstance(entry, dict) and "matcher" in entry and "hooks" in entry,
+                            f"{harness}: hook '{hook_id}' event '{event_name}' handler has matcher and hooks list",
+                        )
+                        check(isinstance(entry.get("hooks"), list), f"{harness}: hook '{hook_id}' hooks is a list")
+                        for h in entry.get("hooks", []):
+                            check(
+                                h.get("type") == "command" and bool(h.get("command")),
+                                f"{harness}: hook '{hook_id}' command handler is valid",
+                            )
+                else:
+                    for h in handlers:
+                        check(
+                            isinstance(h, dict) and h.get("type") == "command" and bool(h.get("command")),
+                            f"{harness}: hook '{hook_id}' event '{event_name}' command handler is valid",
+                        )
+    elif dialect == "claude-code":
+        check(
+            isinstance(hooks_obj, dict) and "hooks" in hooks_obj,
+            f"{harness}: claude-code hooks.json has top-level 'hooks' key",
+        )
+    elif dialect == "copilot":
+        check(
+            isinstance(hooks_obj, dict) and hooks_obj.get("version") == 1 and "hooks" in hooks_obj,
+            f"{harness}: copilot hooks.json has version: 1 and 'hooks' key",
+        )
+
+
 def main() -> int:
     if not os.path.isdir(HARNESSES_DIR):
         print(f"::error::harnesses/ directory not found at {HARNESSES_DIR}")
@@ -150,6 +193,8 @@ def main() -> int:
             f"{harness}: committed hooks/hooks.json matches what core/hooks/hooks.spec.json compiles to "
             "(no hand-edit drift)",
         )
+
+        validate_hook_schema(harness, dialect, actual)
 
         with open(dest_hooks_json, "r", encoding="utf-8") as f:
             raw_text = f.read()
