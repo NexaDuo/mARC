@@ -942,7 +942,7 @@ jobs:
           test -f "$HOOKS_JSON" || { echo "::error::hooks/ exists but hooks.json is missing at $HOOKS_JSON"; exit 1; }
 
           echo "== assert hooks.json declares Antigravity's own confirmed-compatible trigger name =="
-          jq -e '.hooks.SessionStart' "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json has no .hooks.SessionStart entry — COMPATIBILITY.md documents SessionStart as a trigger name Antigravity itself supports"; exit 1; }
+          jq -e '."team-toml-dump".PreInvocation' "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json has no .team-toml-dump.PreInvocation entry — Antigravity native hooks schema requires named hook objects with PreInvocation/PostToolUse/Stop"; exit 1; }
 
           echo "== assert every hook command's referenced script resolves to a real file UNDER ANTIGRAVITY'S OWN DECLARED ENV VARS (AGY_PLUGIN_ROOT / AGY_PROJECT_DIR per compile.json) — not Claude Code's =="
 

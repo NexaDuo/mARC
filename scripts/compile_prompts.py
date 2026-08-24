@@ -187,11 +187,19 @@ _COPILOT_EVENT_MAP = {
     "session_start": "sessionStart",
     "post_tool_use": "postToolUse",
 }
+_AGY_EVENT_MAP = {
+    "session_start": "PreInvocation",
+    "session_start_compact": "PreInvocation",
+    "pre_invocation": "PreInvocation",
+    "post_invocation": "PostInvocation",
+    "pre_tool_use": "PreToolUse",
+    "post_tool_use": "PostToolUse",
+    "stop": "Stop",
+}
 
 
 def render_claude_code_hooks(selected_hooks, config):
-    """Claude Code dialect (also used by Antigravity, which shares the same
-    hooks.json schema): {"hooks": {EventName: [{"matcher", "hooks":
+    """Claude Code dialect: {"hooks": {EventName: [{"matcher", "hooks":
     [{"type": "command", "command": ...}]}]}}."""
     out = {"hooks": {}}
     for hook in selected_hooks:
@@ -223,7 +231,33 @@ def render_copilot_hooks(selected_hooks, config):
     return out
 
 
+def render_antigravity_hooks(selected_hooks, config):
+    """Antigravity dialect: top-level map of hook-id -> event map.
+    PreInvocation, PostInvocation, Stop use a flat list of handler objects:
+      {"<hook_id>": {"PreInvocation": [{"type": "command", "command": ...}]}}
+    PreToolUse, PostToolUse use a grouped list with matcher:
+      {"<hook_id>": {"PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": ...}]}]}}
+    """
+    out = {}
+    for hook in selected_hooks:
+        hook_id = hook["id"]
+        event_name = _AGY_EVENT_MAP[hook["event"]]
+        command = _build_command(hook, config)
+        handler = {"type": "command", "command": command}
+        if event_name in ("PreToolUse", "PostToolUse"):
+            event_val = [{
+                "matcher": "*",
+                "hooks": [handler],
+            }]
+        else:
+            event_val = [handler]
+
+        out.setdefault(hook_id, {})[event_name] = event_val
+    return out
+
+
 _HOOK_DIALECT_RENDERERS = {
+    "antigravity": render_antigravity_hooks,
     "claude-code": render_claude_code_hooks,
     "copilot": render_copilot_hooks,
 }

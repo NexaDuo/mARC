@@ -1,34 +1,29 @@
 {
-  "hooks": {
-    "SessionStart": [
+  "team-toml-dump": {
+    "PreInvocation": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cfg=\"${AGY_PROJECT_DIR:-$PWD}/.agents/team.toml\"; fallback=\"${AGY_PROJECT_DIR:-$PWD}/.agents/team.toml\"; legacy=\"${AGY_PROJECT_DIR:-$PWD}/.agents/team.config\"; if [ -f \"$cfg\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$cfg\"; printf '\\n=== end team.toml ===\\n'; elif [ -f \"$fallback\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$fallback\"; printf '\\n=== end team.toml ===\\n'; printf '[mARC] DEPRECATED path: .agents/team.toml \u2014 re-run /marc:init to migrate to .agents/team.toml (it will offer to remove the old file).\\n'; elif [ -f \"$legacy\" ]; then printf '[mARC] DEPRECATED: .agents/team.config found but mARC now reads .agents/team.toml (or .agents/team.toml as a fallback) \u2014 re-run /marc:init (or convert by hand from docs/team.toml.example) to migrate; the old .agents/team.config file is no longer parsed.\\n'; else printf '[mARC] no .agents/team.toml (or .agents/team.toml) in this repo \u2014 @techlead will fall back to runtime discovery (gh repo view / gh project list). Add one from docs/team.toml.example to pin repo/project facts.\\n'; fi; exit 0"
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/outdated-check.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_outdated-check.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
-          }
-        ]
-      },
-      {
-        "matcher": "compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/invariants-card.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_invariants-card.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
-          }
-        ]
+        "type": "command",
+        "command": "cfg=\"${AGY_PROJECT_DIR:-$PWD}/.agents/team.toml\"; fallback=\"${AGY_PROJECT_DIR:-$PWD}/.agents/team.toml\"; legacy=\"${AGY_PROJECT_DIR:-$PWD}/.agents/team.config\"; if [ -f \"$cfg\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$cfg\"; printf '\\n=== end team.toml ===\\n'; elif [ -f \"$fallback\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$fallback\"; printf '\\n=== end team.toml ===\\n'; printf '[mARC] DEPRECATED path: .agents/team.toml \u2014 re-run /marc:init to migrate to .agents/team.toml (it will offer to remove the old file).\\n'; elif [ -f \"$legacy\" ]; then printf '[mARC] DEPRECATED: .agents/team.config found but mARC now reads .agents/team.toml (or .agents/team.toml as a fallback) \u2014 re-run /marc:init (or convert by hand from docs/team.toml.example) to migrate; the old .agents/team.config file is no longer parsed.\\n'; else printf '[mARC] no .agents/team.toml (or .agents/team.toml) in this repo \u2014 @techlead will fall back to runtime discovery (gh repo view / gh project list). Add one from docs/team.toml.example to pin repo/project facts.\\n'; fi; exit 0"
       }
-    ],
+    ]
+  },
+  "outdated-check": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/outdated-check.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_outdated-check.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
+      }
+    ]
+  },
+  "invariants-card": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/invariants-card.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_invariants-card.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
+      }
+    ]
+  },
+  "token-guard": {
     "PostToolUse": [
       {
         "matcher": "*",
@@ -38,7 +33,11 @@
             "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/token-guard.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-guard.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
-      },
+      }
+    ]
+  },
+  "outdated-recheck": {
+    "PostToolUse": [
       {
         "matcher": "*",
         "hooks": [
@@ -48,16 +47,13 @@
           }
         ]
       }
-    ],
+    ]
+  },
+  "token-telemetry": {
     "Stop": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/token-telemetry.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-telemetry.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
-          }
-        ]
+        "type": "command",
+        "command": "export CLAUDE_PLUGIN_ROOT=\"${AGY_PLUGIN_ROOT}\"; export CLAUDE_PROJECT_DIR=\"${AGY_PROJECT_DIR:-$PWD}\"; script=\"${AGY_PLUGIN_ROOT}/hooks/token-telemetry.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-telemetry.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is AGY_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
       }
     ]
   }
