@@ -263,11 +263,24 @@ _HOOK_DIALECT_RENDERERS = {
 }
 
 
+def get_hooks_json_path(harness_marc_path, config):
+    """Return the destination path for hooks.json for the given harness config.
+    Antigravity emits hooks.json at the plugin root; Claude Code and Copilot emit to hooks/hooks.json."""
+    hooks_path = config.get("hooks_path")
+    if hooks_path:
+        return os.path.join(harness_marc_path, hooks_path)
+    dialect = config.get("hook_dialect")
+    if dialect == "antigravity":
+        return os.path.join(harness_marc_path, "hooks.json")
+    return os.path.join(harness_marc_path, "hooks", "hooks.json")
+
+
 def compile_hooks(core_dir, harness_marc_path, config):
     """Compile core/hooks/hooks.spec.json into this harness's native
-    hooks/hooks.json + the .sh scripts it actually references (origin: #173,
-    #170). A harness with no 'hook_dialect' in its compile.json is left alone
-    (no hooks/ directory is asserted or written) — hooks are opt-in per
+    hooks.json (at plugin root for Antigravity, or hooks/hooks.json for Claude
+    Code / Copilot) + the .sh scripts it actually references (origin: #173,
+    #170, #197). A harness with no 'hook_dialect' in its compile.json is left
+    alone (no hooks/ directory is asserted or written) — hooks are opt-in per
     harness via that explicit capability declaration, not an accident of
     what a prior hand-edit happened to include."""
     dialect = config.get("hook_dialect")
@@ -296,6 +309,20 @@ def compile_hooks(core_dir, harness_marc_path, config):
     if os.path.islink(dest_hooks_dir):
         os.unlink(dest_hooks_dir)
     os.makedirs(dest_hooks_dir, exist_ok=True)
+
+    dest_hooks_json = get_hooks_json_path(harness_marc_path, config)
+
+    # Clean up any stale hooks.json in alternative locations
+    subfolder_hooks_json = os.path.join(dest_hooks_dir, "hooks.json")
+    root_hooks_json = os.path.join(harness_marc_path, "hooks.json")
+
+    if dest_hooks_json != subfolder_hooks_json and os.path.isfile(subfolder_hooks_json):
+        os.remove(subfolder_hooks_json)
+        print(f"Removed stale hooks/hooks.json: {subfolder_hooks_json}")
+
+    if dest_hooks_json != root_hooks_json and os.path.isfile(root_hooks_json):
+        os.remove(root_hooks_json)
+        print(f"Removed stale root hooks.json: {root_hooks_json}")
 
     # Only ship the .sh scripts this harness's OWN selected hooks actually
     # reference (a harness that declares no "script"-kind hooks, e.g.
@@ -337,7 +364,6 @@ def compile_hooks(core_dir, harness_marc_path, config):
         shutil.rmtree(dest_lib_dir)
         print(f"Removed stale hooks/lib/: {dest_lib_dir}")
 
-    dest_hooks_json = os.path.join(dest_hooks_dir, "hooks.json")
     with open(dest_hooks_json, "w", encoding="utf-8") as f:
         json.dump(rendered, f, indent=2)
         f.write("\n")

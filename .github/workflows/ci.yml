@@ -911,15 +911,12 @@ jobs:
 
           echo "Antigravity harness check: OK (plugin installed, all seven components registered, bundled scripts resolve against the installed copy). Hooks are asserted in the next step."
 
-      # Hooks (issue #167 AC#2, fixed by #173/#170). harnesses/antigravity/marc/
-      # hooks is now a real, compiled directory (scripts/compile_prompts.py,
-      # from core/hooks/hooks.spec.json) — no longer the bare symlink to the
-      # Claude Code harness's hooks/ introduced in PR #80. This step asserts
-      # against the INSTALLED copy, using Antigravity's own declared vars
+      # Hooks (issue #167 AC#2, fixed by #173/#170, #197). harnesses/antigravity/marc/
+      # emits hooks.json at the plugin root ($CONFIG_DIR/hooks.json) per Antigravity
+      # plugin specification (#197), while referenced scripts live in hooks/. This step
+      # asserts against the INSTALLED copy, using Antigravity's own declared vars
       # (compile.json: project_dir_env=AGY_PROJECT_DIR,
-      # plugin_root_env=AGY_PLUGIN_ROOT) and its own confirmed-compatible
-      # trigger name (COMPATIBILITY.md: SessionStart), rather than assuming
-      # parity with Claude Code.
+      # plugin_root_env=AGY_PLUGIN_ROOT) and native named hook schema.
       #
       # `continue-on-error` REMOVED (#170 AC#3): this assertion previously
       # went red because the shared hooks.json hardcoded Claude Code's
@@ -927,7 +924,7 @@ jobs:
       # commands. #173/#170 fixed that at the source (core/hooks/
       # hooks.spec.json renders each harness's own plugin_root_env), so this
       # assertion is now load-bearing like every other Tier 2 step.
-      - name: Tier 2 — Antigravity hook-resolution assertion (issue #167 AC#2, #170)
+      - name: Tier 2 — Antigravity hook-resolution assertion (issue #167 AC#2, #170, #197)
         id: antigravity_hooks
         if: steps.antigravity_install.outcome == 'success'
         env:
@@ -935,11 +932,11 @@ jobs:
         run: |
           set -euo pipefail
           CONFIG_DIR="$HOME/.gemini/config/plugins/marc"
-          HOOKS_JSON="$CONFIG_DIR/hooks/hooks.json"
+          HOOKS_JSON="$CONFIG_DIR/hooks.json"
 
           echo "== assert the installed copy actually carries hooks/ (not N/A — COMPATIBILITY.md documents hooks as Highly Compatible) =="
           test -d "$CONFIG_DIR/hooks" || { echo "::error::installed copy has no hooks/ directory — if hooks were genuinely removed from the harness, replace this assertion; do not silently drop coverage"; exit 1; }
-          test -f "$HOOKS_JSON" || { echo "::error::hooks/ exists but hooks.json is missing at $HOOKS_JSON"; exit 1; }
+          test -f "$HOOKS_JSON" || { echo "::error::hooks.json is missing at $HOOKS_JSON"; exit 1; }
 
           echo "== assert hooks.json declares Antigravity's own confirmed-compatible trigger name =="
           jq -e '."team-toml-dump".PreInvocation' "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json has no .team-toml-dump.PreInvocation entry — Antigravity native hooks schema requires named hook objects with PreInvocation/PostToolUse/Stop"; exit 1; }
@@ -1047,7 +1044,7 @@ jobs:
             skipped) echo "Antigravity hook-resolution coverage: SKIPPED (install step did not succeed — see above)." ;;
             failure) {
                 echo "### :red_circle: Antigravity hook-resolution coverage: FAILED"
-                echo "Antigravity's compiled hooks/hooks.json (core/hooks/hooks.spec.json -> scripts/compile_prompts.py, #173/#170) no longer resolves under Antigravity's own env vars. This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
+                echo "Antigravity's compiled hooks.json (core/hooks/hooks.spec.json -> scripts/compile_prompts.py, #173/#170, #197) no longer resolves under Antigravity's own env vars. This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
               } >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "Antigravity hook-resolution coverage: outcome '${{ steps.antigravity_hooks.outcome }}' unrecognized." ;;
           esac

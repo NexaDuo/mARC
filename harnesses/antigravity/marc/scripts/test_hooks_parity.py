@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-harness hooks-parity self-test (origin: #173, #170).
+"""Cross-harness hooks-parity self-test (origin: #173, #170, #197).
 
 Stdlib only (no pytest); run directly: python3 test_hooks_parity.py
 
@@ -11,9 +11,10 @@ Antigravity hook silently no-op'd (issue #170). This test closes the gap the
 same way `test_script_parity.py` already closes it for `scripts/`:
 
   * DRIFT: recompute what `scripts/compile_prompts.py` would emit for every
-    harness's `hooks/hooks.json` from `core/hooks/hooks.spec.json` and assert
-    it is byte-identical to the committed file. A hand-edit to a harness's
-    `hooks.json` (bypassing `core/`) fails this check.
+    harness's native `hooks.json` (at plugin root for Antigravity, or
+    `hooks/hooks.json` for Claude Code / Copilot) from `core/hooks/hooks.spec.json`
+    and assert it is byte-identical to the committed file. A hand-edit to a
+    harness's `hooks.json` (bypassing `core/`) fails this check.
   * EXISTENCE: for every harness, every hook-script reference embedded in its
     compiled `hooks.json` must resolve to a real, executable-looking `.sh`
     file physically present under that harness's own `marc/hooks/` — no
@@ -159,10 +160,24 @@ def main() -> int:
         )
         check(os.path.isdir(dest_hooks_dir), f"{harness}: marc/hooks/ exists as a directory")
 
-        dest_hooks_json = os.path.join(dest_hooks_dir, "hooks.json")
-        check(os.path.isfile(dest_hooks_json), f"{harness}: hooks/hooks.json exists at {dest_hooks_json}")
+        dest_hooks_json = compile_prompts.get_hooks_json_path(marc_dir, config)
+        rel_hooks_json = os.path.relpath(dest_hooks_json, marc_dir)
+        check(os.path.isfile(dest_hooks_json), f"{harness}: {rel_hooks_json} exists at {dest_hooks_json}")
         if not os.path.isfile(dest_hooks_json):
             continue
+
+        if rel_hooks_json == "hooks.json":
+            stale_hooks_json = os.path.join(dest_hooks_dir, "hooks.json")
+            check(
+                not os.path.isfile(stale_hooks_json),
+                f"{harness}: no stale hooks/hooks.json present (hooks.json is at plugin root)",
+            )
+        elif rel_hooks_json == os.path.join("hooks", "hooks.json"):
+            stale_hooks_json = os.path.join(marc_dir, "hooks.json")
+            check(
+                not os.path.isfile(stale_hooks_json),
+                f"{harness}: no stale root hooks.json present (hooks.json is at hooks/hooks.json)",
+            )
 
         with open(spec_path, "r", encoding="utf-8") as f:
             spec = json.load(f)
@@ -190,7 +205,7 @@ def main() -> int:
 
         check(
             expected == actual,
-            f"{harness}: committed hooks/hooks.json matches what core/hooks/hooks.spec.json compiles to "
+            f"{harness}: committed {rel_hooks_json} matches what core/hooks/hooks.spec.json compiles to "
             "(no hand-edit drift)",
         )
 
@@ -204,7 +219,7 @@ def main() -> int:
             resolved = os.path.join(dest_hooks_dir, name)
             check(
                 os.path.isfile(resolved),
-                f"{harness}: hook script '{name}' referenced from hooks.json resolves to a real file ({resolved})",
+                f"{harness}: hook script '{name}' referenced from {rel_hooks_json} resolves to a real file ({resolved})",
             )
 
     check(hook_dialect_harnesses >= 1, f"found >=1 harness declaring hook_dialect (got {hook_dialect_harnesses})")
