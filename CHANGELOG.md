@@ -6,8 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-08-24
+
 ### Added
-- **`@sec` gains the `Skill` tool for `/security-review` (#191).** `@sec`
+- **Native Google Antigravity hooks compiler and subagent orchestration (#193, PR #194).**
+  - Implemented `render_antigravity_hooks` in `scripts/compile_prompts.py` supporting native Antigravity `hooks.json` schema (`{"<hook_id>": {"PreInvocation": [...], "PostToolUse": [...], "Stop": [...]}}`).
+  - Switched `harnesses/antigravity/marc/compile.json` to `"hook_dialect": "antigravity"`.
+  - Upgraded Antigravity `@techlead` dispatch instructions with native `invoke_subagent` features: `Workspace: "share"` for parallel writer isolation, Gemini model tier selection (`flash` for `@research`, `pro`/`inherit` for `@dev`, `@sec`, `@rev`, `@sre`), dynamic specialization via `define_subagent` (e.g. `enable_write_tools: false` for read-only agents), and `send_message` coordination.
+  - Added hook dialect structural schema validation in `core/scripts/test_hooks_parity.py`.
+  - Updated `harnesses/antigravity/marc/COMPATIBILITY.md` and CI assertions.
+- **`@sec` gains the `Skill` tool for `/security-review` (#191, PR #192).** `@sec`
   (tools now `Read, Grep, Glob, Bash, WebFetch, TodoWrite, Skill`) invokes the
   harness's built-in `/security-review` as an additional input pass alongside
   its existing checklist, closing the capability gap with `@rev`'s
