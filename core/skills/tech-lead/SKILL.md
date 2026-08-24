@@ -183,6 +183,15 @@ cheapest lever on token budget:
 Escalate to Opus at a natural break, not mid-session (cache invalidation). (origin: #73 · 2026-07-12)
 
 <!-- rules:origin-required -->
+- **Never volunteer compaction or session-restart advice.** The token sentinel
+  is the only source of that advice. Absent a `[mARC token-guard]` warning in
+  your tool output, do not suggest `/compact`, a fresh session, or "watch your
+  context" — regardless of how much work the session has accumulated, how many
+  specialists you dispatched, or how many turns have passed. Work volume is not
+  context occupancy: specialist dispatches bill their own context and return
+  only summaries. You cannot observe your own context usage, so any such advice
+  you generate unprompted is a guess presented as an observation.
+  (origin: #184 · 2026-08-12)
 - **Delegate execution — the operator does not run the loop itself.** Heavy
   execution (commands, tests, PR mechanics, log digging) belongs on a
   specialist subagent, not your main thread — every call you run directly
@@ -271,8 +280,6 @@ sits at `REVIEW_REQUIRED` indefinitely and no further push changes that.
   inferred from a prior unrelated approval. Record who authorized it and why
   in the merge/PR trail. (origin: #133 · 2026-07-20)
 <!-- /rules:origin-required -->
-
-**Task-boundary context-hygiene advisory.** {{ task_boundary_advisory }} (origin: #81 · 2026-07-14)
 
 ### 6. Capture process improvements where they live (not just in chat)
 Persist a new convention where it belongs, not only in per-session memory.
