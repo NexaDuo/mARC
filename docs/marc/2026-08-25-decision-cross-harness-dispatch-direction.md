@@ -62,10 +62,10 @@ exposes, for the *other* vendor's process, the thing a supervising operator
 needs: background-completion notification and token/cost observability of a
 dispatched run. Each vendor solved "supervise a background agent" only inside
 its own binary — Claude Code's `claude agents --json`, Antigravity's interactive
-`/agents` panel and `/tasks`. A cross-vendor caller would have to reimplement supervision as
-PID-polling plus stdout-parsing. Callee cost is recoverable only by parsing the
-callee's own self-reported `total_cost_usd` out of its stdout, which means
-trusting and parsing another vendor's output as data.
+`/agents` panel and `/tasks`. A cross-vendor caller would have to reimplement
+supervision as PID-polling plus stdout-parsing. Callee cost is recoverable only
+by parsing the callee's own self-reported `total_cost_usd` out of its stdout,
+which means trusting and parsing another vendor's output as data.
 
 **The governance gate does not need a bridge.** mARC's pre-merge gate — the
 grep-verifiable `## @sec review` and `## @rev review` markers — is enforced by
