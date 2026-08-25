@@ -65,9 +65,12 @@ supervisor between them; these four rules are the whole coordination protocol (#
   `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput` (verified against the live
   schema), so there is nothing to adopt and closing it means building external locking.
   Re-read the *assignees* after claiming. If you aren't alone, break the tie
-  deterministically — the **lexicographically lowest login keeps the item**, the rest
-  unassign and re-pick. Never both-drop: both racers compute the same answer from the
-  same read, and a mutual drop stalls the item nobody then owns.
+  deterministically — the **case-insensitively lowest login keeps the item**; the rest
+  run `gh issue edit <N> --remove-assignee @me` and re-pick. Fold case, or two harnesses
+  can reach opposite answers from the same read. Never both-drop: a mutual drop stalls
+  the item nobody then owns. The loser isn't starved of work, but it does lose every
+  contested claim to a lower-sorting peer — accepted; rotation isn't worth machinery at
+  two operators.
 - **Stale claims are reclaimed by a human, never by a timer.** An item sitting
   `In Progress` with no linked PR is *not* self-evidently abandoned — TTL reapers
   misfire on slow-but-alive workers. Surface it and ask; don't auto-steal. Where you

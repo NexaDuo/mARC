@@ -141,10 +141,13 @@ whole coordination protocol; there is no locking layer, by design.
   `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput`, so there is
   nothing to adopt and closing the window would mean building an external lock.
   Re-read assignees after claiming. If you are not alone, break the tie
-  deterministically: the **lexicographically lowest login keeps the item**, the
-  rest unassign and re-pick. Never "both drop" — both racers compute the same
-  answer from the same read, so a tie-break costs nothing and a mutual drop
-  stalls the item. (origin: #205 · 2026-08-25)
+  deterministically: the **case-insensitively lowest login keeps the item**; the
+  rest run `gh issue edit <N> --remove-assignee @me` and re-pick. Compare
+  case-folded so two harnesses cannot reach opposite answers from the same read
+  (`Alice` vs `bob` sorts differently raw than folded). Never "both drop" — a
+  mutual drop stalls an item nobody then owns. The loser is not starved of work,
+  but it does lose *every* contested claim to a lower-sorting peer; accepted, as
+  rotation isn't worth machinery at two operators. (origin: #205 · 2026-08-25)
 - **Stale claims are reclaimed by a human, never by a timer.** An item assigned
   with no linked PR is *not* self-evidently abandoned — TTL reapers misfire on
   slow-but-alive workers. Surface it and ask; don't auto-steal. Where you do not
