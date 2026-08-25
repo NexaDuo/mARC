@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Concurrent-operator claim moved off the assignee field to a comment marker
+  (#213).** #208's claim mechanism (`gh issue edit <N> --add-assignee @me`)
+  is a no-op the moment two operators share a `gh` login — the default for a
+  solo developer running two harnesses against one clone — because both
+  operators re-read the same login and both conclude "I am alone," and every
+  pre-existing human self-assignment now reads as a possible squat under the
+  stale-claim rule. `core/skills/tech-lead/SKILL.md` now claims with a
+  grep-verifiable `## @techlead claim` comment carrying `operator:
+  <harness>/<session-id>`, `issue: #<N>`, and `claimed-at:` (the same marker
+  discipline as `## @sec review` / `## @rev review`); the assignee field is
+  demoted to a human-visible-only signal and an issue with no claim comment is
+  explicitly *not* claimed regardless of assignees. The tie-break moves from
+  the (unusable, shared) login to the `operator:` token. #208's superseded
+  wording stays in the file, marked superseded with its justification, per the
+  no-silent-delete rule.
+- **`git worktree list` is now a mandatory pre-dispatch read, and a dead
+  worktree gets a named, user-gated remedy (#214).** Audited live: a single
+  `.git` shared by two harnesses registers every operator's checkout, so
+  `git worktree list --porcelain` is free cross-harness ground truth that the
+  convention never read. `core/skills/tech-lead/SKILL.md` now requires reading
+  it before any mutating dispatch (a branch already checked out elsewhere
+  means another operator owns it — don't re-cut it), names a worktree that is
+  `locked`/gone, at the base SHA, with no commits and no linked PR as a **dead
+  worktree** (distinct from a live claim and from a squat), and gives the
+  concrete remedy (`git worktree prune` / `git worktree remove --force`)
+  gated on user confirmation, since a worktree can hold uncommitted work. This
+  repo's own `.claude/worktrees/` is now in the committed `.gitignore`
+  (previously local-only via `.git/info/exclude`, which doesn't survive a
+  fresh clone).
+
 ## [0.25.0] - 2026-08-25
 
 ### Changed

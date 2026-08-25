@@ -17,6 +17,10 @@
 .agents/settings.local.json
 .claude/settings.local.json
 
+# In-repo operator worktrees (concurrent-operator isolation, #206/#214).
+# Was local-only via .git/info/exclude, which doesn't survive a fresh clone.
+.claude/worktrees/
+
 # --- OS / editor cruft ---
 .DS_Store
 Thumbs.db

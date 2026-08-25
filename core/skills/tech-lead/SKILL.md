@@ -128,35 +128,86 @@ Two `@techlead` operators — different harnesses, or two sessions — may run
 against the same clone with no supervisor between them. These rules are the
 whole coordination protocol; there is no locking layer, by design.
 <!-- rules:origin-required -->
-- **Claim with the assignee field, not with Status.** Assign yourself
-  (`gh issue edit <N> --add-assignee @me`) *before* dispatching, then set Status
-  to **In Progress**. Only the assignee carries operator identity — Status is a
-  shared enum with no author, so re-reading it tells you an item is claimed but
-  never *by whom*, which cannot detect a lost race. Note `board.py reconcile`
-  does not surface assignees on the board-configured path; verify with
-  `gh issue view <N> --json assignees`. (origin: #208 · 2026-08-25)
-- **The claim is racy, knowingly.** Claiming is read-check-act with no
-  compare-and-swap, so simultaneous claims interleave. This is **accepted, not
-  deferred**: GitHub's GraphQL exposes no optimistic-concurrency field on
-  `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput`, so there is
+- **Claim with a comment marker, not the assignee field.** Post a comment whose
+  body starts with the fixed string `## @techlead claim` and carries at least
+  `operator: <harness>/<session-id>`, `issue: #<N>`, and an ISO-8601
+  `claimed-at:` timestamp — the same grep-verifiable-marker discipline already
+  used for `## @sec review` / `## @rev review`. Verify with
+  `gh issue view <N> --json comments` (or a scoped `gh api …/comments` grep for
+  `^## @techlead claim`), never with assignees. **An issue with no
+  `## @techlead claim` comment is not claimed, regardless of who or what is
+  assigned to it** — this is what makes ordinary human triage safe again.
+  (origin: #213 · 2026-08-25)
+- **Supersedes #208's "claim with the assignee field" wording — the assignee
+  cannot carry operator identity.** #208 shipped `gh issue edit <N>
+  --add-assignee @me` as the claim, on the premise that "only the assignee
+  carries operator identity." That premise fails under a shared `gh` token: two
+  harnesses (or two sessions of the same harness) on one machine authenticate
+  as the *same* GitHub login, so both operators assign, both re-read
+  `[the-same-login]`, and both conclude "I am alone" — the race #208 knowingly
+  accepted turns out to be undetectable, not just racy. Worse, a human
+  self-assigning an issue during ordinary triage becomes indistinguishable from
+  an operator claim, so every pre-existing self-assignment now reads as a
+  possible squat under the stale-claim rule below. The assignee field is
+  demoted to a **human-visible signal only** (who a person thinks owns
+  something) and MUST NOT be read as, or treated as evidence of, operator
+  identity — replaced by the comment marker above, which encodes harness and
+  session and so distinguishes two sessions of the same harness too.
+  (origin: #213 · 2026-08-25)
+- **The claim is racy, knowingly.** Posting the claim comment is read-check-act
+  with no compare-and-swap, so simultaneous claims can interleave. This is
+  **accepted, not deferred**: GitHub's GraphQL exposes no optimistic-concurrency
+  field on `UpdateIssueInput` or the comment-creation mutations, so there is
   nothing to adopt and closing the window would mean building an external lock.
-  Re-read assignees after claiming. If you are not alone, break the tie
-  deterministically: the **case-insensitively lowest login keeps the item**; the
-  rest run `gh issue edit <N> --remove-assignee @me` and re-pick. Compare
-  case-folded so two harnesses cannot reach opposite answers from the same read
-  (`Bob` vs `alice`: raw picks `Bob`, folded picks `alice`). Never "both drop" — a
-  mutual drop stalls an item nobody then owns. The loser is not starved of work,
-  but it does lose *every* contested claim to a lower-sorting peer; accepted, as
-  rotation isn't worth machinery at two operators. (origin: #205 · 2026-08-25)
-- **Stale claims are reclaimed by a human, never by a timer.** An item assigned
-  with no linked PR is *not* self-evidently abandoned — TTL reapers misfire on
-  slow-but-alive workers. Surface it and ask; don't auto-steal. Where you do not
-  control the peer operator, a claim that never clears is a **squat**: escalate
-  to the user rather than racing it or reclaiming unilaterally. (origin: #206 · 2026-08-25)
+  After posting, re-read the issue's comments. If more than one `## @techlead
+  claim` marker exists for the same issue, break the tie deterministically over
+  the **`operator:` token**, not the login: the **case-insensitively lowest
+  `operator:` value keeps the item** (e.g. `antigravity/sess-7` beats
+  `claude-code/sess-2`); the rest post a withdrawal comment (or delete their
+  claim comment) and re-pick. The tie-break moved off the login specifically
+  because a shared `gh` token yields one login for every operator on the
+  machine — the login cannot distinguish them, `operator:` always can. Never
+  "both drop" — a mutual drop stalls an item nobody then owns. The loser is not
+  starved of work, but it does lose *every* contested claim to a lower-sorting
+  peer; accepted, as rotation isn't worth machinery at two operators.
+  (origin: #205 · 2026-08-25) (origin: #213 · 2026-08-25)
+- **Read `git worktree list` before every dispatch that will mutate files.** It
+  is the one coordination signal both operators genuinely share without a
+  shared identity or a board round-trip: one `.git` registers every operator's
+  checkout, cross-harness, and git itself refuses a second checkout of a branch
+  already checked out elsewhere. Run `git worktree list --porcelain` and treat
+  a target branch that already appears there as **being worked on by another
+  operator** — do not re-cut that branch, do not force a second checkout; go
+  claim a different item or ask the user. (origin: #214 · 2026-08-25)
+- **A worktree that is `locked`, or whose directory is gone, sitting at the
+  base branch's SHA with zero commits and no linked PR, is a dead worktree —
+  distinct from both a live claim and #206's squat case below.** A live claim
+  has commits or an open PR behind it; a squat is a marked claim that a human
+  must adjudicate. A dead worktree is neither: it is leftover registration from
+  a dispatch that never produced work. Diagnose with `git worktree list
+  --porcelain` (state) plus the linked-PR check already used for stale claims.
+  The remedy is concrete and never autonomous — **surface it to the user and
+  let them choose**, because a worktree can hold uncommitted work the operator
+  cannot safely judge as disposable: `git worktree prune` if the directory is
+  already gone, `git worktree remove --force` if it is `locked` but the
+  directory still exists. Only after the worktree is cleared does #206's
+  writer-isolation rule apply again to that branch. (origin: #214 · 2026-08-25)
+- **Stale claims are reclaimed by a human, never by a timer — and this
+  escalation applies only to a marked claim.** An issue carrying a
+  `## @techlead claim` comment with no linked PR is *not* self-evidently
+  abandoned — TTL reapers misfire on slow-but-alive workers. Surface it and
+  ask; don't auto-steal. Where you do not control the peer operator, a claim
+  that never clears is a **squat**: escalate to the user rather than racing it
+  or reclaiming unilaterally. An issue with only a human assignee and no claim
+  comment is ordinary triage, not a squat — see the "not claimed" rule above.
+  (origin: #206 · 2026-08-25) (origin: #213 · 2026-08-25)
 - **Isolation extends to the operators themselves**, not just to the
   specialists they dispatch: an operator that will mutate files takes its own
   worktree (see Principles), and two of them never share a branch or working
-  tree. (origin: #206 · 2026-08-25)
+  tree. An in-repo worktree directory (e.g. `.claude/worktrees/`) belongs in
+  the **committed** `.gitignore`, never only in the local, unversioned
+  `.git/info/exclude` — the latter doesn't survive a fresh clone and protects
+  nobody but the machine that wrote it. (origin: #206 · 2026-08-25) (origin: #214 · 2026-08-25)
 <!-- /rules:origin-required -->
 
 #### Recording discipline (rule origin + sanitization)
