@@ -123,25 +123,30 @@ python3 "${{{ plugin_root_env }}:-.}/scripts/board.py" set-status \
 Validates against the project's real Status options; FAILS LOUDLY (never
 no-ops) if unresolvable — a non-zero exit means fix the board, don't move on.
 
-#### Concurrent operators (the board is the claim token)
+#### Concurrent operators (claim before you dispatch)
 Two `@techlead` operators — different harnesses, or two sessions — may run
-against the same clone with no supervisor between them. These four rules are
-the whole coordination protocol; there is no locking layer, by design.
+against the same clone with no supervisor between them. These rules are the
+whole coordination protocol; there is no locking layer, by design.
 <!-- rules:origin-required -->
-- **Claim before dispatching**: move the item to **In Progress** *first*, and
-  never pick up an item already claimed by someone else. (origin: #206 · 2026-08-25)
-- **The claim is racy, knowingly.** `board.py set-status` is read-check-act
-  with no compare-and-swap, so simultaneous claims silently last-write-wins.
-  This is **accepted, not deferred**: GitHub's GraphQL exposes no
-  optimistic-concurrency field on `UpdateIssueInput` or
-  `UpdateProjectV2ItemFieldValueInput`, so there is nothing to adopt and closing
-  the window would mean building an external lock. Re-read the item after
-  claiming — if your claim isn't there you lost the race: drop the item, don't
-  dispatch, re-pick from the board. (origin: #205 · 2026-08-25)
-- **Stale claims are reclaimed by a human, never by a timer.** An item sitting
-  In Progress with no linked PR is *not* self-evidently abandoned — TTL reapers
-  misfire on slow-but-alive workers. Surface it and ask; don't auto-steal.
-  (origin: #206 · 2026-08-25)
+- **Claim with the assignee field, not with Status.** Assign yourself
+  (`gh issue edit <N> --add-assignee @me`) *before* dispatching, then set Status
+  to **In Progress**. Only the assignee carries operator identity — Status is a
+  shared enum with no author, so re-reading it tells you an item is claimed but
+  never *by whom*, which cannot detect a lost race. Note `board.py reconcile`
+  does not surface assignees on the board-configured path; verify with
+  `gh issue view <N> --json assignees`. (origin: #208 · 2026-08-25)
+- **The claim is racy, knowingly.** Claiming is read-check-act with no
+  compare-and-swap, so simultaneous claims interleave. This is **accepted, not
+  deferred**: GitHub's GraphQL exposes no optimistic-concurrency field on
+  `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput`, so there is
+  nothing to adopt and closing the window would mean building an external lock.
+  Re-read assignees after claiming — if you are not the only assignee, you lost
+  the race: drop the item, don't dispatch, re-pick. (origin: #205 · 2026-08-25)
+- **Stale claims are reclaimed by a human, never by a timer.** An item assigned
+  with no linked PR is *not* self-evidently abandoned — TTL reapers misfire on
+  slow-but-alive workers. Surface it and ask; don't auto-steal. Where you do not
+  control the peer operator, a claim that never clears is a **squat**: escalate
+  to the user rather than racing it or reclaiming unilaterally. (origin: #206 · 2026-08-25)
 - **Isolation extends to the operators themselves**, not just to the
   specialists they dispatch: an operator that will mutate files takes its own
   worktree (see Principles), and two of them never share a branch or working

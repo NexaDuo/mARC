@@ -11,18 +11,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   operators — different harnesses, or two sessions — may run against the same
   clone with no supervisor between them (#202 decided harnesses are
   board-mediated peers). `core/skills/tech-lead/SKILL.md` now carries four
-  rules under step 3: claim by moving Status to **In Progress** before
-  dispatching; the claim is racy and knowingly accepted; stale claims are
-  reclaimed by a human, never by a timer; and writer isolation extends to the
-  operators themselves, not just to dispatched specialists.
+  rules under step 3: claim with the **assignee** field before dispatching (only
+  the assignee carries operator identity — Status is a shared enum with no
+  author, so it cannot tell you who claimed an item); the claim is racy and
+  knowingly accepted; stale claims are reclaimed by a human, never by a timer,
+  and an unclearing claim from a peer you don't control is escalated rather than
+  raced; and writer isolation extends to the operators themselves, not just to
+  dispatched specialists.
   There is deliberately **no locking layer**. GitHub's GraphQL exposes no
   optimistic-concurrency field on `UpdateIssueInput` or
   `UpdateProjectV2ItemFieldValueInput` (verified against the live schema in
   #205), so `board.py set-status`'s last-write-wins window cannot be closed by
   adopting an API feature — it is accepted explicitly, and the skill says so.
-  Prior art at comparable scale (GitHub's own coding-agent assignment model;
-  Renovate's single-instance-per-repo practice) resolves this problem shape
-  with a claim field plus discipline rather than code (#204, #205, #206).
+  Prior art at comparable scale points the same way: GitHub's own coding agent
+  claims work by assignment, and Renovate — which has no claim field at all —
+  serializes with external CI locks plus a per-instance work directory. Neither
+  builds compare-and-swap into the tracker (#204, #205, #206).
 
 ## [0.24.0] - 2026-08-24
 

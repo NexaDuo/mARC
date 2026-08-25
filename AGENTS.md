@@ -50,21 +50,27 @@ Harnesses are **board-mediated peers** (#202) — two `@techlead` operators (dif
 harnesses, or two sessions) may run against the same clone at once. There is no
 supervisor between them; these four rules are the whole coordination protocol (#204,
 #205):
-- **The board Status field is the claim token.** Move an item to `In Progress` *before*
-  dispatching, and never pick up an item already claimed by someone else. GitHub's own
-  coding agent claims work this way (assignee-as-claim); Renovate reaches the same
-  single-writer outcome by a different route — external CI locks plus a per-instance
-  work directory — so treat it as precedent for the *outcome*, not for the mechanism.
+- **The assignee field is the claim token, not Status.** Assign yourself
+  (`gh issue edit <N> --add-assignee @me`) *before* dispatching, then set Status to
+  `In Progress`. Only the assignee carries operator identity: Status is a shared enum
+  with no author, so it can say an item is claimed but never *by whom* — and
+  `board.py reconcile` doesn't surface assignees on the board-configured path
+  (`core/scripts/board.py:417`). Verify with `gh issue view <N> --json assignees`.
+  GitHub's own coding agent claims work this way; Renovate does **not** — it has no
+  claim field at all and serializes with external CI locks plus a per-instance work
+  directory, so it is precedent for single-writer *outcome*, not for this mechanism.
 - **The claim is racy, knowingly.** `board.py::set_status` is read-check-act with no
   compare-and-swap, so simultaneous claims silently last-write-wins. This is **accepted,
   not deferred**: GitHub's GraphQL exposes no optimistic-concurrency field on
   `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput` (verified against the live
   schema), so there is nothing to adopt and closing it means building external locking.
-  Re-read the item after claiming: if it no longer shows your claim, you lost the race —
+  Re-read the *assignees* after claiming: if you aren't the only one, you lost the race —
   drop the item, don't dispatch, and re-pick from the board.
 - **Stale claims are reclaimed by a human, never by a timer.** An item sitting
   `In Progress` with no linked PR is *not* self-evidently abandoned — TTL reapers
-  misfire on slow-but-alive workers. Surface it and ask; don't auto-steal.
+  misfire on slow-but-alive workers. Surface it and ask; don't auto-steal. Where you
+  don't control the peer operator, a claim that never clears is a **squat** — escalate,
+  don't race it.
 - **Isolate-parallel-writers extends to the operators themselves**, not just to the
   specialists they dispatch: any operator that will mutate files takes its own worktree,
   and two of them never share a branch or working tree. One `.git` hosts many worktrees
