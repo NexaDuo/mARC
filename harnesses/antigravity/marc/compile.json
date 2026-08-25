@@ -9,6 +9,7 @@
   "isolation_instructions": "using Workspace='share' in the invoke_subagent call",
   "compact_action": "start a fresh session",
   "agents_dir": ".agents",
+  "hooks_path": "hooks.json",
   "hook_dialect": "antigravity",
   "hook_ids": [
     "team-toml-dump",
