@@ -6,6 +6,83 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Concurrent-operator claim moved off the assignee field to a comment marker
+  (#213).** #208's claim mechanism (`gh issue edit <N> --add-assignee @me`)
+  is a no-op the moment two operators share a `gh` login — the default for a
+  solo developer running two harnesses against one clone — because both
+  operators re-read the same login and both conclude "I am alone," and every
+  pre-existing human self-assignment now reads as a possible squat under the
+  stale-claim rule. `core/skills/tech-lead/SKILL.md` now claims with a
+  grep-verifiable `## @techlead claim` comment carrying `operator:
+  <harness>/<session-id>`, `issue: #<N>`, and `claimed-at:` (the same marker
+  discipline as `## @sec review` / `## @rev review`); the assignee field is
+  demoted to a human-visible-only signal and an issue with no claim comment is
+  explicitly *not* claimed regardless of assignees. The tie-break moves from
+  the (unusable, shared) login to the `operator:` token, and only over claims
+  that pass an author-association check. #208's superseded wording stays in
+  the file, marked superseded with its justification, per the no-silent-delete
+  rule.
+- **Security fix, same PR: the claim marker is public-repo forgeable, so
+  a claim now needs a trusted author and withdrawal is never autonomous
+  against an untrusted one (#213 review round).** Posting an issue comment on
+  a public repo needs no collaborator status, unlike the assignee mechanism it
+  replaced — an unmitigated marker let any GitHub account post a
+  low-sorting `operator:` value and force the legitimate operator to withdraw
+  autonomously, indefinitely suppressing dispatch on any issue. A
+  `## @techlead claim` comment now counts only when its `author_association`
+  is `OWNER`, `MEMBER`, or `COLLABORATOR`; autonomous withdrawal is permitted
+  only when losing the tie-break to a claim that passed that check, otherwise
+  the operator surfaces a suspected forged claim to the user instead of
+  standing down. The rule states the trust boundary plainly: the marker
+  coordinates cooperating operators, it is not an authorization mechanism.
+  Withdrawal also gets its own fixed `## @techlead withdraw` marker (same
+  `operator:`/`issue:` fields) so a withdrawal that doesn't delete the
+  original claim can't be mistaken for a live one — deleting the original is
+  an optional courtesy, never load-bearing.
+- **Second fix round, same PR: correct the association-check field name per
+  command, and close the withdrawal-side forgery gap the prior round left
+  open (#213 re-review).** Two HIGH findings on the prior round's fix: (1) the
+  text named the field `author_association` for `gh issue view <N> --json
+  comments`, but that command actually returns it as `authorAssociation`
+  (camelCase) — verified live against real issues in this repo; only the raw
+  `gh api`/REST path uses the snake_case name. As written, the check would
+  fail closed for every claim on the documented primary path, including
+  legitimate ones, reintroducing #213's original collision through a
+  documentation defect rather than fixing it. Both field names are now stated
+  explicitly, paired with the exact command each belongs to. (2) The
+  `## @techlead withdraw` marker had no author-association check of its own,
+  so any untrusted account could copy a claim's public `operator:` token into
+  a forged withdrawal and make a live, legitimate claim read as abandoned —
+  the same forgery class the claim-side check exists to close, just moved to
+  the other marker. A withdrawal now only retires a claim if it passes the
+  same association check as a claim AND its `operator:` matches exactly; the
+  rule states the general principle so future markers don't repeat the gap:
+  a claim and its withdrawal are two sides of one state transition and are
+  trusted identically.
+- **`git worktree list` is now a mandatory pre-dispatch read, and a dead
+  worktree gets a named, user-gated remedy (#214).** Audited live: a single
+  `.git` shared by two harnesses registers every operator's checkout, so
+  `git worktree list --porcelain` is free cross-harness ground truth that the
+  convention never read. `core/skills/tech-lead/SKILL.md` now requires reading
+  it before any mutating dispatch (a branch already checked out elsewhere
+  means another operator owns it — don't re-cut it), names a worktree that is
+  `locked`/gone, at the base SHA, with no commits and no linked PR as a **dead
+  worktree** (distinct from a live claim and from a squat), and gives the
+  concrete remedy (`git worktree prune` / `git worktree remove --force`)
+  gated on user confirmation, since a worktree can hold uncommitted work. This
+  repo's own `.claude/worktrees/` is now in the committed `.gitignore`
+  (previously local-only via `.git/info/exclude`, which doesn't survive a
+  fresh clone).
+- **`AGENTS.md`'s duplicate concurrent-operator prose synced with `SKILL.md`,
+  and its new origin-tag fence is now CI-gated.** `AGENTS.md` carried a full
+  second copy of the pre-#213/#214 protocol that would otherwise drift out of
+  sync with the amended source of truth — collapsed to a pointer plus the two
+  facts a reader of `AGENTS.md` alone needs. `.github/workflows/ci.yml`'s
+  rule-origin governance gate now scans `AGENTS.md` too, closing a gap where
+  its first-ever `rules:origin-required` fence shipped correctly tagged but
+  unguarded against a future silent strip.
+
 ## [0.25.0] - 2026-08-25
 
 ### Changed

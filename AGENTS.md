@@ -47,40 +47,29 @@ MetaGPT, CrewAI, Claude Code Agent Teams) down to what holds for mARC:
 
 ## Concurrent operators on one clone
 Harnesses are **board-mediated peers** (#202) — two `@techlead` operators (different
-harnesses, or two sessions) may run against the same clone at once. There is no
-supervisor between them; these four rules are the whole coordination protocol (#204,
-#205):
-- **The assignee field is the claim token, not Status.** Assign yourself
-  (`gh issue edit <N> --add-assignee @me`) *before* dispatching, then set Status to
-  `In Progress`. Only the assignee carries operator identity: Status is a shared enum
-  with no author, so it can say an item is claimed but never *by whom* — and
-  `board.py reconcile` doesn't surface assignees on the board-configured path
-  (`core/scripts/board.py:417`). Verify with `gh issue view <N> --json assignees`.
-  GitHub's own coding agent claims work this way; Renovate does **not** — it has no
-  claim field at all and serializes with external CI locks plus a per-instance work
-  directory, so it is precedent for single-writer *outcome*, not for this mechanism.
-- **The claim is racy, knowingly.** `board.py::set_status` is read-check-act with no
-  compare-and-swap, so simultaneous claims silently last-write-wins. This is **accepted,
-  not deferred**: GitHub's GraphQL exposes no optimistic-concurrency field on
-  `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput` (verified against the live
-  schema), so there is nothing to adopt and closing it means building external locking.
-  Re-read the *assignees* after claiming. If you aren't alone, break the tie
-  deterministically — the **case-insensitively lowest login keeps the item**; the rest
-  run `gh issue edit <N> --remove-assignee @me` and re-pick. Fold case, or two harnesses
-  can reach opposite answers from the same read (`Bob` vs `alice`: raw picks `Bob`,
-  folded picks `alice`). Never both-drop: a mutual drop stalls
-  the item nobody then owns. The loser isn't starved of work, but it does lose every
-  contested claim to a lower-sorting peer — accepted; rotation isn't worth machinery at
-  two operators.
-- **Stale claims are reclaimed by a human, never by a timer.** An item sitting
-  `In Progress` with no linked PR is *not* self-evidently abandoned — TTL reapers
-  misfire on slow-but-alive workers. Surface it and ask; don't auto-steal. Where you
-  don't control the peer operator, a claim that never clears is a **squat** — escalate,
-  don't race it.
+harnesses, or two sessions) may run against the same clone at once, with no supervisor
+between them. The coordination protocol is authored once, in
+`core/skills/tech-lead/SKILL.md`'s `#### Concurrent operators (claim before you
+dispatch)` — read it there, not here; a second full copy in this file is what let it
+drift out of sync with the source of truth (the defect #213/#214 exist to fix). What a
+reader of this file alone needs, restated:
+<!-- rules:origin-required -->
+- **The claim lives in a `## @techlead claim` issue comment, not the assignee field or
+  Status.** An issue with no such comment is not claimed, regardless of who is assigned
+  to it — the assignee is a human-visible label only and carries no operator identity,
+  precisely because a shared `gh` token makes every operator on a machine authenticate
+  as the same login. (origin: #213 · 2026-08-25)
+- **`git worktree list --porcelain` is free, cross-harness ground truth** — one `.git`
+  registers every operator's checkout. Read it before dispatching mutating work; a
+  branch already checked out elsewhere means another operator owns it, don't re-cut it.
+  A worktree that's `locked`/gone, at the base SHA, with no commits and no linked PR is a
+  **dead worktree** (not a squat) — surface the concrete remedy to the user, never run it
+  autonomously, since it may hold uncommitted work. (origin: #214 · 2026-08-25)
 - **Isolate-parallel-writers extends to the operators themselves**, not just to the
   specialists they dispatch: any operator that will mutate files takes its own worktree,
-  and two of them never share a branch or working tree. One `.git` hosts many worktrees
-  cross-harness (verified).
+  and two of them never share a branch or working tree — see the SKILL.md section for
+  the `.gitignore` placement lesson this produced. (origin: #206 · 2026-08-25)
+<!-- /rules:origin-required -->
 
 ## Constraints
 - **Anti-anchoring / genericization (hard gate):** everything under `harnesses/` must
