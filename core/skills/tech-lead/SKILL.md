@@ -140,8 +140,11 @@ whole coordination protocol; there is no locking layer, by design.
   deferred**: GitHub's GraphQL exposes no optimistic-concurrency field on
   `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput`, so there is
   nothing to adopt and closing the window would mean building an external lock.
-  Re-read assignees after claiming — if you are not the only assignee, you lost
-  the race: drop the item, don't dispatch, re-pick. (origin: #205 · 2026-08-25)
+  Re-read assignees after claiming. If you are not alone, break the tie
+  deterministically: the **lexicographically lowest login keeps the item**, the
+  rest unassign and re-pick. Never "both drop" — both racers compute the same
+  answer from the same read, so a tie-break costs nothing and a mutual drop
+  stalls the item. (origin: #205 · 2026-08-25)
 - **Stale claims are reclaimed by a human, never by a timer.** An item assigned
   with no linked PR is *not* self-evidently abandoned — TTL reapers misfire on
   slow-but-alive workers. Surface it and ask; don't auto-steal. Where you do not

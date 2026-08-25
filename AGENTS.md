@@ -64,8 +64,10 @@ supervisor between them; these four rules are the whole coordination protocol (#
   not deferred**: GitHub's GraphQL exposes no optimistic-concurrency field on
   `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput` (verified against the live
   schema), so there is nothing to adopt and closing it means building external locking.
-  Re-read the *assignees* after claiming: if you aren't the only one, you lost the race —
-  drop the item, don't dispatch, and re-pick from the board.
+  Re-read the *assignees* after claiming. If you aren't alone, break the tie
+  deterministically — the **lexicographically lowest login keeps the item**, the rest
+  unassign and re-pick. Never both-drop: both racers compute the same answer from the
+  same read, and a mutual drop stalls the item nobody then owns.
 - **Stale claims are reclaimed by a human, never by a timer.** An item sitting
   `In Progress` with no linked PR is *not* self-evidently abandoned — TTL reapers
   misfire on slow-but-alive workers. Surface it and ask; don't auto-steal. Where you
