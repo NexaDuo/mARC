@@ -60,6 +60,7 @@ practice).
 - [2026-08-12-decision-context-advisory-retired.md](2026-08-12-decision-context-advisory-retired.md) — decision record: the token sentinel's context-size advisory is retired (not fixed) — Claude Code's own harness already auto-compacts against the real per-model window; the runaway-loop (#71) and model-switch (#73) guards survive (#181).
 - [2026-08-12-brief-harness-context-management.md](2026-08-12-brief-harness-context-management.md) — research brief: how Claude Code, Antigravity (`agy`) and Copilot CLI each handle context windows and auto-compaction natively. Claude Code and Copilot CLI have confirmed native mechanisms; Antigravity's could not be confirmed from primary sources, which is the gap tracked in #186 (#181).
 - [2026-08-24-brief-agy-context-compaction.md](2026-08-24-brief-agy-context-compaction.md) — research brief: Google Antigravity (`agy`) context compaction & harness parity findings (#186).
+- [2026-08-25-decision-cross-harness-dispatch-direction.md](2026-08-25-decision-cross-harness-dispatch-direction.md) — decision record: no nested cross-harness dispatch bridge in either direction; harnesses stay board-mediated peers. Both CLIs are capable callees, but neither vendor can supervise the other's process (no completion notification, no cost observability), and the `@sec`/`@rev` gate is already vendor-agnostic (#202).
 
 ## Landing process (write policy)
 
