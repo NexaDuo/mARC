@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-08-25
+
 ### Changed
 - **Rule #137 amended: `Read` is necessary but not sufficient (#210).** The
   no-filtered-bash rule told `@sec`/`@rev`/`@dev` to read file content with
@@ -16,10 +18,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reconstructible from any issue thread; the rule stands on the mechanism, not
   on that note.) All three rule sites
   (`core/skills/tech-lead/SKILL.md`, `core/agents/security.md`,
-  `core/agents/review.md`) now name the detection (compare `wc -l`/`wc -c`
-  against what was displayed) and the recovery (re-fetch to a file, reformat to
-  short lines, read in small chunks), and say plainly that a verdict must never
-  be issued over input the reviewer cannot confirm it read whole.
+  `core/agents/review.md`) now name the detection (compare `wc -l` against the
+  highest line number that was displayed, and treat text breaking mid-token as
+  mangled) and the recovery (re-fetch to a file, reformat to short lines,
+  re-read in small line-limited chunks — never pipe the content through `Bash`),
+  and say plainly that a verdict must never be issued over input the reviewer
+  cannot confirm it read whole: after two failed recovery attempts the input is
+  reported **unreviewable** and escalated.
 - **A merged product change with no version bump means a bump PR is needed
   (#210).** A merge+release pass once concluded "no release needed" because the
   merged PR carried no bump — backwards, since a merge is not Done until a
