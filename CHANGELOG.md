@@ -40,6 +40,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `operator:`/`issue:` fields) so a withdrawal that doesn't delete the
   original claim can't be mistaken for a live one — deleting the original is
   an optional courtesy, never load-bearing.
+- **Second fix round, same PR: correct the association-check field name per
+  command, and close the withdrawal-side forgery gap the prior round left
+  open (#213 re-review).** Two HIGH findings on the prior round's fix: (1) the
+  text named the field `author_association` for `gh issue view <N> --json
+  comments`, but that command actually returns it as `authorAssociation`
+  (camelCase) — verified live against real issues in this repo; only the raw
+  `gh api`/REST path uses the snake_case name. As written, the check would
+  fail closed for every claim on the documented primary path, including
+  legitimate ones, reintroducing #213's original collision through a
+  documentation defect rather than fixing it. Both field names are now stated
+  explicitly, paired with the exact command each belongs to. (2) The
+  `## @techlead withdraw` marker had no author-association check of its own,
+  so any untrusted account could copy a claim's public `operator:` token into
+  a forged withdrawal and make a live, legitimate claim read as abandoned —
+  the same forgery class the claim-side check exists to close, just moved to
+  the other marker. A withdrawal now only retires a claim if it passes the
+  same association check as a claim AND its `operator:` matches exactly; the
+  rule states the general principle so future markers don't repeat the gap:
+  a claim and its withdrawal are two sides of one state transition and are
+  trusted identically.
 - **`git worktree list` is now a mandatory pre-dispatch read, and a dead
   worktree gets a named, user-gated remedy (#214).** Audited live: a single
   `.git` shared by two harnesses registers every operator's checkout, so
