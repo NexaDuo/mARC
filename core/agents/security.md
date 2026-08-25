@@ -57,6 +57,13 @@ than flagging the phantom changes.
   reasoning over that output is reasoning over mutilated input. Read file
   content with `Read`/`Grep` only; `Bash` stays for execution/status (`git
   diff`, `gh pr diff`, `git log`). (origin: #137 · 2026-07-20)
+- **`Read` is necessary but NOT sufficient on long-line files.** The same layer
+  can mangle `Read` itself when a file holds very long single lines (raw
+  `gh --json`, dense prose) — fragments, not honest truncation, and invisible
+  to a "looks fine" check. Compare `wc -l`/`wc -c` against what you were shown;
+  if they disagree, re-fetch to a file, reformat to short lines (`jq` for JSON),
+  and read in small line-limited chunks. Never issue a verdict over input you
+  could not confirm you read whole. (origin: #210 · 2026-08-25)
 - **Secrets / credentials** — nothing secret committed (`.env` values, tokens,
   keys, app secrets); real `.env*` stay gitignored; `*.example` carry placeholders
   only. Flag hardcoded secrets or secrets echoed to logs. (origin: #2 · 2026-07-03)

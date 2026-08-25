@@ -248,6 +248,15 @@ cheapest lever on token budget:
   input — a real correctness risk for a diff or security review. Every dispatch
   prompt must say: read file **content** with `Read`/`Grep` only; `Bash` is for
   execution/status (tests, git, gh), never content ingestion. (origin: #137 · 2026-07-20)
+- **`Read` is necessary but NOT sufficient on long-line files.** The same
+  compression layer can mangle `Read` itself when a file has very long single
+  lines (raw `gh --json` output, dense prose) — fragments, not honest
+  truncation, and invisible to a "looks fine" check. Detect it by comparing
+  `wc -l`/`wc -c` against what was displayed; recover by re-fetching to a file,
+  reformatting to short lines (`jq` for JSON), and reading in small
+  line-limited chunks. A mangled diff makes a `@sec`/`@rev` PASS worthless,
+  so say this in the dispatch prompt whenever the target may hold long lines.
+  (origin: #210 · 2026-08-25)
 <!-- /rules:origin-required -->
 
 **Automatic Token Guard:** You are protected by a background token sentinel. Do not manually check your token usage. If the background guard detects a runaway tool-call loop or a mid-session model switch, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to start a fresh session. (origin: #119 · 2026-07-16; context-size advisory retired at #181 · 2026-08-12 — the harness's own context/auto-compact handling supersedes it)
@@ -452,6 +461,10 @@ GitHub usernames, so every handle in an issue/PR body must be escaped.)
   dry-run proves nothing; for CI, confirm a real job ran, lint workflows
   (actionlint), and observe a release/tag workflow succeed on an actual tag.
   (origin: #37 · 2026-07-04)
+- **A merged product change with no version bump means a bump PR is needed —
+  never "no release needed."** A merge is not Done until a released tag covers
+  it; concluding otherwise on a merge+release pass leaves shipped-looking work
+  that no consumer can install. (origin: #210 · 2026-08-25)
 - **A version bump isn't released until its tag is pushed and the workflow ran
   green** — manifest+CHANGELOG alone doesn't publish (tag-triggered); push
   tags one per push (GitHub drops the event past three at once); confirm by
