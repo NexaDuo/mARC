@@ -62,7 +62,7 @@ exposes, for the *other* vendor's process, the thing a supervising operator
 needs: background-completion notification and token/cost observability of a
 dispatched run. Each vendor solved "supervise a background agent" only inside
 its own binary — Claude Code's `claude agents --json`, Antigravity's interactive
-`/agents` panel. A cross-vendor caller would have to reimplement supervision as
+`/agents` panel and `/tasks`. A cross-vendor caller would have to reimplement supervision as
 PID-polling plus stdout-parsing. Callee cost is recoverable only by parsing the
 callee's own self-reported `total_cost_usd` out of its stdout, which means
 trusting and parsing another vendor's output as data.
@@ -147,3 +147,19 @@ here so the decision is not read as better-evidenced than it is:
 - The A2A/MCP prior-art paragraph rests on third-party coverage rather than
   fetched vendor primary sources, and is explicitly not load-bearing for this
   decision.
+
+## Sources
+
+- [issue #202](https://github.com/NexaDuo/mARC/issues/202) and its `@research`
+  brief ([comment](https://github.com/NexaDuo/mARC/issues/202#issuecomment-5411718487))
+- [Claude Code Docs: Headless mode](https://code.claude.com/docs/en/headless)
+- [Claude Code Docs: Agent view](https://code.claude.com/docs/en/agent-view)
+- [Antigravity Docs: CLI headless mode](https://antigravity.google/docs/cli/headless/)
+- [Antigravity Docs: CLI subagents](https://antigravity.google/docs/cli/subagents)
+- Local CLI probes: `claude --version` (2.1.245), `agy --version` (1.1.19),
+  `claude --help`, `claude agents --help`, `agy --help`, `agy agents --help`
+- This repo: `.github/workflows/ci.yml` (pinned unprivileged `agy` bootstrap),
+  `harnesses/*/marc/skills/tech-lead/SKILL.md` (per-harness dispatch verbs and
+  the `@sec`/`@rev` gate), `scripts/board.py` (GitHub Project #2 convergence)
+- [issue #204](https://github.com/NexaDuo/mARC/issues/204) — the follow-up on
+  running peer operators against one clone without conflicts
