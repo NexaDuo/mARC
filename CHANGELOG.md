@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-08-25
+
 ### Changed
 - **Concurrent-operator claim moved off the assignee field to a comment marker
   (#213).** #208's claim mechanism (`gh issue edit <N> --add-assignee @me`)
