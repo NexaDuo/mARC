@@ -123,6 +123,42 @@ python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/board.py" set-status \
 Validates against the project's real Status options; FAILS LOUDLY (never
 no-ops) if unresolvable — a non-zero exit means fix the board, don't move on.
 
+#### Concurrent operators (claim before you dispatch)
+Two `@techlead` operators — different harnesses, or two sessions — may run
+against the same clone with no supervisor between them. These rules are the
+whole coordination protocol; there is no locking layer, by design.
+<!-- rules:origin-required -->
+- **Claim with the assignee field, not with Status.** Assign yourself
+  (`gh issue edit <N> --add-assignee @me`) *before* dispatching, then set Status
+  to **In Progress**. Only the assignee carries operator identity — Status is a
+  shared enum with no author, so re-reading it tells you an item is claimed but
+  never *by whom*, which cannot detect a lost race. Note `board.py reconcile`
+  does not surface assignees on the board-configured path; verify with
+  `gh issue view <N> --json assignees`. (origin: #208 · 2026-08-25)
+- **The claim is racy, knowingly.** Claiming is read-check-act with no
+  compare-and-swap, so simultaneous claims interleave. This is **accepted, not
+  deferred**: GitHub's GraphQL exposes no optimistic-concurrency field on
+  `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput`, so there is
+  nothing to adopt and closing the window would mean building an external lock.
+  Re-read assignees after claiming. If you are not alone, break the tie
+  deterministically: the **case-insensitively lowest login keeps the item**; the
+  rest run `gh issue edit <N> --remove-assignee @me` and re-pick. Compare
+  case-folded so two harnesses cannot reach opposite answers from the same read
+  (`Bob` vs `alice`: raw picks `Bob`, folded picks `alice`). Never "both drop" — a
+  mutual drop stalls an item nobody then owns. The loser is not starved of work,
+  but it does lose *every* contested claim to a lower-sorting peer; accepted, as
+  rotation isn't worth machinery at two operators. (origin: #205 · 2026-08-25)
+- **Stale claims are reclaimed by a human, never by a timer.** An item assigned
+  with no linked PR is *not* self-evidently abandoned — TTL reapers misfire on
+  slow-but-alive workers. Surface it and ask; don't auto-steal. Where you do not
+  control the peer operator, a claim that never clears is a **squat**: escalate
+  to the user rather than racing it or reclaiming unilaterally. (origin: #206 · 2026-08-25)
+- **Isolation extends to the operators themselves**, not just to the
+  specialists they dispatch: an operator that will mutate files takes its own
+  worktree (see Principles), and two of them never share a branch or working
+  tree. (origin: #206 · 2026-08-25)
+<!-- /rules:origin-required -->
+
 #### Recording discipline (rule origin + sanitization)
 <!-- rules:origin-required -->
 - **Tag every governed rule with its origin** `(origin: #NN · YYYY-MM-DD)`.
