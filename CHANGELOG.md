@@ -19,9 +19,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   discipline as `## @sec review` / `## @rev review`); the assignee field is
   demoted to a human-visible-only signal and an issue with no claim comment is
   explicitly *not* claimed regardless of assignees. The tie-break moves from
-  the (unusable, shared) login to the `operator:` token. #208's superseded
-  wording stays in the file, marked superseded with its justification, per the
-  no-silent-delete rule.
+  the (unusable, shared) login to the `operator:` token, and only over claims
+  that pass an author-association check. #208's superseded wording stays in
+  the file, marked superseded with its justification, per the no-silent-delete
+  rule.
+- **Security fix, same PR: the claim marker is public-repo forgeable, so
+  a claim now needs a trusted author and withdrawal is never autonomous
+  against an untrusted one (#213 review round).** Posting an issue comment on
+  a public repo needs no collaborator status, unlike the assignee mechanism it
+  replaced — an unmitigated marker let any GitHub account post a
+  low-sorting `operator:` value and force the legitimate operator to withdraw
+  autonomously, indefinitely suppressing dispatch on any issue. A
+  `## @techlead claim` comment now counts only when its `author_association`
+  is `OWNER`, `MEMBER`, or `COLLABORATOR`; autonomous withdrawal is permitted
+  only when losing the tie-break to a claim that passed that check, otherwise
+  the operator surfaces a suspected forged claim to the user instead of
+  standing down. The rule states the trust boundary plainly: the marker
+  coordinates cooperating operators, it is not an authorization mechanism.
+  Withdrawal also gets its own fixed `## @techlead withdraw` marker (same
+  `operator:`/`issue:` fields) so a withdrawal that doesn't delete the
+  original claim can't be mistaken for a live one — deleting the original is
+  an optional courtesy, never load-bearing.
 - **`git worktree list` is now a mandatory pre-dispatch read, and a dead
   worktree gets a named, user-gated remedy (#214).** Audited live: a single
   `.git` shared by two harnesses registers every operator's checkout, so
@@ -36,6 +54,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repo's own `.claude/worktrees/` is now in the committed `.gitignore`
   (previously local-only via `.git/info/exclude`, which doesn't survive a
   fresh clone).
+- **`AGENTS.md`'s duplicate concurrent-operator prose synced with `SKILL.md`,
+  and its new origin-tag fence is now CI-gated.** `AGENTS.md` carried a full
+  second copy of the pre-#213/#214 protocol that would otherwise drift out of
+  sync with the amended source of truth — collapsed to a pointer plus the two
+  facts a reader of `AGENTS.md` alone needs. `.github/workflows/ci.yml`'s
+  rule-origin governance gate now scans `AGENTS.md` too, closing a gap where
+  its first-ever `rules:origin-required` fence shipped correctly tagged but
+  unguarded against a future silent strip.
 
 ## [0.25.0] - 2026-08-25
 

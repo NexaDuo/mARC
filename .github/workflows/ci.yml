@@ -367,7 +367,8 @@ jobs:
           CHECK="core/scripts/check_rule_origin.py"
           FILES="core/skills/tech-lead/SKILL.md \
                  core/agents/engineer.md core/agents/sre.md core/agents/design.md \
-                 core/agents/security.md core/agents/review.md core/agents/research.md"
+                 core/agents/security.md core/agents/review.md core/agents/research.md \
+                 AGENTS.md"
 
           # POSITIVE: every shipped governed rule must carry an origin tag.
           # shellcheck disable=SC2086
