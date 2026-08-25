@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Rule #137 amended: `Read` is necessary but not sufficient (#210).** The
+  no-filtered-bash rule told `@sec`/`@rev`/`@dev` to read file content with
+  `Read`/`Grep` only. That is not sufficient: on files with very long single
+  lines (raw `gh --json` output, dense prose) the compression layer mangles
+  `Read` output too — fragments rather than honest truncation, invisible to a
+  "looks fine" check. (Provenance: an operator-memory field note, not
+  reconstructible from any issue thread; the rule stands on the mechanism, not
+  on that note.) All three rule sites
+  (`core/skills/tech-lead/SKILL.md`, `core/agents/security.md`,
+  `core/agents/review.md`) now name the detection (compare `wc -l`/`wc -c`
+  against what was displayed) and the recovery (re-fetch to a file, reformat to
+  short lines, read in small chunks), and say plainly that a verdict must never
+  be issued over input the reviewer cannot confirm it read whole.
+- **A merged product change with no version bump means a bump PR is needed
+  (#210).** A merge+release pass once concluded "no release needed" because the
+  merged PR carried no bump — backwards, since a merge is not Done until a
+  released tag covers it. The skill carried only the converse rule ("a bump
+  isn't released until its tag is pushed"); the missing direction is now stated.
+
 ### Added
 - **Concurrent-operator coordination protocol in `@techlead` (#208).** Two
   operators — different harnesses, or two sessions — may run against the same
