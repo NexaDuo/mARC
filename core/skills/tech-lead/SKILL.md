@@ -238,11 +238,15 @@ cheapest lever on token budget:
   compression layer can mangle `Read` itself when a file has very long single
   lines (raw `gh --json` output, dense prose) — fragments, not honest
   truncation, and invisible to a "looks fine" check. Detect it by comparing
-  `wc -l`/`wc -c` against what was displayed; recover by re-fetching to a file,
-  reformatting to short lines (`jq` for JSON), and reading in small
-  line-limited chunks. A mangled diff makes a `@sec`/`@rev` PASS worthless,
-  so say this in the dispatch prompt whenever the target may hold long lines.
-  (origin: #210 · 2026-08-25)
+  `wc -l` against the highest line number `Read` displayed, and by treating
+  text that breaks mid-token as mangled rather than as odd formatting. Recover
+  by re-fetching to a file, reformatting to short lines (`jq` for JSON), and
+  re-reading in small line-limited chunks with `Read` — **never** by piping the
+  content through `Bash` to inspect it, which is the hole the rule above
+  closes. If recovery fails twice, stop: report the input **unreviewable** and
+  escalate, and issue no verdict in either direction. A mangled diff makes a
+  `@sec`/`@rev` PASS worthless, so say this in the dispatch prompt whenever the
+  target may hold long lines. (origin: #210 · 2026-08-25)
 <!-- /rules:origin-required -->
 
 **Automatic Token Guard:** You are protected by a background token sentinel. Do not manually check your token usage. If the background guard detects a runaway tool-call loop or a mid-session model switch, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to {{ compact_action }}. (origin: #119 · 2026-07-16; context-size advisory retired at #181 · 2026-08-12 — the harness's own context/auto-compact handling supersedes it)
@@ -279,7 +283,7 @@ python3 "${{{ plugin_root_env }}:-.}/scripts/board.py" reconcile --json
 Digest: `id/title/status/assignee/linked_pr`, recent merges, release/version
 and `origin/main` drift; degrades gracefully if unconfigured. Never skip the
 pre-merge `@sec` gate even for pre-session work (recover with a retroactive
-review). Future evolution: a hook-cached digest.
+review).
 
 **Branch from freshly-fetched `origin/main`, always** (`gh pr merge` doesn't
 advance local `main`): `git fetch origin && git checkout -b <branch>
@@ -304,14 +308,12 @@ which check failed before reporting shipped.
 `@sec` record (the `## @sec review` comment URL), never a bare "APPROVED" from
 memory. This repo's PR author can't self-approve, so `reviewDecision` is
 always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16)
-The pre-merge gate is now **`@sec` AND `@rev`** — hold the merge until both
-grep-verifiable markers (`## @sec review` and `## @rev review`) are on the PR,
-each ending in a verdict; a BLOCK from either specialist blocks the merge.
-(origin: #125 · 2026-07-16)
 
 <!-- rules:origin-required -->
 - **The pre-merge gate is `@sec` AND `@rev` AND bots-adjudicated-at-HEAD.**
-  Inline bot reviews (Cursor/Greptile-class) live in `pulls/{n}/comments`, not
+  Hold the merge until both grep-verifiable markers (`## @sec review` and
+  `## @rev review`) are on the PR, each ending in a verdict; a BLOCK from
+  either blocks the merge. Inline bot reviews (Cursor/Greptile-class) live in `pulls/{n}/comments`, not
   in `gh pr checks`, are not `@sec`/`@rev`, re-run on every push, and never
   notify the operator loop — "CI green" is not permission to advance while a
   bot finding sits unaddressed. Anchor adjudication to the current HEAD SHA to
@@ -320,7 +322,7 @@ each ending in a verdict; a BLOCK from either specialist blocks the merge.
   Per thread: verify it's actually addressed → reply citing the fixing commit
   → resolve the thread; a won't-fix requires a stated justification before
   resolving. Do this at every push, not once at PR-open, since bots re-comment
-  on new commits. (origin: #139 · 2026-07-20)
+  on new commits. (origin: #125 · 2026-07-16) (origin: #139 · 2026-07-20)
 - **Re-read the operating-invariants card before tagging or merging.** Treat
   `skills/tech-lead/references/invariants-card.md` as a checkpoint at that
   moment, not just a post-compaction reminder. (origin: #41 · 2026-07-21)

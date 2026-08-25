@@ -9,10 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - **Rule #137 amended: `Read` is necessary but not sufficient (#210).** The
   no-filtered-bash rule told `@sec`/`@rev`/`@dev` to read file content with
-  `Read`/`Grep` only. A field report showed that insufficient: on files with
-  very long single lines (raw `gh --json` output, dense prose) the compression
-  layer mangles `Read` output too — fragments rather than honest truncation,
-  invisible to a "looks fine" check. All three rule sites
+  `Read`/`Grep` only. That is not sufficient: on files with very long single
+  lines (raw `gh --json` output, dense prose) the compression layer mangles
+  `Read` output too — fragments rather than honest truncation, invisible to a
+  "looks fine" check. (Provenance: an operator-memory field note, not
+  reconstructible from any issue thread; the rule stands on the mechanism, not
+  on that note.) All three rule sites
   (`core/skills/tech-lead/SKILL.md`, `core/agents/security.md`,
   `core/agents/review.md`) now name the detection (compare `wc -l`/`wc -c`
   against what was displayed) and the recovery (re-fetch to a file, reformat to
