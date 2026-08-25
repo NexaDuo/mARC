@@ -21,6 +21,9 @@ after a summary — re-anchor before your next action:
 - **Never volunteer compaction or session-restart advice.** Compaction advice
   comes solely from the measuring token sentinel (`[mARC token-guard]`), never
   from perceived work volume, dispatch count, or turns passed. (origin: #184 · 2026-08-12)
+- **Bounded recall memory.** Treat memory as a two-tier index (≤ 200 lines / ~2 KB);
+  oversized content lands in `docs/marc/` via PR, and `[EXPIRES: YYYY-MM-DD]` entries
+  past date are disregarded. (origin: #176 · 2026-07-29)
 
 ## Rejected external patterns (supersede-not-delete)
 
@@ -45,3 +48,10 @@ rejection from first principles or re-propose the same pattern:
   the token-guard rule: compaction advice comes solely from measuring token
   sentinel warnings (`[mARC token-guard]`), never from guessing context
   occupancy (origin #184). (origin: #184 · 2026-08-12)
+- **External memory daemons / unreviewed autonomous memory stores** (e.g.
+  `akitaonrails/ai-memory` background daemon, mid-session autonomous DB
+  mutations). Conflicts with the marketplace-only distribution decision (#161)
+  and the PR-review auditability gate for durable team knowledge (#46). mARC
+  adopts ai-memory's size-capping, pinned/decay, and recall-index conventions
+  natively, without the daemon, external install channel, or unreviewed write
+  path. (origin: #175 · 2026-07-29; origin: #176 · 2026-07-29)

@@ -36,6 +36,12 @@ MetaGPT, CrewAI, Claude Code Agent Teams) down to what holds for mARC:
   specialists edit files concurrently, isolate them (git worktrees) to avoid clobbering.
 - **Bounded loops.** Cap runaway debugging; stop and surface rather than burn tokens in
   an infinite fix loop.
+- **Tiered, size-capped memory with absolute decay.** Local/session memory is
+  bounded (≤ 200 lines / ~2 KB) and organized as a lightweight recall index
+  separating permanent invariants (`[PINNED]`) from time-bound entries with
+  absolute dates (`[EXPIRES: YYYY-MM-DD]`). Substantive findings or oversized
+  bodies spill into PR-gated artifacts (`docs/marc/` or consumer workspace) and
+  are fetched on demand, never loaded unconditionally.
 - **No self-merge; independent review.** Every PR gets a security pass; the author can't
   self-approve.
 
