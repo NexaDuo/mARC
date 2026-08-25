@@ -131,6 +131,27 @@ no-ops) if unresolvable — a non-zero exit means fix the board, don't move on.
 - **Sanitize before recording on a PUBLIC tracker** — a consumer's PRIVATE-repo
   client details stay in a private team note; the public board gets only
   sanitized findings. (origin: #66 · 2026-07-09)
+- **Size-capped memory writes — oversized items become PR-gated artifacts.**
+  Local memory entries (e.g. `MEMORY.md`, session notes) must stay strictly
+  compact (≤ 200 lines / ~2 KB total; tool excerpts ≤ 2 KB). Never dump raw
+  logs, diffs, or full briefs into memory. Any finding, research brief, or
+  decision exceeding the cap must be materialized as a durable artifact in the
+  repo's team-artifacts workspace (`docs/marc/` or consumer workspace) and landed
+  via a reviewed PR (PEF, #46). Memory retains only a 1-line index reference to
+  the artifact. (origin: #176 · 2026-07-29)
+- **Memory durability: Pinned vs. Decay with absolute ISO date expiry.**
+  Every persisted memory entry must declare its durability class: `[PINNED]` for
+  permanent invariants and architectural constraints (never decay; retired only
+  via explicit superseding PRs), or `[EXPIRES: YYYY-MM-DD]` with a strict ISO
+  absolute date for transient workarounds, temporary flags, or in-flight notes.
+  Never use relative expiry ("in 2 weeks"). When reading memory, disregard any
+  entry where `current_date > expiry_date`; prune expired entries
+  opportunistically during buffer-flush or maintenance passes. (origin: #176 · 2026-07-29)
+- **Two-tier recall index — index first, fetch detail on demand.** Structure
+  memory as a lightweight recall index (1-line topic descriptor + trigger
+  condition + path pointer) rather than an always-loaded prose blob. Read full
+  memory bodies or referenced artifacts via `Read` only when the index indicates
+  relevance to the active task. (origin: #176 · 2026-07-29)
 <!-- /rules:origin-required -->
 
 ### 4. Dispatch (automatic, in the background)
