@@ -19,6 +19,7 @@ The mARC team is designed to be harness-agnostic. The core specialist prompts ([
 | **Local Config Path** | Discovers workspace configurations under `.claude/` (e.g., [team.toml](../../../.claude/team.toml), with `.agents/team.toml` preferred if present). | Discovers workspace configurations under `.agents/` (e.g., `.agents/team.toml`). | **Requires Dual-Support** | Scripts support `.agents/team.toml` with `.claude/` fallback. |
 | **Bash Helper Scripts** | Runs scripts inside `scripts/` via terminal command execution. | Runs identical scripts inside `scripts/` via terminal command execution. | **100% Compatible** | Scripts mirrored byte-for-byte from `core/scripts/` (origin: #128). |
 | **Rich Output / Artifacts** | Standard Markdown console rendering. | HTML Auxiliary Pane supporting visual Artifacts, carousels, and image editing. | **Upgrade (Backward Compatible)** | `@techlead` can optionally write visual status reports to `<appDataDir>/brain/<conversation-id>`. |
+| **Context Management & Compaction** | Native `/compact` command and background auto-compaction (`autoCompactEnabled`). | No native `/compact` or auto-compaction settings. Supports `/context`, `/fork`, `/rewind`, `/clear`, and exposes `context_window` payload on `statusLine`. | **Harness Disparity (Handled by Prompt Compilation)** | Context-size advisory retired (#181); techlead prompt compiles with `compact_action: "start a fresh session"` under Antigravity. No statusline bridge built (#186). |
 
 ---
 
