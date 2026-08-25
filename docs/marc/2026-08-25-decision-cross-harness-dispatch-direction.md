@@ -150,8 +150,13 @@ here so the decision is not read as better-evidenced than it is:
 
 ## Sources
 
-- [issue #202](https://github.com/NexaDuo/mARC/issues/202) and its `@research`
-  brief ([comment](https://github.com/NexaDuo/mARC/issues/202#issuecomment-5411718487))
+Split deliberately: what the `@research` brief actually consulted, versus what
+the operator asserted directly from this repo. Conflating the two would inflate
+the apparent evidence base of the decision.
+
+**Consulted by the `@research` brief** ([comment](https://github.com/NexaDuo/mARC/issues/202#issuecomment-5411718487)
+on [issue #202](https://github.com/NexaDuo/mARC/issues/202)):
+
 - [Claude Code Docs: Headless mode](https://code.claude.com/docs/en/headless)
 - [Claude Code Docs: Agent view](https://code.claude.com/docs/en/agent-view)
 - [Antigravity Docs: CLI headless mode](https://antigravity.google/docs/cli/headless/)
@@ -159,7 +164,15 @@ here so the decision is not read as better-evidenced than it is:
 - Local CLI probes: `claude --version` (2.1.245), `agy --version` (1.1.19),
   `claude --help`, `claude agents --help`, `agy --help`, `agy agents --help`
 - This repo: `.github/workflows/ci.yml` (pinned unprivileged `agy` bootstrap),
-  `harnesses/*/marc/skills/tech-lead/SKILL.md` (per-harness dispatch verbs and
-  the `@sec`/`@rev` gate), `scripts/board.py` (GitHub Project #2 convergence)
-- [issue #204](https://github.com/NexaDuo/mARC/issues/204) — the follow-up on
-  running peer operators against one clone without conflicts
+  `harnesses/claude-code/marc/skills/tech-lead/SKILL.md` (the `@sec`/`@rev` gate)
+
+**Repo facts asserted directly by the operator** (not part of the brief; stated
+in this record's Context section and verified against the files at the time of
+writing):
+
+- `harnesses/{claude-code,antigravity,copilot}/marc/skills/tech-lead/SKILL.md` —
+  the per-harness dispatch verbs in the Context table
+- `scripts/board.py` — the GitHub Project #2 convergence point
+
+**Follow-up:** [issue #204](https://github.com/NexaDuo/mARC/issues/204) — running
+peer operators against one clone without conflicts.
