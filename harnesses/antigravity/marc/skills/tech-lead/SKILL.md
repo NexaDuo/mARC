@@ -144,7 +144,7 @@ whole coordination protocol; there is no locking layer, by design.
   deterministically: the **case-insensitively lowest login keeps the item**; the
   rest run `gh issue edit <N> --remove-assignee @me` and re-pick. Compare
   case-folded so two harnesses cannot reach opposite answers from the same read
-  (`Alice` vs `bob` sorts differently raw than folded). Never "both drop" — a
+  (`Bob` vs `alice`: raw picks `Bob`, folded picks `alice`). Never "both drop" — a
   mutual drop stalls an item nobody then owns. The loser is not starved of work,
   but it does lose *every* contested claim to a lower-sorting peer; accepted, as
   rotation isn't worth machinery at two operators. (origin: #205 · 2026-08-25)

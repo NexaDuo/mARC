@@ -67,7 +67,8 @@ supervisor between them; these four rules are the whole coordination protocol (#
   Re-read the *assignees* after claiming. If you aren't alone, break the tie
   deterministically — the **case-insensitively lowest login keeps the item**; the rest
   run `gh issue edit <N> --remove-assignee @me` and re-pick. Fold case, or two harnesses
-  can reach opposite answers from the same read. Never both-drop: a mutual drop stalls
+  can reach opposite answers from the same read (`Bob` vs `alice`: raw picks `Bob`,
+  folded picks `alice`). Never both-drop: a mutual drop stalls
   the item nobody then owns. The loser isn't starved of work, but it does lose every
   contested claim to a lower-sorting peer — accepted; rotation isn't worth machinery at
   two operators.
