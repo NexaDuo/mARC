@@ -30,8 +30,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   merged PR carried no bump — backwards, since a merge is not Done until a
   released tag covers it. The skill carried only the converse rule ("a bump
   isn't released until its tag is pushed"); the missing direction is now stated.
+- **`@techlead` stops volunteering compaction advice (#184, PR #196).** The
+  operator no longer offers unprompted compaction or session-restart suggestions
+  — that call belongs to the harness, and the only thing that may trigger the
+  advice is an explicit `[mARC token-guard]` warning. The obsolete task-boundary
+  context-hygiene advisory from #81 came out at the same time, and
+  `references/invariants-card.md` now records unprompted/volume-based compaction
+  as a rejected pattern so it doesn't get re-proposed.
 
 ### Added
+- **Memory conventions: size-capped writes, pinned vs decay, and a two-tier
+  recall index (#176, PR #201).** `core/skills/tech-lead/SKILL.md` and the
+  invariants card carry rules for keeping memory recall bounded, and record an
+  external memory daemon as a rejected pattern. `AGENTS.md` gets the matching
+  tiered, size-capped operating principle.
 - **Concurrent-operator coordination protocol in `@techlead` (#208).** Two
   operators — different harnesses, or two sessions — may run against the same
   clone with no supervisor between them (#202 decided harnesses are
@@ -48,10 +60,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `UpdateProjectV2ItemFieldValueInput` (verified against the live schema in
   #205), so `board.py set-status`'s last-write-wins window cannot be closed by
   adopting an API feature — it is accepted explicitly, and the skill says so.
-  Prior art at comparable scale points the same way: GitHub's own coding agent
+  The prior art behind that stance lives in this repo's `AGENTS.md` and the #205
+  brief under `docs/marc/`, not in the shipped skill: GitHub's own coding agent
   claims work by assignment, and Renovate — which has no claim field at all —
   serializes with external CI locks plus a per-instance work directory. Neither
   builds compare-and-swap into the tracker (#204, #205, #206).
+
+### Fixed
+- **Antigravity `hooks.json` now lands at the plugin root (#197, PR #198).** It
+  was being emitted under `hooks/`, where Antigravity doesn't look for it, so the
+  hooks shipped in 0.24.0 never resolved for that harness.
+  `scripts/compile_prompts.py` gained `get_hooks_json_path` plus cleanup of a
+  stale `hooks/hooks.json` or root `hooks.json`, the path is declared as
+  `hooks_path` in `harnesses/antigravity/marc/compile.json`, and both
+  `test_hooks_parity.py` and the Tier 2 CI assertion check the installed root
+  location and the absence of the stale one.
+
+### Security
+- **CI's Antigravity CLI installer is pinned and checksum-verified (#169, PR
+  #199).** The workflow no longer pipes `install.sh` straight into a shell: it
+  downloads, verifies against a pinned SHA256, and only then executes.
+  `ANTIGRAVITY_API_KEY` is out of the unprivileged bootstrap and package-install
+  steps entirely, scoped now to plugin install and the registration assertion.
+  Repo-internal (`.github/workflows/ci.yml`); nothing consumer-facing changes.
+
+### Documentation
+- Decision record for cross-harness dispatch — harnesses are board-mediated
+  peers, with no nested dispatch bridge (#202, PR #203).
+- Research brief on Antigravity context compaction (#186, PR #200).
+- Research brief on concurrent-operator coordination, plus this repo's own
+  `AGENTS.md` convention that #208 later promoted into the plugin (#206, PR
+  #207).
 
 ## [0.24.0] - 2026-08-24
 
