@@ -833,6 +833,37 @@ jobs:
           echo "the hook-logic self-tests below (search this log for 'invariants-card'/'outdated')"
           echo "cover the scripts' own behavior standalone, with CLAUDE_PLUGIN_ROOT set by hand."
 
+      # Antigravity CLI bootstrap (issue #169 AC#1, AC#2).
+      # Unprivileged step: ANTIGRAVITY_API_KEY is NOT exposed here.
+      # The installer is downloaded and verified against a pinned sha256 checksum
+      # before execution (no direct curl|bash piping).
+      #
+      # Pin verification / bump procedure:
+      #   1. Fetch the installer: curl -sSL https://antigravity.google/cli/install.sh -o /tmp/install.sh
+      #   2. Inspect script content and compute sha256: sha256sum /tmp/install.sh
+      #   3. Update AGY_INSTALLER_SHA256 below with the new checksum.
+      - name: Tier 2 — Antigravity CLI bootstrap (pinned, unprivileged)
+        id: antigravity_bootstrap
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HOME: ${{ github.workspace }}/.agy-home
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME"
+
+          echo "Installing Google Antigravity CLI python package..."
+          pip3 install --break-system-packages google-antigravity==0.1.6
+
+          echo "Bootstrapping Antigravity CLI binary (pinned sha256, unprivileged)..."
+          # SHA256 checksum of https://antigravity.google/cli/install.sh
+          # Bump instructions: curl -sSL https://antigravity.google/cli/install.sh | sha256sum
+          AGY_INSTALLER_SHA256="ee1ea43ce4e9e56356c4ab6dad907ef357ae4bdfcaadb682735909fb57c9c640"
+          INSTALLER_SCRIPT="$(mktemp)"
+          curl -sSLo "$INSTALLER_SCRIPT" https://antigravity.google/cli/install.sh
+          echo "${AGY_INSTALLER_SHA256}  ${INSTALLER_SCRIPT}" | sha256sum -c -
+          bash "$INSTALLER_SCRIPT"
+          rm -f "$INSTALLER_SCRIPT"
+
       # Trusted-context gate (issue #167 AC#3): GitHub Actions never exposes
       # secrets to `pull_request` runs from forks, so a fork PR genuinely
       # cannot run this step — that is an honest, visible SKIP via `if:`, not
@@ -842,6 +873,9 @@ jobs:
       # instead of exiting 0 — coverage that didn't run must never read as
       # green. See the "Antigravity coverage status" step further down for
       # the fork-skip case, which is also made explicit rather than silent.
+      #
+      # ANTIGRAVITY_API_KEY is scoped strictly to this step for plugin install
+      # and registration assertion (issue #169 AC#2).
       - name: Tier 2 — Antigravity harness install + component registration
         id: antigravity_install
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -860,12 +894,6 @@ jobs:
             echo "::error::ANTIGRAVITY_API_KEY is absent on a trusted context. Failing loudly instead of skipping silently — absent coverage must never read as a pass."
             exit 1
           fi
-
-          echo "Installing Google Antigravity CLI..."
-          pip3 install --break-system-packages google-antigravity==0.1.6
-
-          echo "Bootstrapping Antigravity CLI binary..."
-          curl -sSL https://antigravity.google/cli/install.sh | bash
 
           export PATH="$HOME/.local/bin:$PATH"
 
@@ -1032,8 +1060,12 @@ jobs:
           case "${{ steps.antigravity_install.outcome }}" in
             success) echo "Antigravity Tier 2 coverage: RAN and PASSED." ;;
             skipped) {
-                echo "### :large_yellow_circle: Antigravity Tier 2 coverage: SKIPPED (fork PR)"
-                echo "This run is a pull_request from a fork, so ANTIGRAVITY_API_KEY is not available (GitHub Actions never exposes secrets to fork PR runs). No Antigravity install/component/script assertions ran in this build. This is expected for fork PRs, not a pass."
+                if [ "${{ steps.antigravity_bootstrap.outcome }}" = "failure" ]; then
+                  echo "### :red_circle: Antigravity Tier 2 coverage: FAILED (CLI bootstrap failed)"
+                else
+                  echo "### :large_yellow_circle: Antigravity Tier 2 coverage: SKIPPED (fork PR)"
+                  echo "This run is a pull_request from a fork, so ANTIGRAVITY_API_KEY is not available (GitHub Actions never exposes secrets to fork PR runs). No Antigravity install/component/script assertions ran in this build. This is expected for fork PRs, not a pass."
+                fi
               } >> "$GITHUB_STEP_SUMMARY" ;;
             failure) echo "Antigravity Tier 2 coverage: FAILED — see the step above and the job summary." ;;
             *) echo "Antigravity Tier 2 coverage: outcome '${{ steps.antigravity_install.outcome }}' unrecognized." ;;
