@@ -45,6 +45,31 @@ MetaGPT, CrewAI, Claude Code Agent Teams) down to what holds for mARC:
 - **No self-merge; independent review.** Every PR gets a security pass; the author can't
   self-approve.
 
+## Concurrent operators on one clone
+Harnesses are **board-mediated peers** (#202) — two `@techlead` operators (different
+harnesses, or two sessions) may run against the same clone at once. There is no
+supervisor between them; these four rules are the whole coordination protocol (#204,
+#205):
+- **The board Status field is the claim token.** Move an item to `In Progress` *before*
+  dispatching, and never pick up an item already claimed by someone else. GitHub's own
+  coding agent claims work this way (assignee-as-claim); Renovate reaches the same
+  single-writer outcome by a different route — external CI locks plus a per-instance
+  work directory — so treat it as precedent for the *outcome*, not for the mechanism.
+- **The claim is racy, knowingly.** `board.py::set_status` is read-check-act with no
+  compare-and-swap, so simultaneous claims silently last-write-wins. This is **accepted,
+  not deferred**: GitHub's GraphQL exposes no optimistic-concurrency field on
+  `UpdateIssueInput` or `UpdateProjectV2ItemFieldValueInput` (verified against the live
+  schema), so there is nothing to adopt and closing it means building external locking.
+  Re-read the item after claiming: if it no longer shows your claim, you lost the race —
+  drop the item, don't dispatch, and re-pick from the board.
+- **Stale claims are reclaimed by a human, never by a timer.** An item sitting
+  `In Progress` with no linked PR is *not* self-evidently abandoned — TTL reapers
+  misfire on slow-but-alive workers. Surface it and ask; don't auto-steal.
+- **Isolate-parallel-writers extends to the operators themselves**, not just to the
+  specialists they dispatch: any operator that will mutate files takes its own worktree,
+  and two of them never share a branch or working tree. One `.git` hosts many worktrees
+  cross-harness (verified).
+
 ## Constraints
 - **Anti-anchoring / genericization (hard gate):** everything under `harnesses/` must
   stay **stack-agnostic** — zero references to any consuming repo's stack. CI enforces
