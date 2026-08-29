@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-harness hooks-parity self-test (origin: #173, #170, #197).
+"""Cross-harness hooks-parity self-test (origin: #173, #170, #197, #220, #221).
 
 Stdlib only (no pytest); run directly: python3 test_hooks_parity.py
 
@@ -117,6 +117,129 @@ def validate_hook_schema(harness: str, dialect: str, hooks_obj: dict) -> None:
         )
 
 
+
+def check_session_id_extraction() -> None:
+    """Regression test for #221: verify that session/conversation ID extraction
+    correctly parses 'session_id' (Claude Code), 'conversationId' (Antigravity),
+    falls back to $ANTIGRAVITY_CONVERSATION_ID, and falls back to $PPID (parent PID)
+    when no ID is present, ensuring anti-nag deduplication does not permanently
+    suppress errors across distinct sessions."""
+    import subprocess
+
+    fragment = (
+        'sid="$(cat 2>/dev/null | LC_ALL=C sed -n ' + compile_prompts._SESSION_ID_SED + ' | head -n1)"; '
+        'sid="${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}"; '
+        'printf "%s" "$sid"'
+    )
+
+    test_cases = [
+        ('{"session_id": "sess-cc-123"}', {}, "sess-cc-123", "Claude Code session_id parsed"),
+        ('{"conversationId": "conv-agy-456"}', {}, "conv-agy-456", "Antigravity conversationId parsed"),
+        ('{"other": 1}', {"ANTIGRAVITY_CONVERSATION_ID": "env-conv-789"}, "env-conv-789", "ANTIGRAVITY_CONVERSATION_ID env fallback"),
+        ('{}', {}, None, "no session/conv ID falls back to non-empty PPID"),
+        ('', {}, None, "empty stdin falls back to non-empty PPID"),
+    ]
+
+    for stdin_input, env_overrides, expected_sid, desc in test_cases:
+        env = os.environ.copy()
+        env.pop("ANTIGRAVITY_CONVERSATION_ID", None)
+        env.update(env_overrides)
+        res = subprocess.run(
+            ["bash", "-c", fragment],
+            input=stdin_input.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        check(res.returncode == 0, f"session extraction ({desc}): exit 0")
+        output = res.stdout.decode("utf-8").strip()
+        if expected_sid is not None:
+            check(output == expected_sid, f"session extraction ({desc}): got {output!r} == {expected_sid!r}")
+        else:
+            check(bool(output) and output.isdigit(), f"session extraction ({desc}): got non-empty numeric PID ({output!r})")
+
+
+def check_command_env_fallbacks(harness: str, marc_dir: str, config: dict, hooks_obj: dict) -> None:
+    """Regression test for #220: verify that every script-backed hook command and inline
+    command in compiled hooks.json has robust fallbacks for unset environment variables
+    (${VAR:-$PWD} for plugin root, ${VAR:-${OLDPWD:-$PWD}} for project dir)."""
+    import subprocess
+
+    plugin_root_env = config["plugin_root_env"]
+    project_dir_env = config["project_dir_env"]
+
+    # Extract all command strings from hooks_obj
+    commands = []
+    if config.get("hook_dialect") == "antigravity":
+        for hook_id, events in hooks_obj.items():
+            for event_name, handlers in events.items():
+                if event_name in {"PreToolUse", "PostToolUse"}:
+                    for entry in handlers:
+                        for h in entry.get("hooks", []):
+                            if "command" in h:
+                                commands.append((f"{hook_id}:{event_name}", h["command"]))
+                else:
+                    for h in handlers:
+                        if "command" in h:
+                            commands.append((f"{hook_id}:{event_name}", h["command"]))
+    elif config.get("hook_dialect") == "claude-code":
+        for event_name, handlers in hooks_obj.get("hooks", {}).items():
+            for entry in handlers:
+                for h in entry.get("hooks", []):
+                    if "command" in h:
+                        commands.append((f"{event_name}", h["command"]))
+    elif config.get("hook_dialect") == "copilot":
+        for event_name, handlers in hooks_obj.get("hooks", {}).items():
+            for h in handlers:
+                if "bash" in h:
+                    commands.append((f"{event_name}", h["bash"]))
+
+    for label, cmd in commands:
+        if "/hooks/" in cmd:
+            # Script command: must use ${VAR:-$PWD}/hooks/
+            check(
+                f"${{{plugin_root_env}:-$PWD}}/hooks/" in cmd,
+                f"{harness} ({label}): script path uses ${{{plugin_root_env}:-$PWD}} fallback",
+            )
+            # If not native, must export CLAUDE_PLUGIN_ROOT with :-$PWD and CLAUDE_PROJECT_DIR with :-${OLDPWD:-$PWD}
+            if plugin_root_env != "CLAUDE_PLUGIN_ROOT":
+                check(
+                    f'export CLAUDE_PLUGIN_ROOT="${{{plugin_root_env}:-$PWD}}"' in cmd,
+                    f"{harness} ({label}): exports CLAUDE_PLUGIN_ROOT with :-$PWD fallback",
+                )
+                check(
+                    f'export CLAUDE_PROJECT_DIR="${{{project_dir_env}:-${{OLDPWD:-$PWD}}}}"' in cmd,
+                    f"{harness} ({label}): exports CLAUDE_PROJECT_DIR with :-${{OLDPWD:-$PWD}} fallback",
+                )
+        if "team.toml" in cmd:
+            check(
+                f"${{{project_dir_env}:-${{OLDPWD:-$PWD}}}}" in cmd,
+                f"{harness} ({label}): team.toml path uses ${{{project_dir_env}:-${{OLDPWD:-$PWD}}}} fallback",
+            )
+        if "hook-missing" in cmd:
+            check(
+                "conversationId" in cmd,
+                f"{harness} ({label}): hook-missing dedup parses conversationId",
+            )
+            check(
+                'sid="${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}"' in cmd,
+                f"{harness} ({label}): hook-missing dedup falls back to ANTIGRAVITY_CONVERSATION_ID / PPID",
+            )
+
+    # Test actual resolution in subshell with unset env vars from marc_dir
+    refs = find_hook_script_refs(json.dumps(hooks_obj))
+    for name in sorted(refs):
+        res = subprocess.run(
+            ["bash", "-c", f'script="${{{plugin_root_env}:-$PWD}}/hooks/{name}"; test -f "$script"'],
+            cwd=marc_dir,
+            env={k: v for k, v in os.environ.items() if k not in {plugin_root_env, "CLAUDE_PLUGIN_ROOT"}},
+        )
+        check(
+            res.returncode == 0,
+            f"{harness}: '${{{plugin_root_env}:-$PWD}}/hooks/{name}' resolves with unset {plugin_root_env} (cwd={marc_dir})",
+        )
+
+
 def main() -> int:
     if not os.path.isdir(HARNESSES_DIR):
         print(f"::error::harnesses/ directory not found at {HARNESSES_DIR}")
@@ -210,6 +333,7 @@ def main() -> int:
         )
 
         validate_hook_schema(harness, dialect, actual)
+        check_command_env_fallbacks(harness, marc_dir, config, actual)
 
         with open(dest_hooks_json, "r", encoding="utf-8") as f:
             raw_text = f.read()
@@ -224,6 +348,7 @@ def main() -> int:
 
     check(hook_dialect_harnesses >= 1, f"found >=1 harness declaring hook_dialect (got {hook_dialect_harnesses})")
     check(total_script_refs > 0, f"scanned >=1 hook-script reference across all harnesses (got {total_script_refs})")
+    check_session_id_extraction()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")
