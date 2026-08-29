@@ -818,7 +818,7 @@ jobs:
           HOOKS_JSON="$INSTALL_PATH/hooks/hooks.json"
           test -f "$HOOKS_JSON" || { echo "::error::installed hooks.json missing at $HOOKS_JSON"; exit 1; }
           jq -e . "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json at $HOOKS_JSON is not valid JSON"; exit 1; }
-          HOOK_REFS="$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/hooks/[A-Za-z0-9_.-]+' "$HOOKS_JSON" | sed -E 's#.*/hooks/##' | sort -u)"
+          HOOK_REFS="$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT(:-\$PWD)?\}/hooks/[A-Za-z0-9_.-]+' "$HOOKS_JSON" | sed -E 's#.*/hooks/##' | sort -u)"
           test -n "$HOOK_REFS" || { echo "::error::no \${CLAUDE_PLUGIN_ROOT}/hooks/* references found in installed hooks.json"; exit 1; }
           while IFS= read -r name; do
             resolved="$INSTALL_PATH/hooks/$name"
