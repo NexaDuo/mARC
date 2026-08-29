@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-08-28
+
+### Fixed
+- **Antigravity script-backed hooks resolved with `$PWD` plugin-root fallback
+  (#220).** Antigravity CLI does not export `AGY_PLUGIN_ROOT` to hook commands,
+  but runs hooks with the working directory (`$PWD`) set to the directory containing
+  `hooks.json` (the plugin root). Compiled hook commands now use `${plugin_root_env:-$PWD}`
+  and `${project_dir_env:-${OLDPWD:-$PWD}}` so all script-backed hooks (`outdated-check`,
+  `invariants-card`, `token-guard`, `outdated-recheck`, `token-telemetry`) resolve
+  and execute rather than silently taking the missing-script fallback.
+- **Hook missing-script diagnostic deduplication across harnesses without `session_id`
+  (#221).** The `_report_once_fragment` deduplication marker extracted only
+  `session_id` from stdin JSON. On harnesses providing `conversationId` (such as
+  Antigravity) and no `session_id`, the key defaulted to `nosession`, permanently
+  suppressing missing-script errors across all future sessions after the first occurrence.
+  The diagnostic now parses both `session_id` and `conversationId`, falling back to
+  `ANTIGRAVITY_CONVERSATION_ID` and `$PPID` (parent CLI process PID), preserving anti-nag
+  per session while staying observable across new sessions.
+- **Regression tests for cross-harness hook execution and fallback resolution (#220, #221).**
+  `test_hooks_parity.py` now asserts that all hook script commands resolve when
+  harness-specific environment variables are unset, and tests session/conversation ID extraction.
+
 ## [0.26.0] - 2026-08-25
 
 ### Changed
