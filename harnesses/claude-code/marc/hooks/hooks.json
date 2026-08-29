@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cfg=\"${CLAUDE_PROJECT_DIR:-$PWD}/.agents/team.toml\"; fallback=\"${CLAUDE_PROJECT_DIR:-$PWD}/.claude/team.toml\"; legacy=\"${CLAUDE_PROJECT_DIR:-$PWD}/.claude/team.config\"; if [ -f \"$cfg\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$cfg\"; printf '\\n=== end team.toml ===\\n'; elif [ -f \"$fallback\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$fallback\"; printf '\\n=== end team.toml ===\\n'; printf '[mARC] DEPRECATED path: .claude/team.toml \u2014 re-run /marc:init to migrate to .agents/team.toml (it will offer to remove the old file).\\n'; elif [ -f \"$legacy\" ]; then printf '[mARC] DEPRECATED: .claude/team.config found but mARC now reads .agents/team.toml (or .claude/team.toml as a fallback) \u2014 re-run /marc:init (or convert by hand from docs/team.toml.example) to migrate; the old .claude/team.config file is no longer parsed.\\n'; else printf '[mARC] no .agents/team.toml (or .claude/team.toml) in this repo \u2014 @techlead will fall back to runtime discovery (gh repo view / gh project list). Add one from docs/team.toml.example to pin repo/project facts.\\n'; fi; exit 0"
+            "command": "cfg=\"${CLAUDE_PROJECT_DIR:-${OLDPWD:-$PWD}}/.agents/team.toml\"; fallback=\"${CLAUDE_PROJECT_DIR:-${OLDPWD:-$PWD}}/.claude/team.toml\"; legacy=\"${CLAUDE_PROJECT_DIR:-${OLDPWD:-$PWD}}/.claude/team.config\"; if [ -f \"$cfg\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$cfg\"; printf '\\n=== end team.toml ===\\n'; elif [ -f \"$fallback\" ]; then printf '=== mARC :: per-repo team.toml (channel topic) ===\\n'; cat \"$fallback\"; printf '\\n=== end team.toml ===\\n'; printf '[mARC] DEPRECATED path: .claude/team.toml \u2014 re-run /marc:init to migrate to .agents/team.toml (it will offer to remove the old file).\\n'; elif [ -f \"$legacy\" ]; then printf '[mARC] DEPRECATED: .claude/team.config found but mARC now reads .agents/team.toml (or .claude/team.toml as a fallback) \u2014 re-run /marc:init (or convert by hand from docs/team.toml.example) to migrate; the old .claude/team.config file is no longer parsed.\\n'; else printf '[mARC] no .agents/team.toml (or .claude/team.toml) in this repo \u2014 @techlead will fall back to runtime discovery (gh repo view / gh project list). Add one from docs/team.toml.example to pin repo/project facts.\\n'; fi; exit 0"
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "script=\"${CLAUDE_PLUGIN_ROOT}/hooks/outdated-check.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_outdated-check.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
+            "command": "script=\"${CLAUDE_PLUGIN_ROOT:-$PWD}/hooks/outdated-check.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n -e 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' -e 's/.*\"conversationId\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; sid=\"${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_outdated-check.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       },
@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "script=\"${CLAUDE_PLUGIN_ROOT}/hooks/invariants-card.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_invariants-card.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
+            "command": "script=\"${CLAUDE_PLUGIN_ROOT:-$PWD}/hooks/invariants-card.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n -e 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' -e 's/.*\"conversationId\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; sid=\"${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_invariants-card.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       }
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "script=\"${CLAUDE_PLUGIN_ROOT}/hooks/token-guard.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-guard.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
+            "command": "script=\"${CLAUDE_PLUGIN_ROOT:-$PWD}/hooks/token-guard.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n -e 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' -e 's/.*\"conversationId\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; sid=\"${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-guard.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       },
@@ -44,7 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "script=\"${CLAUDE_PLUGIN_ROOT}/hooks/outdated-recheck.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_outdated-recheck.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
+            "command": "script=\"${CLAUDE_PLUGIN_ROOT:-$PWD}/hooks/outdated-recheck.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n -e 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' -e 's/.*\"conversationId\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; sid=\"${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_outdated-recheck.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       }
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "script=\"${CLAUDE_PLUGIN_ROOT}/hooks/token-telemetry.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-telemetry.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
+            "command": "script=\"${CLAUDE_PLUGIN_ROOT:-$PWD}/hooks/token-telemetry.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n -e 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' -e 's/.*\"conversationId\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; sid=\"${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_token-telemetry.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
       }

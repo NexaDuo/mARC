@@ -87,10 +87,13 @@ def _substitute(text, config):
     return text
 
 
-# `sed` pattern that pulls the `session_id` field out of a hook's stdin JSON
+# `sed` pattern that pulls the `session_id` or `conversationId` field out of a hook's stdin JSON
 # payload without a `jq` dependency (single quotes below are the shell's, so
 # the literal double quotes inside don't need JSON/shell escaping here).
-_SESSION_ID_SED = 's/.*"session_id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'
+_SESSION_ID_SED = (
+    "-e 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "
+    "-e 's/.*\"conversationId\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'"
+)
 
 
 def _report_once_fragment(marker_key, message_cmd):
@@ -103,15 +106,16 @@ def _report_once_fragment(marker_key, message_cmd):
     exactly the kind of diagnostic that's supposed to be cheap (origin: #170
     AC#2, dedup gap flagged by `@rev` on PR #189). This stays visible (never
     silent — that was the #170 bug) but reports once per session by keying a
-    state-file marker off the hook's own stdin `session_id` (falling back to
-    a fixed "nosession" bucket if it can't be read, e.g. no stdin JSON or a
-    malformed payload — still reported at least once, never permanently
-    silent). `marker_key` must already be shell-safe (validated via
+    state-file marker off the hook's own stdin `session_id` or `conversationId`
+    (falling back to ANTIGRAVITY_CONVERSATION_ID, then PPID — still reported
+    at least once per session, never permanently silent across new sessions,
+    origin: #221). `marker_key` must already be shell-safe (validated via
     `_assert_shell_safe`, or a literal drawn from one)."""
     return (
         'st="${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing"; '
         'mkdir -p "$st" 2>/dev/null; '
-        'sid="$(cat 2>/dev/null | LC_ALL=C sed -n \'' + _SESSION_ID_SED + '\' | head -n1)"; '
+        f'sid="$(cat 2>/dev/null | LC_ALL=C sed -n {_SESSION_ID_SED} | head -n1)"; '
+        'sid="${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}"; '
         'mk="$st/$(printf \'%s\' "${sid:-nosession}_' + marker_key + '" '
         '| LC_ALL=C tr -c \'A-Za-z0-9_.-\' \'_\')"; '
         'if [ ! -f "$mk" ]; then ' + message_cmd + ' touch "$mk" 2>/dev/null; fi'
@@ -146,8 +150,8 @@ def _script_hook_command(hook, config):
     prefix = ""
     if not is_native:
         prefix = (
-            f'export CLAUDE_PLUGIN_ROOT="${{{plugin_root_env}}}"; '
-            f'export CLAUDE_PROJECT_DIR="${{{project_dir_env}:-$PWD}}"; '
+            f'export CLAUDE_PLUGIN_ROOT="${{{plugin_root_env}:-$PWD}}"; '
+            f'export CLAUDE_PROJECT_DIR="${{{project_dir_env}:-${{OLDPWD:-$PWD}}}}"; '
         )
 
     not_found_msg = (
@@ -156,7 +160,7 @@ def _script_hook_command(hook, config):
     not_found_branch = _report_once_fragment(script_name, not_found_msg)
 
     return (
-        f'{prefix}script="${{{plugin_root_env}}}/hooks/{script_name}"; '
+        f'{prefix}script="${{{plugin_root_env}:-$PWD}}/hooks/{script_name}"; '
         'if [ -f "$script" ]; then bash "$script" 2>/dev/null; '
         f'else {not_found_branch}; fi; '
         'exit 0'
