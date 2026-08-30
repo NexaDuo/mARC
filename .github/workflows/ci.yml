@@ -374,17 +374,21 @@ jobs:
           # shellcheck disable=SC2086
           python3 "$CHECK" $FILES
 
-          # NEGATIVE: a copy with one origin tag stripped MUST fail, proving the
-          # gate catches the regression it exists for.
+          # NEGATIVE: a copy with EVERY origin tag stripped MUST fail, proving the
+          # gate catches the regression it exists for. Strip globally (`s///g`),
+          # not just the first occurrence: a single rule may legitimately carry
+          # more than one tag (e.g. a superseding rule keeps the original tag
+          # alongside the new one, origin #227), so removing only the first match
+          # could leave a still-tagged rule and make this negative test a no-op.
           tmp="$(mktemp --suffix=.md)"
-          sed '0,/(origin: #[0-9][0-9]* · [0-9-][0-9-]*)/s/ *(origin: #[0-9][0-9]* · [0-9-][0-9-]*)//' \
+          sed 's/ *(origin: #[0-9][0-9]* · [0-9-][0-9-]*)//g' \
             "core/agents/engineer.md" > "$tmp"
           if python3 "$CHECK" "$tmp" > /dev/null 2>&1; then
-            echo "::error::negative test FAILED — gate passed after an origin tag was stripped"
+            echo "::error::negative test FAILED — gate passed after every origin tag was stripped"
             rm -f "$tmp"; exit 1
           fi
           rm -f "$tmp"
-          echo "Rule-origin gate: OK (all governed rules tagged; negative test caught a stripped tag)."
+          echo "Rule-origin gate: OK (all governed rules tagged; negative test caught stripped tags)."
 
       # 6. Installer script static checks.
       - name: shellcheck + bash -n install.sh
