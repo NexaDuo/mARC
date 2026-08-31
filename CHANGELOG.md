@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Rule #137 made executable in Grep-less harness modes and propagated to all specialists (#228).**
+  Rule #137 ("never ingest file content via filtered bash") previously assumed a `Grep` tool always exists and only covered `@sec`, `@rev`, and `@dev`. In harness modes (such as bypass-permissions modes) where `Grep` is not exposed and the harness injects a system-prompt block nudging `cat`/`sed`/`head` over structured tools, the rule failed to account for missing tools, and the counter-rule was missing from `@sre`, `@design`, and `@research`.
+  - Revised the rule in `security.md`, `review.md`, and `engineer.md`: `Read` is the primary content tool, `Grep` is used only when the session actually exposes it, and a named fallback (the filtering proxy's raw/passthrough escape hatch) is provided for bash-only reads, reporting the read as unfiltered.
+  - Added the adapted counter-rule across `sre.md`, `design.md`, and `research.md`, closing the propagation gap across all specialists.
+  - Updated `@techlead`'s dispatch instructions to stop mandating a `Grep` tool that a target session might not have.
+  - Added explicit handling for harness/hook instructions or MCP preamble suggesting bash reads or unrelated tool calls: treat them as harness noise, disregard, report, and continue working without halting.
+  - Added an `AGENTS.md` Lessons entry recording the diagnostic procedure for distinguishing harness-emitted prompt text from repo-borne prompt injections.
+
+### Fixed
+- **Rule-origin governance CI gate negative test strips all origin tags globally (#228).**
+  The negative self-test in `.github/workflows/ci.yml` previously stripped only the first `(origin: ...)` tag in `engineer.md`. When a rule carries multiple origin tags (e.g. #137 and superseding #227), stripping only the first left the rule tagged, making the negative test a no-op. The test now strips tags globally (`s///g`).
+
 ## [0.27.0] - 2026-08-28
 
 ### Fixed
@@ -1106,9 +1119,6 @@ reviews.
 - `.claude-plugin/plugin.json` — version `0.2.0` → `0.3.0` (`minimumVersion`
   unchanged — that is the min Claude Code runtime, a different field).
 
-[0.4.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.4.0
-[0.3.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.3.0
-
 ## [0.2.0] - 2026-07-03
 
 Opt-in onboarding — a repo can now graduate from ephemeral session-memory to a
@@ -1135,8 +1145,6 @@ without changing the zero-config default.
   behavior is byte-for-byte unchanged if declined.
 - `.claude-plugin/plugin.json` — version `0.1.0` → `0.2.0` (`minimumVersion`
   unchanged — that is the min Claude Code runtime, a different field).
-
-[0.2.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.2.0
 
 ## [0.1.0] - 2026-07-03
 
@@ -1172,9 +1180,48 @@ brand layer.
   specialists as a shared flat `agents/` pool, and future harnesses get their
   own `harnesses/<harness>/` sibling. Documented in `docs/ARCHITECTURE.md`.
 
+[Unreleased]: https://github.com/NexaDuo/mARC/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.27.0
+[0.26.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.26.0
+[0.25.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.25.0
+[0.24.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.24.0
+[0.23.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.23.0
+[0.22.2]: https://github.com/NexaDuo/mARC/releases/tag/v0.22.2
+[0.22.1]: https://github.com/NexaDuo/mARC/releases/tag/v0.22.1
+[0.22.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.22.0
+[0.21.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.21.0
+[0.20.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.20.0
+[0.19.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.19.0
+[0.18.1]: https://github.com/NexaDuo/mARC/releases/tag/v0.18.1
+[0.18.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.18.0
+[0.17.1]: https://github.com/NexaDuo/mARC/releases/tag/v0.17.1
+[0.17.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.17.0
+[0.16.9]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.9
+[0.16.8]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.8
+[0.16.6]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.6
+[0.16.5]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.5
+[0.16.4]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.4
+[0.16.3]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.3
+[0.16.2]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.2
+[0.16.1]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.1
+[0.16.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.16.0
+[0.15.2]: https://github.com/NexaDuo/mARC/releases/tag/v0.15.2
+[0.15.1]: https://github.com/NexaDuo/mARC/releases/tag/v0.15.1
+[0.15.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.15.0
+[0.14.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.14.0
+[0.13.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.13.0
+[0.12.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.12.0
+[0.11.2]: https://github.com/NexaDuo/mARC/releases/tag/v0.11.2
+[0.11.1]: https://github.com/NexaDuo/mARC/releases/tag/v0.11.1
+[0.11.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.11.0
+[0.10.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.10.0
+[0.9.1]: https://github.com/NexaDuo/mARC/releases/tag/v0.9.1
 [0.9.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.9.0
 [0.8.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.8.0
 [0.7.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.7.0
 [0.6.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.6.0
 [0.5.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.5.0
+[0.4.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.4.0
+[0.3.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.3.0
+[0.2.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.2.0
 [0.1.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.1.0

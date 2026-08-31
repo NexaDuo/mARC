@@ -163,6 +163,12 @@ git -C mARC pull
 agy plugin install ./mARC/harnesses/antigravity/marc
 ```
 
+For GitHub Copilot CLI:
+
+```bash
+copilot plugin update marc@nexaduo
+```
+
 **Update notifications:** mARC ships a `SessionStart` hook that checks whether your installed version is behind the version on `main` once per session. If a new major or minor version is available, it prints a one-line update reminder. This check is silent and does not block the session if you are offline or if the check times out.
 
 ## Bind mARC to a repo (optional but recommended)

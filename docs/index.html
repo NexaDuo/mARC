@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
 <title>mARC :: Multi-Agent Relay Control</title>
-<meta name="description" content="mARC: Multi-Agent Relay Control. Install a cross-repo team of AI engineering agents for Claude Code or Google Antigravity. @techlead ops the channel and convenes @dev, @sre, @design, and @sec.">
+<meta name="description" content="mARC: Multi-Agent Relay Control. Install a cross-repo team of AI engineering agents for Claude Code, Google Antigravity, or GitHub Copilot CLI. @techlead ops the channel and convenes @dev, @sre, @design, @sec, @rev, and @research.">
 <!-- Favicon: the #marc channel sigil, inline SVG (data: URI), which is self-contained,
      zero network, pure vector shapes (no script or external refs). -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' role='img' aria-label='mARC channel mark'%3E%3Crect x='1' y='1' width='30' height='30' rx='7' fill='%230b0b1a' stroke='%23b892ff' stroke-width='1.5'/%3E%3Cg transform='translate(2.2,0) skewX(-8)'%3E%3Crect x='11.4' y='7' width='3' height='18' rx='1.2' fill='%235ef1ff'/%3E%3Crect x='17.4' y='7' width='3' height='18' rx='1.2' fill='%235ef1ff'/%3E%3Crect x='8' y='12' width='16' height='3' rx='1.2' fill='%23ff6ac1'/%3E%3Crect x='8' y='18' width='16' height='3' rx='1.2' fill='%23ff6ac1'/%3E%3C/g%3E%3C/svg%3E">
@@ -293,8 +293,8 @@
         ╚═╝ ╚═╝ ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝  ╚═════╝
    ▄▖▄▖▄▖▄▖ multi · agent · relay · control ▄▖▄▖▄▖▄▖<span class="cursor" aria-hidden="true">_</span></h1>
 
-      <p class="pitch"><b>Multi-Agent Relay Control</b> is a plugin for Claude Code or Google Antigravity that runs a complete team of AI engineering agents in your terminal.</p>
-      <p class="sub">You can install the cross-repo team of agents as a user-level plugin. Once installed, running <code>/marc:tech-lead</code> brings in the coordinator, who automatically dispatches specialized agents like <b class="nick">@dev</b>, <b class="nick">@sre</b>, <b class="nick">@design</b>, and <b class="nick">@sec</b> to handle coding, infrastructure setups, and pre-merge audits.</p>
+      <p class="pitch"><b>Multi-Agent Relay Control</b> is a plugin for Claude Code, Google Antigravity, or GitHub Copilot CLI that runs a complete team of AI engineering agents in your terminal.</p>
+      <p class="sub">You can install the cross-repo team of agents as a user-level plugin. Once installed, running <code>/marc:tech-lead</code> brings in the coordinator, who automatically dispatches specialized agents like <b class="nick">@dev</b>, <b class="nick">@sre</b>, <b class="nick">@design</b>, <b class="nick">@sec</b>, <b class="nick">@rev</b>, and <b class="nick">@research</b> to handle coding, infrastructure setups, research briefs, and pre-merge audits.</p>
       <div class="cta">
         <a class="btn primary" id="hero-cta-join" href="#install">▶ /join #marc</a>
         <a class="btn" id="hero-cta-github" href="https://github.com/NexaDuo/mARC" target="_blank" rel="noopener noreferrer">view source ↗</a>
@@ -307,7 +307,7 @@
   <section class="win roster" aria-labelledby="roster">
     <div class="titlebar">
       <span class="chan">NAMES</span>
-      <span class="topic">#marc · 5 users · 1 operator</span>
+      <span class="topic">#marc · 7 users · 1 operator</span>
     </div>
     <div class="body">
       <ul class="names">
@@ -351,6 +351,22 @@
             <span class="desc">Audits changes before they land, serving as the pre-merge security pass that guards the tree.</span>
           </span>
         </li>
+        <li class="voice">
+          <span class="sigil" aria-hidden="true">+</span>
+          <span>
+            <span class="nick">@rev</span><span class="tag">code review</span>
+            <span class="role">Correctness &amp; code health.</span>
+            <span class="desc">Audits code logic, edge cases, and test completeness before landing; the second half of the mandatory merge gate.</span>
+          </span>
+        </li>
+        <li class="voice">
+          <span class="sigil" aria-hidden="true">+</span>
+          <span>
+            <span class="nick">@research</span><span class="tag">research</span>
+            <span class="role">External evidence &amp; citations.</span>
+            <span class="desc">Gathers benchmarks, documentation, and technical trade-offs into cited briefs before architectural decisions.</span>
+          </span>
+        </li>
       </ul>
     </div>
   </section>
@@ -360,7 +376,7 @@
   <section class="win chanlist" aria-labelledby="features">
     <div class="titlebar">
       <span class="chan">/LIST</span>
-      <span class="topic">marc.nexaduo.net · 8 channels</span>
+      <span class="topic">marc.nexaduo.net · 9 channels</span>
     </div>
     <div class="body">
       <ul class="channels">
@@ -385,12 +401,16 @@
           <span class="chtopic">Run <code>/marc:init</code> to scaffold your local configuration. The command writes <code>.agents/team.toml</code> on Google Antigravity, or <code>.claude/team.toml</code> on Claude Code. It prints the planned content first so you can review it.</span>
         </li>
         <li>
-          <span class="chname">merge-gate</span><span class="tag">@sec</span>
-          <span class="chtopic">A read-only pre-merge diff review runs on every pull request, flagging high or critical security concerns before they land.</span>
+          <span class="chname">merge-gate</span><span class="tag">@sec + @rev</span>
+          <span class="chtopic">A mandatory dual pre-merge gate: <code>@sec</code> performs security audits while <code>@rev</code> verifies correctness, logic, and test coverage before anything merges.</span>
         </li>
         <li>
           <span class="chname">lessons</span><span class="tag">two-tier</span>
-          <span class="chtopic">Self-improvement details accumulate in local memory buffers before flushing into versioned skills through a standard pull request.</span>
+          <span class="chtopic">Two-tier, size-capped memory with pinned invariants (<code>[PINNED]</code>) and ISO-dated decay (<code>[EXPIRES: YYYY-MM-DD]</code>); oversized briefs spill into PR-gated team artifacts.</span>
+        </li>
+        <li>
+          <span class="chname">coordination</span><span class="tag">peer ops</span>
+          <span class="chtopic">Cross-harness peer operators coordinate via association-checked <code>## @techlead claim</code> markers, <code>git worktree list</code> inspection, and safe dead-worktree remedies.</span>
         </li>
         <li>
           <span class="chname">install-sh</span><span class="tag">auditable</span>
@@ -410,6 +430,7 @@
     <div class="install-tabs" role="tablist">
       <button class="tab-btn active" id="tab-claude" role="tab" aria-selected="true" aria-controls="panel-claude" data-topic="paste these into Claude Code">Claude Code</button>
       <button class="tab-btn" id="tab-antigravity" role="tab" aria-selected="false" aria-controls="panel-antigravity" data-topic="setup commands for Google Antigravity">Google Antigravity</button>
+      <button class="tab-btn" id="tab-copilot" role="tab" aria-selected="false" aria-controls="panel-copilot" data-topic="paste these into GitHub Copilot CLI">GitHub Copilot CLI</button>
     </div>
     <div class="body">
 
@@ -491,6 +512,37 @@
         </div>
 
         <p class="note">This registers the mARC plugin on the Google Antigravity harness. The agent team runs locally in your environment, utilizing the configured workspace directory.</p>
+      </div>
+
+      <div id="panel-copilot" class="tab-panel" role="tabpanel" aria-labelledby="tab-copilot">
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 1) · add the marketplace</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">&gt;</span>
+            <code id="cmd-copilot-mkt">copilot plugin marketplace add NexaDuo/mARC</code>
+            <button class="copy" type="button" id="copy-btn-copilot-mkt" data-copy="cmd-copilot-mkt" aria-label="Copy: add the mARC marketplace to Copilot">copy</button>
+          </div>
+        </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="you">you</span> (step 2) · install the plugin</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">&gt;</span>
+            <code id="cmd-copilot-install">copilot plugin install marc@nexaduo</code>
+            <button class="copy" type="button" id="copy-btn-copilot-install" data-copy="cmd-copilot-install" aria-label="Copy: install marc plugin on Copilot">copy</button>
+          </div>
+        </div>
+
+        <div class="irc-line">
+          <span class="meta"><span class="who">@techlead</span> has joined · op the channel with</span>
+          <div class="cmd">
+            <span class="prompt" aria-hidden="true">&gt;</span>
+            <code id="cmd-copilot-invoke">/marc:tech-lead</code>
+            <button class="copy" type="button" id="copy-btn-copilot-invoke" data-copy="cmd-copilot-invoke" aria-label="Copy: invoke tech-lead in Copilot">copy</button>
+          </div>
+        </div>
+
+        <p class="note">Installs the mARC plugin on GitHub Copilot CLI using custom agents (<code>marc:*</code>) and native task dispatch.</p>
       </div>
 
     </div>
