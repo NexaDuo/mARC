@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Self-test for `dispatch_agent.py` cross-harness dispatch and routing (origin: #239).
+"""Self-test for `dispatch_agent.py` cross-harness dispatch and routing (origin: #239, #241).
 
 Stdlib only (no pytest); run directly:  python3 test_dispatch_agent.py
 
 Deterministic, offline, zero token cost — no real network, no live CLI calls.
 Feeds `dispatch_agent.py` synthetic fixtures and asserts:
   * Command generation across claude-code, antigravity, and copilot for all specialist roles
+  * Embedded default hybrid specialization matrix across all 3 host harnesses and roles (#241)
   * Route resolution from team.toml [orchestration] (mode='hybrid' vs mode='native')
-  * CLI availability checking and graceful fallback logic
+  * Priority hierarchy: explicit CLI flag > team.toml route > default hybrid matrix
+  * CLI availability checking and graceful fallback to host harness
   * Timeout handling and error reporting
   * Dry-run mode and JSON serialization contract
 """
@@ -28,6 +30,7 @@ sys.path.insert(0, HERE)
 
 from dispatch_agent import (  # noqa: E402
     CANONICAL_ROLES,
+    DEFAULT_HYBRID_MATRIX,
     HARNESS_BINARIES,
     ROLE_TO_AGENT,
     build_harness_command,
@@ -36,6 +39,7 @@ from dispatch_agent import (  # noqa: E402
     main as dispatch_main,
     parse_toml,
     resolve_route,
+    resolve_target_harness,
 )
 
 _failures: List[str] = []
@@ -93,12 +97,76 @@ def test_command_generation() -> None:
         check(True, "unknown harness correctly raised ValueError")
 
 
+def test_default_hybrid_matrix() -> None:
+    print("\n--- Test: Default hybrid specialization matrix (#241) ---")
+    always_which = lambda b: f"/usr/bin/{b}"
+
+    expected_matrix = {
+        "claude-code": {
+            "dev": "claude-code",
+            "engineer": "claude-code",
+            "sec": "claude-code",
+            "security": "claude-code",
+            "rev": "antigravity",
+            "review": "antigravity",
+            "research": "antigravity",
+            "sre": "claude-code",
+            "design": "claude-code",
+        },
+        "antigravity": {
+            "dev": "claude-code",
+            "engineer": "claude-code",
+            "sec": "claude-code",
+            "security": "claude-code",
+            "rev": "antigravity",
+            "review": "antigravity",
+            "research": "antigravity",
+            "sre": "antigravity",
+            "design": "antigravity",
+        },
+        "copilot": {
+            "dev": "claude-code",
+            "engineer": "claude-code",
+            "sec": "claude-code",
+            "security": "claude-code",
+            "rev": "antigravity",
+            "review": "antigravity",
+            "research": "antigravity",
+            "sre": "copilot",
+            "design": "copilot",
+        },
+    }
+
+    # Verify constant data structure matches specification
+    for host, roles in expected_matrix.items():
+        check(host in DEFAULT_HYBRID_MATRIX, f"DEFAULT_HYBRID_MATRIX has host key '{host}'")
+        for role, expected_target in roles.items():
+            actual = DEFAULT_HYBRID_MATRIX[host].get(role)
+            check(actual == expected_target, f"DEFAULT_HYBRID_MATRIX['{host}']['{role}'] == '{expected_target}' (got '{actual}')")
+
+            # Test resolve_target_harness directly
+            harness, fallback, reason = resolve_target_harness(
+                host_harness=host,
+                role=role,
+                explicit_harness="auto",
+                toml_routes=None,
+                toml_mode=None,
+                cli_checker=always_which,
+            )
+            check(harness == expected_target and not fallback, f"resolve_target_harness('{host}', '{role}') -> '{expected_target}' (got '{harness}')")
+
+
 def test_route_resolution_from_toml() -> None:
     print("\n--- Test: Route resolution from team.toml ---")
+    always_which = lambda bin_name: f"/usr/bin/{bin_name}"
+    dummy_env_cc = {"CLAUDE_PLUGIN_ROOT": "/plugin"}
+    dummy_env_agy = {"ANTIGRAVITY_CONVERSATION_ID": "conv-123"}
+    dummy_env_copilot = {"COPILOT_PLUGIN_DATA": "/data"}
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
 
-        # 1. Hybrid mode with routes
+        # 1. Hybrid mode with explicit user routes
         hybrid_toml = tmp_path / "hybrid_team.toml"
         hybrid_toml.write_text(
             """
@@ -110,31 +178,37 @@ gh_repo = "TestOrg/test-repo"
 mode = "hybrid"
 
 [orchestration.routes]
-dev = "claude-code"
-research = "antigravity"
-sre = "copilot"
-sec = "claude-code"
+dev = "copilot"
+research = "claude-code"
+sre = "antigravity"
+sec = "copilot"
 """,
             encoding="utf-8",
         )
 
-        always_which = lambda bin_name: f"/usr/bin/{bin_name}"
-        dummy_env = {"CLAUDE_PLUGIN_ROOT": "/plugin"}
+        # User routes override default matrix
+        harness, fallback, reason = resolve_route("dev", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "copilot" and not fallback, f"hybrid user route 'dev' -> copilot (got {harness})")
 
-        harness, fallback, reason = resolve_route("dev", "auto", hybrid_toml, env=dummy_env, which_fn=always_which)
-        check(harness == "claude-code" and not fallback, f"hybrid route 'dev' -> claude-code (got {harness})")
+        harness, fallback, reason = resolve_route("research", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "claude-code" and not fallback, f"hybrid user route 'research' -> claude-code (got {harness})")
 
-        harness, fallback, reason = resolve_route("research", "auto", hybrid_toml, env=dummy_env, which_fn=always_which)
-        check(harness == "antigravity" and not fallback, f"hybrid route 'research' -> antigravity (got {harness})")
+        harness, fallback, reason = resolve_route("sre", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "antigravity" and not fallback, f"hybrid user route 'sre' -> antigravity (got {harness})")
 
-        harness, fallback, reason = resolve_route("sre", "auto", hybrid_toml, env=dummy_env, which_fn=always_which)
-        check(harness == "copilot" and not fallback, f"hybrid route 'sre' -> copilot (got {harness})")
+        # Unrouted role in hybrid mode falls back to DEFAULT_HYBRID_MATRIX
+        # On claude-code host: 'rev' -> antigravity, 'design' -> claude-code
+        harness, fallback, reason = resolve_route("rev", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "antigravity" and not fallback, f"hybrid unrouted 'rev' on claude-code -> default matrix antigravity (got {harness})")
 
-        # Unrouted role defaults to native
-        harness, fallback, reason = resolve_route("design", "auto", hybrid_toml, env=dummy_env, which_fn=always_which)
-        check(harness == "claude-code" and not fallback, f"hybrid unrouted 'design' -> native (claude-code) (got {harness})")
+        harness, fallback, reason = resolve_route("design", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "claude-code" and not fallback, f"hybrid unrouted 'design' on claude-code -> default matrix claude-code (got {harness})")
 
-        # 2. Native mode (routes ignored)
+        # Unrouted role on antigravity host: 'design' -> antigravity
+        harness, fallback, reason = resolve_route("design", "auto", hybrid_toml, env=dummy_env_agy, which_fn=always_which)
+        check(harness == "antigravity" and not fallback, f"hybrid unrouted 'design' on antigravity -> default matrix antigravity (got {harness})")
+
+        # 2. Native mode (routes and hybrid matrix bypassed)
         native_toml = tmp_path / "native_team.toml"
         native_toml.write_text(
             """
@@ -143,21 +217,59 @@ mode = "native"
 
 [orchestration.routes]
 dev = "copilot"
+rev = "antigravity"
 """,
             encoding="utf-8",
         )
-        harness, fallback, reason = resolve_route("dev", "auto", native_toml, env=dummy_env, which_fn=always_which)
-        check(harness == "claude-code", f"native mode -> native (claude-code) (got {harness})")
+        harness, fallback, reason = resolve_route("dev", "auto", native_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "claude-code", f"native mode on claude-code -> native claude-code (got {harness})")
 
-        # 3. Missing / empty team.toml
+        harness, fallback, reason = resolve_route("rev", "auto", native_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "claude-code", f"native mode on claude-code for rev -> native claude-code (got {harness})")
+
+        harness, fallback, reason = resolve_route("dev", "auto", native_toml, env=dummy_env_agy, which_fn=always_which)
+        check(harness == "antigravity", f"native mode on antigravity -> native antigravity (got {harness})")
+
+        # 3. Missing / empty team.toml defaults to DEFAULT_HYBRID_MATRIX
         empty_toml = tmp_path / "empty_team.toml"
         empty_toml.write_text("", encoding="utf-8")
-        harness, fallback, reason = resolve_route("dev", "auto", empty_toml, env=dummy_env, which_fn=always_which)
-        check(harness == "claude-code", f"empty team.toml -> native (claude-code) (got {harness})")
 
-        # 4. Explicit CLI flag override beats team.toml routes
-        harness, fallback, reason = resolve_route("dev", "antigravity", hybrid_toml, env=dummy_env, which_fn=always_which)
+        # Claude Code host
+        harness, fallback, reason = resolve_route("dev", "auto", empty_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "claude-code", f"empty team.toml (claude-code host) for dev -> claude-code (got {harness})")
+
+        harness, fallback, reason = resolve_route("rev", "auto", empty_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "antigravity", f"empty team.toml (claude-code host) for rev -> antigravity (got {harness})")
+
+        harness, fallback, reason = resolve_route("research", "auto", empty_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "antigravity", f"empty team.toml (claude-code host) for research -> antigravity (got {harness})")
+
+        # Antigravity host
+        harness, fallback, reason = resolve_route("dev", "auto", empty_toml, env=dummy_env_agy, which_fn=always_which)
+        check(harness == "claude-code", f"empty team.toml (antigravity host) for dev -> claude-code (got {harness})")
+
+        harness, fallback, reason = resolve_route("sre", "auto", empty_toml, env=dummy_env_agy, which_fn=always_which)
+        check(harness == "antigravity", f"empty team.toml (antigravity host) for sre -> antigravity (got {harness})")
+
+        # Copilot host
+        harness, fallback, reason = resolve_route("dev", "auto", empty_toml, env=dummy_env_copilot, which_fn=always_which)
+        check(harness == "claude-code", f"empty team.toml (copilot host) for dev -> claude-code (got {harness})")
+
+        harness, fallback, reason = resolve_route("rev", "auto", empty_toml, env=dummy_env_copilot, which_fn=always_which)
+        check(harness == "antigravity", f"empty team.toml (copilot host) for rev -> antigravity (got {harness})")
+
+        harness, fallback, reason = resolve_route("sre", "auto", empty_toml, env=dummy_env_copilot, which_fn=always_which)
+        check(harness == "copilot", f"empty team.toml (copilot host) for sre -> copilot (got {harness})")
+
+        # 4. Explicit CLI flag override beats team.toml routes and default matrix
+        harness, fallback, reason = resolve_route("dev", "antigravity", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
         check(harness == "antigravity", f"explicit --harness antigravity overrides team.toml (got {harness})")
+
+        harness, fallback, reason = resolve_route("rev", "claude-code", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
+        check(harness == "claude-code", f"explicit --harness claude-code overrides default matrix (got {harness})")
+
+        harness, fallback, reason = resolve_route("dev", "native", hybrid_toml, env=dummy_env_agy, which_fn=always_which)
+        check(harness == "antigravity", f"explicit --harness native resolves to host harness (got {harness})")
 
 
 def test_native_harness_detection() -> None:
@@ -191,29 +303,73 @@ def test_native_harness_detection() -> None:
 
 def test_cli_availability_and_fallback() -> None:
     print("\n--- Test: CLI availability and fallback logic ---")
-    # Scenario: Route targets 'copilot' (binary: 'copilot'), but copilot is NOT in PATH.
-    # Native environment is claude-code (binary: 'claude' is in PATH).
     def which_only_claude(b):
         return "/usr/bin/claude" if b == "claude" else None
 
-    env = {"CLAUDE_PLUGIN_ROOT": "/plugin"}
+    def which_only_agy(b):
+        return "/usr/bin/agy" if b == "agy" else None
+
+    def which_only_copilot(b):
+        return "/usr/bin/copilot" if b == "copilot" else None
+
+    # Scenario 1: On claude-code host, default matrix routes 'rev' -> antigravity ('agy').
+    # But only 'claude' CLI is available. Falls back to host harness (claude-code).
+    env_cc = {"CLAUDE_PLUGIN_ROOT": "/plugin"}
+    harness, fallback, reason = resolve_route(
+        role="rev",
+        requested_harness="auto",
+        env=env_cc,
+        which_fn=which_only_claude,
+    )
+    check(harness == "claude-code", f"matrix rev fallback resolved to claude-code (got {harness})")
+    check(fallback is True, "fallback flag is True")
+    check(reason is not None and "agy" in reason, f"fallback reason mentions agy ({reason})")
+
+    # Scenario 2: On antigravity host, default matrix routes 'dev' -> claude-code ('claude').
+    # But only 'agy' CLI is available. Falls back to host harness (antigravity).
+    env_agy = {"ANTIGRAVITY_CONVERSATION_ID": "conv-123"}
+    harness, fallback, reason = resolve_route(
+        role="dev",
+        requested_harness="auto",
+        env=env_agy,
+        which_fn=which_only_agy,
+    )
+    check(harness == "antigravity", f"matrix dev fallback on agy host resolved to antigravity (got {harness})")
+    check(fallback is True, "fallback flag is True")
+    check(reason is not None and "claude" in reason, f"fallback reason mentions claude ({reason})")
+
+    # Scenario 3: On copilot host, default matrix routes 'research' -> antigravity ('agy').
+    # But only 'copilot' CLI is available. Falls back to host harness (copilot).
+    env_copilot = {"COPILOT_PLUGIN_DATA": "/data"}
+    harness, fallback, reason = resolve_route(
+        role="research",
+        requested_harness="auto",
+        env=env_copilot,
+        which_fn=which_only_copilot,
+    )
+    check(harness == "copilot", f"matrix research fallback on copilot host resolved to copilot (got {harness})")
+    check(fallback is True, "fallback flag is True")
+    check(reason is not None and "agy" in reason, f"fallback reason mentions agy ({reason})")
+
+    # Scenario 4: User explicitly requests 'copilot', but copilot is not on PATH.
+    # Native host is claude-code. Falls back to claude-code.
     harness, fallback, reason = resolve_route(
         role="sre",
         requested_harness="copilot",
-        env=env,
+        env=env_cc,
         which_fn=which_only_claude,
     )
-    check(harness == "claude-code", f"fallback harness resolved to claude-code (got {harness})")
+    check(harness == "claude-code", f"explicit copilot fallback resolved to claude-code (got {harness})")
     check(fallback is True, "fallback flag is True")
     check(reason is not None and "copilot" in reason, f"fallback reason mentions copilot ({reason})")
 
     # Verify command builder generates fallback command in dispatch()
     res = dispatch(
-        role="sre",
-        prompt="Check logs",
-        harness="copilot",
+        role="rev",
+        prompt="Review PR #123",
+        harness="auto",
         dry_run=True,
-        env=env,
+        env=env_cc,
         which_fn=which_only_claude,
     )
     check(res["fallback"] is True, "dispatch result indicates fallback")
@@ -313,6 +469,7 @@ def test_json_and_cli_interface() -> None:
 
 def main() -> int:
     test_command_generation()
+    test_default_hybrid_matrix()
     test_route_resolution_from_toml()
     test_native_harness_detection()
     test_cli_availability_and_fallback()

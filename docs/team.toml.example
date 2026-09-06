@@ -100,14 +100,20 @@ health_check_command = "./scripts/health-check.sh"
 # prints a summary — both are manual/opt-in, never auto-run.
 enabled = false
 
-# --- Cross-harness orchestration & routing (optional, origin: #239) ---
+# --- Cross-harness orchestration & routing (optional, origin: #239, #241) ---
 [orchestration]
 # Dispatch mode: "native" (default, dispatch within current harness) or "hybrid" (route per specialist role).
+# When mode is "hybrid" (or routes are omitted/set to "auto"), dispatch_agent.py applies
+# the embedded default hybrid specialization matrix:
+#   - Claude Code host: dev/sec/sre/design -> claude-code, rev/research -> antigravity
+#   - Antigravity host: dev/sec -> claude-code, rev/research/sre/design -> antigravity
+#   - Copilot host:     dev/sec -> claude-code, rev/research -> antigravity, sre/design -> copilot
+# If the target harness CLI binary is not installed on PATH, dispatch gracefully falls back to the native host harness.
 mode = "hybrid"
 
 [orchestration.routes]
-# Specialist-to-harness routing table.
-# Supported harnesses: "claude-code", "antigravity", "copilot", "native"
+# Specialist-to-harness routing table. Explicit entries override the default hybrid matrix.
+# Supported harnesses: "claude-code", "antigravity", "copilot", "native", "auto"
 dev = "claude-code"
 sre = "claude-code"
 design = "antigravity"
