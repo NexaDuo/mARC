@@ -666,6 +666,10 @@ jobs:
       - name: board_reconcile digest contract self-test
         run: python3 core/scripts/test_board_reconcile.py
 
+      # 8c-dispatch. Cross-harness dispatch self-test (issue #239).
+      - name: cross-harness dispatch self-test
+        run: python3 core/scripts/test_dispatch_agent.py
+
       # 8d. Cross-harness script-parity self-test (issue #107). A harness's
       #     compiled SKILL.md can instruct the operator to run
       #     `${SOME_PLUGIN_ROOT}/scripts/<name>.py` while that harness ships
