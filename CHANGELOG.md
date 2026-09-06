@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-09-05
+
 ### Changed
 - **Rule #137 made executable in Grep-less harness modes and propagated to all specialists (#228).**
   Rule #137 ("never ingest file content via filtered bash") previously assumed a `Grep` tool always exists and only covered `@sec`, `@rev`, and `@dev`. In harness modes (such as bypass-permissions modes) where `Grep` is not exposed and the harness injects a system-prompt block nudging `cat`/`sed`/`head` over structured tools, the rule failed to account for missing tools, and the counter-rule was missing from `@sre`, `@design`, and `@research`.
@@ -18,6 +20,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 - **Rule-origin governance CI gate negative test strips all origin tags globally (#228).**
   The negative self-test in `.github/workflows/ci.yml` previously stripped only the first `(origin: ...)` tag in `engineer.md`. When a rule carries multiple origin tags (e.g. #137 and superseding #227), stripping only the first left the rule tagged, making the negative test a no-op. The test now strips tags globally (`s///g`).
+
+### Documentation
+- **Synchronized product capabilities across README, hotsite, and CHANGELOG (#234).**
+  - Documented GitHub Copilot CLI harness support in the README and landing page.
+  - Updated the channel roster and hero descriptions to include `@rev` and `@research` specialists and peer operator claim protocols.
 
 ## [0.27.0] - 2026-08-28
 
@@ -1180,7 +1187,8 @@ brand layer.
   specialists as a shared flat `agents/` pool, and future harnesses get their
   own `harnesses/<harness>/` sibling. Documented in `docs/ARCHITECTURE.md`.
 
-[Unreleased]: https://github.com/NexaDuo/mARC/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/NexaDuo/mARC/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.28.0
 [0.27.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.27.0
 [0.26.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.26.0
 [0.25.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.25.0
