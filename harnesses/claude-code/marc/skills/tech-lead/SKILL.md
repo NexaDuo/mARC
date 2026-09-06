@@ -326,7 +326,7 @@ Include in each prompt: issue number + URL, full acceptance criteria, affected
 files, constraints.
 
 #### Cross-harness dispatch & poly-model routing (optional)
-When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is desired), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses (e.g. routing `@dev` or `@sec` to `claude-code`, `@research` or `@design` to `antigravity`, or `@sre` to `copilot`):
+When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is desired), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses. By default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec` to `claude-code`, `@rev`/`@research` to `antigravity`, and `@sre`/`@design` to the native host harness:
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/dispatch_agent.py" \
   --role "<dev|sre|design|sec|rev|research>" \
@@ -343,6 +343,15 @@ cheapest lever on token budget:
   is unavailable, dispatch automatically falls back to native/available harness
   with a diagnostic warning — routing preferences never block task execution.
   (origin: #239 · 2026-09-06)
+- **Default hybrid specialization matrix routes specialists by capability and falls back gracefully.**
+  When routing is `auto` or unconfigured in `team.toml`, `dispatch_agent.py` applies
+  the default hybrid specialization matrix: `@dev` and `@sec` route to `claude-code`,
+  `@rev` and `@research` route to `antigravity` (large-context review/survey), and
+  `@sre`/`@design` route to the native host harness (`claude-code` on Claude Code,
+  `antigravity` on Antigravity, `copilot` on Copilot). If a target CLI binary is
+  not found on PATH, dispatch automatically and gracefully falls back to the native
+  host harness with a diagnostic warning, guaranteeing non-blocking execution.
+  (origin: #241 · 2026-09-06)
 - **`sonnet` by default; Opus is an explicit, scoped escape hatch** — never
   flip the default. (origin: #69 · 2026-07-10)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume

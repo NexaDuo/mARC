@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-harness subagent delegation and poly-model routing (origin: #239).
+"""Cross-harness subagent delegation and poly-model routing (origin: #239, #241).
 
 Stdlib only (no third-party dependencies). Can be invoked directly or imported:
     python3 dispatch_agent.py --role dev --prompt "Implement issue #123" --dry-run
@@ -15,10 +15,11 @@ CLI Options:
     --team-toml <path>    Optional path to team.toml (default: discovered from repo root).
 
 Routing resolution:
-    - If --harness is 'auto': reads team.toml [orchestration.routes] if mode == 'hybrid'.
-    - If unrouted or mode == 'native': resolves to the active/native harness.
-    - If target CLI binary is not found on PATH: logs warning to stderr and falls back to
-      first available CLI on PATH.
+    - Priority 1: Explicit --harness argument (if not 'auto').
+    - Priority 2: User explicit route in team.toml [orchestration.routes].
+    - Priority 3: Embedded default hybrid matrix (DEFAULT_HYBRID_MATRIX) when auto or unrouted.
+    - If target CLI binary is not found on PATH: logs warning to stderr and gracefully
+      falls back to host/native harness.
 """
 from __future__ import annotations
 
@@ -61,6 +62,42 @@ HARNESS_BINARIES: Dict[str, str] = {
     "claude-code": "claude",
     "antigravity": "agy",
     "copilot": "copilot",
+}
+
+DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
+    "claude-code": {
+        "dev": "claude-code",
+        "engineer": "claude-code",
+        "sec": "claude-code",
+        "security": "claude-code",
+        "rev": "antigravity",
+        "review": "antigravity",
+        "research": "antigravity",
+        "sre": "claude-code",
+        "design": "claude-code",
+    },
+    "antigravity": {
+        "dev": "claude-code",
+        "engineer": "claude-code",
+        "sec": "claude-code",
+        "security": "claude-code",
+        "rev": "antigravity",
+        "review": "antigravity",
+        "research": "antigravity",
+        "sre": "antigravity",
+        "design": "antigravity",
+    },
+    "copilot": {
+        "dev": "claude-code",
+        "engineer": "claude-code",
+        "sec": "claude-code",
+        "security": "claude-code",
+        "rev": "antigravity",
+        "review": "antigravity",
+        "research": "antigravity",
+        "sre": "copilot",
+        "design": "copilot",
+    },
 }
 
 
@@ -168,6 +205,85 @@ def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
         raise ValueError(f"Unsupported harness: {harness!r}")
 
 
+def resolve_target_harness(
+    host_harness: str,
+    role: str,
+    explicit_harness: Optional[str] = "auto",
+    toml_routes: Optional[Dict[str, str]] = None,
+    toml_mode: Optional[str] = None,
+    cli_checker: Optional[Callable[[str], Any]] = None,
+) -> Tuple[str, bool, Optional[str]]:
+    """Resolve target harness based on priority hierarchy and check CLI availability (origin: #241).
+
+    Priorities:
+        1. Explicit --harness flag (if not 'auto' or unset).
+        2. User explicit route in team.toml [orchestration.routes].
+        3. Default hybrid specialization matrix (DEFAULT_HYBRID_MATRIX).
+
+    Fallback:
+        If preferred target CLI is not available on PATH, gracefully falls back to host_harness (native).
+
+    Returns:
+        (resolved_harness, fallback_occurred, fallback_reason)
+    """
+    canonical_role = CANONICAL_ROLES.get(role, role)
+
+    # Priority 1: Explicit --harness argument
+    if explicit_harness and explicit_harness != "auto":
+        target_harness = host_harness if explicit_harness == "native" else explicit_harness
+    elif toml_mode == "native":
+        target_harness = host_harness
+    else:
+        # Priority 2: User explicit route in team.toml [orchestration.routes]
+        user_route = None
+        if isinstance(toml_routes, dict):
+            user_route = toml_routes.get(canonical_role) or toml_routes.get(role)
+
+        if user_route and user_route != "auto":
+            target_harness = host_harness if user_route == "native" else user_route
+        else:
+            # Priority 3: When route is 'auto', unset, or in hybrid mode, lookup DEFAULT_HYBRID_MATRIX
+            matrix = DEFAULT_HYBRID_MATRIX.get(host_harness, DEFAULT_HYBRID_MATRIX.get("claude-code", {}))
+            target_harness = matrix.get(canonical_role) or matrix.get(role, host_harness)
+
+    if target_harness == "native":
+        target_harness = host_harness
+
+    if target_harness not in HARNESS_BINARIES:
+        target_harness = "claude-code"
+
+    def _is_available(h_or_b: str) -> bool:
+        b = HARNESS_BINARIES.get(h_or_b, h_or_b)
+        if cli_checker is None:
+            return shutil.which(b) is not None
+        try:
+            res = cli_checker(b)
+        except Exception:
+            res = None
+        if res is None and b != h_or_b:
+            try:
+                res = cli_checker(h_or_b)
+            except Exception:
+                res = None
+        return bool(res)
+
+    # Check target CLI binary availability
+    expected_bin = HARNESS_BINARIES.get(target_harness, target_harness)
+    if not _is_available(target_harness):
+        fallback_harness = host_harness
+        if not _is_available(fallback_harness):
+            for h in HARNESS_BINARIES:
+                if _is_available(h):
+                    fallback_harness = h
+                    break
+
+        fallback_reason = f"CLI binary '{expected_bin}' for harness '{target_harness}' not found on PATH"
+        sys.stderr.write(f"[mARC dispatch] Warning: {fallback_reason}. Falling back to '{fallback_harness}'.\n")
+        return fallback_harness, True, fallback_reason
+
+    return target_harness, False, None
+
+
 def resolve_route(
     role: str,
     requested_harness: str = "auto",
@@ -177,53 +293,25 @@ def resolve_route(
 ) -> Tuple[str, bool, Optional[str]]:
     """Resolve target harness and apply fallback if CLI binary is unavailable.
 
+    Delegates to resolve_target_harness with host detection and team.toml config.
+
     Returns:
         (resolved_harness, fallback_occurred, fallback_reason)
     """
-    canonical_role = CANONICAL_ROLES.get(role, role)
+    host_harness = detect_native_harness(env=env, which_fn=which_fn)
+    config = parse_toml(team_toml_path)
+    orchestration = config.get("orchestration", {}) if isinstance(config, dict) else {}
+    toml_mode = orchestration.get("mode")
+    toml_routes = orchestration.get("routes")
 
-    if requested_harness and requested_harness != "auto":
-        target_harness = requested_harness
-    else:
-        config = parse_toml(team_toml_path)
-        orchestration = config.get("orchestration", {})
-        mode = orchestration.get("mode", "native")
-        routes = orchestration.get("routes", {})
-
-        if mode == "hybrid" and isinstance(routes, dict):
-            target_harness = routes.get(canonical_role) or routes.get(role, "native")
-        else:
-            target_harness = "native"
-
-    if target_harness == "native":
-        target_harness = detect_native_harness(env=env, which_fn=which_fn)
-
-    if target_harness not in HARNESS_BINARIES:
-        target_harness = "claude-code"
-
-    # Check binary availability
-    expected_bin = HARNESS_BINARIES.get(target_harness, target_harness)
-    if not which_fn(expected_bin):
-        native_harness = detect_native_harness(env=env, which_fn=which_fn)
-        native_bin = HARNESS_BINARIES.get(native_harness, native_harness)
-
-        fallback_harness = None
-        if which_fn(native_bin):
-            fallback_harness = native_harness
-        else:
-            for h, b in HARNESS_BINARIES.items():
-                if which_fn(b):
-                    fallback_harness = h
-                    break
-
-        fallback_reason = f"CLI binary '{expected_bin}' for harness '{target_harness}' not found on PATH"
-        sys.stderr.write(f"[mARC dispatch] Warning: {fallback_reason}. Falling back to '{fallback_harness or target_harness}'.\n")
-
-        if fallback_harness:
-            return fallback_harness, True, fallback_reason
-        return target_harness, True, fallback_reason
-
-    return target_harness, False, None
+    return resolve_target_harness(
+        host_harness=host_harness,
+        role=role,
+        explicit_harness=requested_harness,
+        toml_routes=toml_routes,
+        toml_mode=toml_mode,
+        cli_checker=which_fn,
+    )
 
 
 def dispatch(
