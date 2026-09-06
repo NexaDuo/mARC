@@ -100,6 +100,21 @@ health_check_command = "./scripts/health-check.sh"
 # prints a summary — both are manual/opt-in, never auto-run.
 enabled = false
 
+# --- Cross-harness orchestration & routing (optional, origin: #239) ---
+[orchestration]
+# Dispatch mode: "native" (default, dispatch within current harness) or "hybrid" (route per specialist role).
+mode = "hybrid"
+
+[orchestration.routes]
+# Specialist-to-harness routing table.
+# Supported harnesses: "claude-code", "antigravity", "copilot", "native"
+dev = "claude-code"
+sre = "claude-code"
+design = "antigravity"
+sec = "claude-code"
+rev = "claude-code"
+research = "antigravity"
+
 # --- Release-phase facts (what "done" requires in THIS repo) ---
 [release]
 # Does a real staging->prod pipeline exist? (true/false)

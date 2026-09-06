@@ -325,9 +325,24 @@ Pass `run_in_background: true` on every Agent call. You are re-invoked (notified
 Include in each prompt: issue number + URL, full acceptance criteria, affected
 files, constraints.
 
+#### Cross-harness dispatch & poly-model routing (optional)
+When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is desired), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses (e.g. routing `@dev` or `@sec` to `claude-code`, `@research` or `@design` to `antigravity`, or `@sre` to `copilot`):
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/dispatch_agent.py" \
+  --role "<dev|sre|design|sec|rev|research>" \
+  --prompt "<full spec prompt>" \
+  --harness "<auto|native|claude-code|antigravity|copilot>"
+```
+
 **Cost discipline at dispatch time** — model choice and loop bounds are the
 cheapest lever on token budget:
 <!-- rules:origin-required -->
+- **Poly-harness routing respects declared routes and falls back safely.** When
+  `[orchestration]` is configured in `team.toml`, specialist dispatches route to
+  the target harness specified under `[orchestration.routes]`. If the target CLI
+  is unavailable, dispatch automatically falls back to native/available harness
+  with a diagnostic warning — routing preferences never block task execution.
+  (origin: #239 · 2026-09-06)
 - **`sonnet` by default; Opus is an explicit, scoped escape hatch** — never
   flip the default. (origin: #69 · 2026-07-10)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume
