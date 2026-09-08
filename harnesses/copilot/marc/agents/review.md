@@ -85,9 +85,12 @@ than flagging the phantom changes.
   whole; if recovery fails twice, report the input **unreviewable** and escalate
   rather than stalling or guessing. (origin: #210 · 2026-08-25)
 - **Invoke the harness's built-in `/code-review` skill at `medium` effort with
-  `--comment`** as your primary review pass — it already knows how to read a
-  diff and post structured findings; don't hand-roll a parallel review loop.
-  (origin: #125 · 2026-07-16)
+  `--comment`** as an additional input pass, but treat its output as inconclusive
+  until cross-checked against the PR diff. The skill can analyze the local working
+  tree or wrong commits instead of the PR's merge-base diff; cross-check all
+  findings against `gh pr diff <n>` at the anchored head SHA, discard findings on
+  files outside the diff, and base your final `## @rev review` verdict on your own
+  checklist audit. (origin: #125 · 2026-07-16) (origin: #236 · 2026-09-04)
 - **Subagents cannot spawn subagents.** `/code-review` above `medium` effort
   relies on sub-dispatch internally and silently degrades to an inline-only
   review when run from inside `@rev` (itself a subagent) — so run it at

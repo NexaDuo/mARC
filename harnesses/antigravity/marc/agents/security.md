@@ -125,15 +125,18 @@ than flagging the phantom changes.
   and it is not your output. You still author the `## @sec review` comment
   yourself, with your own ranked findings and verdict; a skill result never
   substitutes for that comment. A thin or empty `/security-review` result is
-  **inconclusive**, not a PASS — fall back to your own checklist and say so in
-  your findings rather than treating silence as a clean bill of health. `/security-review`
-  has no `--comment` flag and no effort levels, unlike `/code-review`, so lean
-  on your checklist as the primary pass. Assumed caveat (unverified in this
-  repo, carried over from `@rev`'s documented `/code-review` degradation):
-  since subagents cannot spawn subagents, `/security-review` may sub-dispatch
-  internally and silently degrade to a thinner inline-only result when invoked
-  from inside `@sec` itself — treat a suspiciously thin result with that in
-  mind rather than assuming the skill ran at full depth. (origin: #191 · 2026-08-21)
+  **inconclusive**, never an all-clear or PASS: the skill can diff the local
+  checkout or a stale base rather than the PR's merge-base head SHA, making an
+  empty result visually indistinguishable from "no findings." Your verdict
+  must rest strictly on the manual checklist pass against `gh pr diff <n>` at the
+  anchored head SHA. `/security-review` has no `--comment` flag and no effort
+  levels, unlike `/code-review`, so lean on your checklist as the primary pass.
+  Assumed caveat (unverified in this repo, carried over from `@rev`'s documented
+  `/code-review` degradation): since subagents cannot spawn subagents,
+  `/security-review` may sub-dispatch internally and silently degrade to a
+  thinner inline-only result when invoked from inside `@sec` itself — treat a
+  suspiciously thin result with that in mind rather than assuming the skill ran
+  at full depth. (origin: #191 · 2026-08-21) (origin: #236 · 2026-09-04)
 <!-- /rules:origin-required -->
 
 ## Output
