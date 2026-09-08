@@ -5,7 +5,7 @@ description: >-
   Opt-in upstream contribution workflow for process improvements and field lessons.
   Scans the consuming repo's local AGENTS.md, {{ agents_dir }}/team.toml, and commit history for
   emergent rules, sanitizes sensitive client context, formats governed rule origins,
-  and drafts an upstream Pull Request or Issue to NexaDuo/mARC — without ever leaking
+  and drafts an upstream Pull Request or Issue to the upstream mARC repository — without ever leaking
   private context. Invoke with /marc:upstream.
 ---
 
@@ -14,7 +14,7 @@ description: >-
 You are running the **mARC upstream contribution workflow** (persona: `@scribe`). Your job
 is to help the team in a consuming repository capture high-value operational lessons, rule
 refinements, or bugfixes discovered in the field and contribute them back to the upstream
-`NexaDuo/mARC` product repo — **safely, sanitarily, and with explicit human opt-in**.
+mARC product repo — **safely, sanitarily, and with explicit human opt-in**.
 
 ---
 
@@ -31,7 +31,7 @@ refinements, or bugfixes discovered in the field and contribute them back to the
   numbers. (origin: #66 · 2026-07-09)
 - **Nothing is transmitted or written silently.** You MUST present the exact sanitized diff
   and commit message to the user and obtain an explicit confirmation before creating any
-  branch, issue, or pull request on `NexaDuo/mARC`. (origin: #46 · 2026-07-06)
+  branch, issue, or pull request on the upstream repository. (origin: #46 · 2026-07-06)
 <!-- /rules:origin-required -->
 
 ---
@@ -97,7 +97,7 @@ If the new rule replaces or refines an existing rule, declare the relationship e
 Present the complete sanitized proposal to the user:
 
 ```markdown
-### 📝 Proposta de Contribuição Upstream para NexaDuo/mARC
+### 📝 Proposta de Contribuição Upstream para o mARC
 
 **Tipo:** [Regra de Governança / Melhoria de Prompt / Bugfix de Hook / Documentação]
 **Arquivo Alvo em Upstream:** `core/...` ou `docs/marc/...`
@@ -108,7 +108,7 @@ Present the complete sanitized proposal to the user:
 + ...
 ```
 
-**Deseja que eu abra este Pull Request no repositório principal `NexaDuo/mARC`?**
+**Deseja que eu abra este Pull Request no repositório upstream do mARC?**
 ```
 
 **STOP.** Wait for the user's explicit approval. Never proceed without confirmation.
@@ -117,13 +117,14 @@ Present the complete sanitized proposal to the user:
 
 ### Step 5 — Open Upstream Issue or Pull Request
 Upon receiving explicit approval:
-1. If the user has direct access or fork configured:
-   - Create a branch on a local fork or directly via `gh pr create --repo NexaDuo/mARC`.
-2. If opening an Issue is preferred:
-   - Create a tracked issue on `NexaDuo/mARC`:
+1. Determine the upstream repository slug (e.g. from plugin origin or upstream remote).
+2. If the user has direct access or fork configured:
+   - Create a branch on a local fork or directly via `gh pr create --repo <upstream-repo>`.
+3. If opening an Issue is preferred:
+   - Create a tracked issue on the upstream repo:
      ```bash
-     gh issue create --repo NexaDuo/mARC \
+     gh issue create --repo <upstream-repo> \
        --title "process-improvement: <concise summary>" \
        --body "<sanitized motivation, proposed change, and acceptance criteria>"
      ```
-3. Report the URL of the created Issue/PR back to the user in the channel.
+4. Report the URL of the created Issue/PR back to the user in the channel.
