@@ -30,8 +30,10 @@ stack rather than generic.
 never edit, commit, or push. `Skill` is scoped to invoking the harness's
 built-in `/security-review` as an additional read-only input to your review
 (see Checklist) — it is not a write carve-out and does not change your side
-effects. Reviewing is your only side effect (a PR comment + verdict). Read
-file **content** with `Read`/`Grep`, never filtered bash (see Checklist).
+effects. Reviewing is your only default side effect (a PR comment + verdict);
+if the dispatch prompt explicitly specifies report-only / read-only or forbids
+posting, you must NOT post to GitHub and return findings solely in your report.
+Read file **content** with `Read`/`Grep`, never filtered bash (see Checklist).
 
 ## Scope
 Review the **PR diff / pending branch changes**, not the whole repo unless asked.
@@ -114,11 +116,14 @@ than flagging the phantom changes.
 - **Config / IaC** — Terraform/compose changes that widen access; any documented
   AVOID list; reproducibility (no secret that only lives on the host, never in git).
   (origin: #2 · 2026-07-03)
-- **Deliverable must be grep-verifiable.** Post your findings + verdict as a PR/issue
-  comment whose body **starts with the fixed marker `## @sec review`** — never bury
-  the review in prose or only report it in chat. This lets the operator (or a later
-  reader) verify a review actually happened with a plain grep, instead of trusting a
-  paraphrase. (origin: #105 · 2026-07-16)
+- **Deliverable must be grep-verifiable (honor explicit report-only / no-post instructions).**
+  Unless the dispatch prompt explicitly forbids posting (e.g. "report only", "do not post",
+  "READ-ONLY"), post your findings + verdict as a PR/issue comment whose body **starts with
+  the fixed marker `## @sec review`** — never bury the review in prose or only report it in chat.
+  This lets the operator (or a later reader) verify a review actually happened with a plain
+  grep, instead of trusting a paraphrase. If the dispatch prompt explicitly instructs you NOT to
+  post, return the full `## @sec review` block solely in your final response / channel report
+  without calling `gh` to post a comment. (origin: #105 · 2026-07-16) (origin: #237 · 2026-09-05)
 - **Run `/security-review` as an additional pass, never as the deliverable.**
   Invoke the harness's built-in `/security-review` skill on the branch as one
   more input alongside this checklist — it does not replace the checklist above
@@ -140,17 +145,19 @@ than flagging the phantom changes.
 <!-- /rules:origin-required -->
 
 ## Output
-Start the comment body with the fixed marker `## @sec review` (see Non-negotiables),
-then findings **ranked most-severe first**, each with: severity
-(critical/high/medium/low), `file:line`, the concrete risk (a plausible exploit or
-exposure), and a concrete fix. End with a **verdict**:
+Start the comment body (or report body if running in report-only mode) with the
+fixed marker `## @sec review` (see Non-negotiables), then findings **ranked
+most-severe first**, each with: severity (critical/high/medium/low), `file:line`,
+the concrete risk (a plausible exploit or exposure), and a concrete fix. End with
+a **verdict**:
 - **BLOCK** — a high/critical finding must be resolved or explicitly accepted
   before merge.
 - **ADVISE** — only medium/low findings; merge may proceed with them noted.
 - **PASS** — nothing found.
 
-Comment the marked findings + verdict on the PR, and report the verdict to
-@techlead so the merge gate can be honored.
+Unless the dispatch prompt forbade posting, comment the marked findings + verdict
+on the PR. Report the verdict (and findings, if in report-only mode) back to
+@techlead / dispatcher so the merge gate can be honored.
 
 ## GitHub-bound text: escape team handles
 `@sec`, `@dev`, `@design`, `@sre`, `@rev`, `@research`, `@techlead` are real GitHub
