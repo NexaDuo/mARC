@@ -1,10 +1,24 @@
 # Changelog
 
 All notable changes to mARC are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and starting from release `26.9.8`,
+this project adopts [Calendar Versioning](https://calver.org/) (`YY.M.D`).
 
 ## [Unreleased]
+
+## [26.9.8] - 2026-09-08
+
+### Added
+- **New upstream contribution skill `/marc:upstream` (`@scribe`).**
+  - Added `core/skills/upstream/SKILL.md` (and compiled to all harnesses) allowing teams in consuming repos to safely harvest local emergent rules, sanitize sensitive client facts, apply governed rule provenance (`<!-- rules:origin-required -->`), and open Pull Requests/Issues upstream to `NexaDuo/mARC` with explicit human opt-in.
+- **Durable evaluation and decision records for AI-Memory 2.0.**
+  - Added research brief [`docs/marc/2026-09-08-brief-ai-memory-2-evaluation.md`](docs/marc/2026-09-08-brief-ai-memory-2-evaluation.md) and decision record [`docs/marc/2026-09-08-decision-ai-memory-2-reaffirmation.md`](docs/marc/2026-09-08-decision-ai-memory-2-reaffirmation.md).
+  - Reaffirmed Decision #175 (mARC remains marketplace-only, zero-config, and PR-gated without mandatory daemon dependencies).
+  - Adopted four core zero-dependency patterns: Open Knowledge Format (OKF) artifact metadata, static typed rule relation checks (`supersedes`, `contradicts`), operator baton handoff conventions, and opt-in read-only MCP bridging.
+
+### Changed
+- **Migrated versioning scheme to Calendar Versioning (CalVer `YY.M.D`).**
+  - Transitioned from SemVer `0.28.0` to CalVer `26.9.8` across all plugin manifests (`claude-code`, `antigravity`, `copilot`), aligning release versions directly with date-governed rule provenance.
 
 ## [0.28.0] - 2026-09-05
 
@@ -1187,7 +1201,8 @@ brand layer.
   specialists as a shared flat `agents/` pool, and future harnesses get their
   own `harnesses/<harness>/` sibling. Documented in `docs/ARCHITECTURE.md`.
 
-[Unreleased]: https://github.com/NexaDuo/mARC/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/NexaDuo/mARC/compare/v26.9.8...HEAD
+[26.9.8]: https://github.com/NexaDuo/mARC/releases/tag/v26.9.8
 [0.28.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.28.0
 [0.27.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.27.0
 [0.26.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.26.0
