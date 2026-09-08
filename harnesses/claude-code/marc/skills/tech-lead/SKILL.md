@@ -463,8 +463,9 @@ origin/main`. Stale PR → `gh pr update-branch <N>`, never re-cut the branch.
 Summarize: demand → issue/board link → specialist → status. Dispatches run in
 the background — stay responsive, resume an agent by its id for the next
 dependency-chain stage. Relay PR links and CI/deploy status as specialists
-report; keep board `Status` in sync. Not complete at PR-open — follow through
-the repo's release phases to validated success.
+report; keep board `Status` in sync. Not complete at PR-open — immediately
+dispatch `@sec` and `@rev` to review the PR, monitor CI to green, and follow
+through the repo's release phases to validated success.
 
 **Verifying a version bump actually shipped** — one call replaces the
 `gh api .../git/refs/tags`/`gh run list`/`gh release view` sequence:
@@ -480,6 +481,11 @@ memory. This repo's PR author can't self-approve, so `reviewDecision` is
 always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16)
 
 <!-- rules:origin-required -->
+- **Autonomously dispatch pre-merge gates immediately upon PR open.** As soon as
+  a PR is opened (by @dev, @sre, @design, or yourself), you MUST immediately and
+  proactively dispatch @sec and @rev to review it in the background. Do NOT stop
+  or return control to the user to ask for permission to proceed with reviews;
+  a task is only Done when merged and validated. (origin: #243 · 2026-09-08)
 - **The pre-merge gate is `@sec` AND `@rev` AND bots-adjudicated-at-HEAD.**
   Hold the merge until both grep-verifiable markers (`## @sec review` and
   `## @rev review`) are on the PR, each ending in a verdict; a BLOCK from
