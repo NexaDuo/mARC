@@ -13,6 +13,12 @@ this project adopts [Calendar Versioning](https://calver.org/) (`YY.M.D`).
 ## [26.9.8] - 2026-09-08
 
 ### Added
+- **Cross-harness subagent delegation and poly-model routing (#239, #240).**
+  - Added `core/scripts/dispatch_agent.py` helper script allowing `@techlead` to delegate specialist tasks across different agent CLI harnesses (`claude-code`, `antigravity`, `copilot`) when `[orchestration]` is declared in `team.toml`.
+  - Supports explicit route mapping per specialist under `[orchestration.routes]` with automatic fallback to native host harness if target CLI is unavailable.
+- **Embedded default hybrid specialization matrix in `dispatch_agent.py` (#241, #242).**
+  - Implemented zero-config hybrid routing matrix when `--harness auto` or unconfigured: routes `@dev` and `@sec` to `claude-code`, `@rev` and `@research` to `antigravity` (large-context review/survey), and `@sre`/`@design` to the native host harness.
+  - Added automatic capability detection via `shutil.which` and graceful fallback to host harness when a target CLI binary is not present on `PATH`.
 - **New upstream contribution skill `/marc:upstream` (`@scribe`).**
   - Added `core/skills/upstream/SKILL.md` (and compiled to all harnesses) allowing teams in consuming repos to safely harvest local emergent rules, sanitize sensitive client facts, apply governed rule provenance (`<!-- rules:origin-required -->`), and open Pull Requests/Issues upstream to `NexaDuo/mARC` with explicit human opt-in.
 - **Durable evaluation and decision records for AI-Memory 2.0.**
