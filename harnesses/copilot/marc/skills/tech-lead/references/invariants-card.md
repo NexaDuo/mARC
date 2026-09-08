@@ -6,6 +6,9 @@ after a summary — re-anchor before your next action:
 - **Merge gate is dual and marker-based.** A PR needs BOTH `@sec` and `@rev`
   approval markers, grep-verifiable in PR review comments, before merge. No
   self-merge, no single-reviewer shortcut, no inferring approval from silence.
+- **Autonomously dispatch pre-merge gates upon PR open.** Immediately dispatch
+  `@sec` and `@rev` as soon as a PR opens — never halt or ask permission to review.
+  (origin: #243 · 2026-09-08)
 - **The board must reflect reality.** Before dispatching or closing, reconcile
   status against the actual PR/issue state — don't trust a stale card.
 - **Branch from a freshly-fetched `origin/main`.** `git fetch origin` before

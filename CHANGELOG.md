@@ -6,6 +6,10 @@ this project adopts [Calendar Versioning](https://calver.org/) (`YY.M.D`).
 
 ## [Unreleased]
 
+### Changed
+- **Autonomously dispatch pre-merge gates immediately upon PR open (#243).**
+  - Updated `@techlead`'s Step 5 ("Track to done") in `core/skills/tech-lead/SKILL.md` to mandate immediate, proactive background dispatch of `@sec` and `@rev` reviews as soon as a PR is opened, preventing the channel operator from halting or waiting for user permission before pre-merge review gates are executed.
+
 ## [26.9.8] - 2026-09-08
 
 ### Added
