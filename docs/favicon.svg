@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="mARC channel mark">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#0b0b1a" stroke="#b892ff" stroke-width="1.5"/>
+  <g transform="translate(2.2,0) skewX(-8)">
+    <rect x="11.4" y="7" width="3" height="18" rx="1.2" fill="#5ef1ff"/>
+    <rect x="17.4" y="7" width="3" height="18" rx="1.2" fill="#5ef1ff"/>
+    <rect x="8" y="12" width="16" height="3" rx="1.2" fill="#ff6ac1"/>
+    <rect x="8" y="18" width="16" height="3" rx="1.2" fill="#ff6ac1"/>
+  </g>
+</svg>
