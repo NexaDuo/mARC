@@ -1,0 +1,44 @@
+# mARC: Multi-Agent Relay Control
+
+> mARC (Multi-Agent Relay Control) is an open-source plugin and self-marketplace that packages a portable, cross-repository AI engineering team into developer terminals (Claude Code, Google Antigravity, and GitHub Copilot CLI).
+
+## Overview
+- **Channel Operator / Router:** `@techlead` (channel operator invoked with `/marc:tech-lead`).
+- **Specialist Pool:** `@dev` (engineering), `@sre` (reliability & infrastructure), `@design` (front-end & UX), `@sec` (security audit gate), `@rev` (correctness review gate), and `@research` (external technical evidence & citations).
+- **Supported Harnesses:** Claude Code (`/plugin install marc@nexaduo`), Google Antigravity (`agy plugin install ./harnesses/antigravity/marc`), and GitHub Copilot CLI (`copilot plugin install marc@nexaduo`).
+- **GitHub Project Board Integration:** Tasks map directly to issues and status columns (`Todo`, `In Progress`, `Blocked`, `Done`) on GitHub Project boards using runtime `gh` CLI discovery (zero hardcoded stack config).
+
+## Operating Principles
+1. **Stateless dispatch & context hygiene:** Specialists run fresh per task; durable state lives in git and the project board.
+2. **Pre-merge security & correctness gates:** Mandatory independent dual-pass by `@sec` and `@rev` before any PR merges (no self-merge).
+3. **Peer operator coordination:** Multiple concurrent operators on the same repository coordinate via issue claim markers (`## @techlead claim`), `git worktree list --porcelain`, and dead-worktree detection.
+4. **Two-tier memory model:** Local session memory bounded with permanent invariants (`[PINNED]`) and time-bound decay (`[EXPIRES: YYYY-MM-DD]`). Oversized briefs spill into PR-gated documentation artifacts (`docs/marc/`).
+
+## Installation Quick Reference
+
+### Claude Code
+```bash
+/plugin marketplace add NexaDuo/mARC
+/plugin install marc@nexaduo
+/marc:tech-lead
+```
+
+### Google Antigravity
+```bash
+bash <(curl -fsSL https://antigravity.google/cli/install.sh)
+git clone https://github.com/NexaDuo/mARC.git
+agy plugin install ./mARC/harnesses/antigravity/marc
+agy /marc:tech-lead
+```
+
+### GitHub Copilot CLI
+```bash
+copilot plugin marketplace add NexaDuo/mARC
+copilot plugin install marc@nexaduo
+/marc:tech-lead
+```
+
+## Links & References
+- [Repository](https://github.com/NexaDuo/mARC): Official GitHub repository.
+- [Architecture](https://github.com/NexaDuo/mARC/blob/main/docs/ARCHITECTURE.md): Multi-harness agent team architecture.
+- [License](https://github.com/NexaDuo/mARC/blob/main/LICENSE): MIT Open Source License.
