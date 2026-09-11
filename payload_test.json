@@ -1,0 +1,6 @@
+{
+  "toolName": "Bash",
+  "input": {
+    "command": "cat core/scripts/test_hooks_parity.py | grep foo"
+  }
+}

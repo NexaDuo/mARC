@@ -53,11 +53,31 @@ def main():
             with open(file_to_check, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = sum(1 for _ in f)
                 
-            if lines > 350:
+            max_lines = 350
+            for toml_path in ('.agents/team.toml', '.claude/team.toml'):
+                if os.path.isfile(toml_path):
+                    try:
+                        with open(toml_path, 'r', encoding='utf-8') as tf:
+                            in_token_guard = False
+                            for line in tf:
+                                line = line.strip()
+                                if line.startswith('[') and line.endswith(']'):
+                                    in_token_guard = (line == '[token_guard]')
+                                elif in_token_guard and line.startswith('max_read_lines'):
+                                    parts = line.split('=')
+                                    if len(parts) == 2:
+                                        try:
+                                            max_lines = int(parts[1].strip())
+                                        except ValueError:
+                                            pass
+                    except Exception:
+                        pass
+                        
+            if lines > max_lines:
                 print(json.dumps({
                     'hookSpecificOutput': {
                         'permissionDecision': 'deny',
-                        'permissionDecisionReason': f'File exceeds threshold ({lines} > 350 lines). Use targeted reads (limit/offset) or grep.'
+                        'permissionDecisionReason': f'File exceeds threshold ({lines} > {max_lines} lines). Use targeted reads (limit/offset) or grep.'
                     }
                 }))
                 sys.exit(0)
