@@ -14,6 +14,13 @@ Usage:
         --path FILE    override the telemetry file (default: $MARC_STATE_DIR/
                        token-telemetry.jsonl, or ~/.claude/marc-state/... )
 
+Comparison Mode:
+    To measure token savings, capture a baseline and a post-optimization dataset:
+    1. cp ~/.claude/marc-state/token-telemetry.jsonl baseline.jsonl
+    2. (Run optimizations and new sessions)
+    3. cp ~/.claude/marc-state/token-telemetry.jsonl post.jsonl
+    4. python3 token_telemetry_report.py --path baseline.jsonl --compare post.jsonl
+
 Exits 0 always (a report tool, not a gate) — exits 1 only if the file cannot
 be read at all (distinct from "empty", which is a normal opt-in-not-yet-used
 state and prints a friendly message instead).
@@ -126,12 +133,29 @@ def print_report(sessions: dict[str, list[dict]], *, limit: int) -> None:
                       f"session's {oldest_avg:.0f} ({direction} {abs(delta_pct):.0f}%).")
 
 
+def print_comparison(base_sessions: dict[str, list[dict]], post_sessions: dict[str, list[dict]], cost_per_million: float) -> None:
+    base_weighted = sum(session_totals(t)["weighted"] for t in base_sessions.values())
+    post_weighted = sum(session_totals(t)["weighted"] for t in post_sessions.values())
+    diff = base_weighted - post_weighted
+    pct = (diff / base_weighted * 100) if base_weighted > 0 else 0.0
+    cost_diff = (diff / 1_000_000) * cost_per_million
+
+    print(f"--- Token Savings Comparison ---")
+    print(f"Baseline tokens (weighted): {base_weighted:,}")
+    print(f"Post-opt tokens (weighted): {post_weighted:,}")
+    print(f"Difference:                 {diff:,} tokens saved")
+    print(f"Percentage saved:           {pct:.1f}%")
+    print(f"Cost delta:                 ${cost_diff:.4f} saved (assuming ${cost_per_million}/1M weighted tokens)")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sessions", type=int, default=10,
                      help="how many most-recent sessions to summarize (default 10)")
     ap.add_argument("--path", default=None, help="override the telemetry JSONL path")
+    ap.add_argument("--compare", default=None, help="post-optimization telemetry JSONL path to compare against")
+    ap.add_argument("--cost-per-million", type=float, default=3.0, help="cost per million weighted tokens (default 3.0)")
     args = ap.parse_args(argv)
 
     path = args.path or telemetry_path()
@@ -153,7 +177,17 @@ def main(argv=None) -> int:
         return 0
 
     sessions = group_by_session(records)
-    print_report(sessions, limit=max(1, args.sessions))
+
+    if args.compare:
+        try:
+            post_records = load_records(args.compare)
+        except OSError as exc:
+            print(f"could not read {args.compare}: {exc}", file=sys.stderr)
+            return 1
+        post_sessions = group_by_session(post_records)
+        print_comparison(sessions, post_sessions, args.cost_per_million)
+    else:
+        print_report(sessions, limit=max(1, args.sessions))
     return 0
 
 
