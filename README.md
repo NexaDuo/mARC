@@ -16,6 +16,7 @@
 [![CI](https://github.com/NexaDuo/mARC/actions/workflows/ci.yml/badge.svg)](https://github.com/NexaDuo/mARC/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/github/license/NexaDuo/mARC?color=blueviolet)](LICENSE)
 [![site](https://img.shields.io/badge/site-marc.nexaduo.com-00e5ff)](https://marc.nexaduo.com)
+[![Tokens Saved](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/NexaDuo/mARC/main/docs/marc/telemetry-badge.json)](https://github.com/NexaDuo/mARC/blob/main/docs/marc/telemetry.md)
 
 ```
 *** Now talking in #marc
