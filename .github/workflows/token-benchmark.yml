@@ -1,0 +1,57 @@
+name: Token Consumption Benchmark
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  benchmark:
+    name: Token Telemetry Benchmark
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Generate stub baseline telemetry
+        run: |
+          cat << 'JSON' > baseline.jsonl
+          {"session_id": "sess-baseline-1", "weighted": 15000, "turns": 5, "model": "stub-model", "timestamp": 1700000000}
+          {"session_id": "sess-baseline-2", "weighted": 8000, "turns": 3, "model": "stub-model", "timestamp": 1700000100}
+          JSON
+
+      - name: Generate stub post-optimization telemetry
+        run: |
+          cat << 'JSON' > post.jsonl
+          {"session_id": "sess-post-1", "weighted": 12000, "turns": 4, "model": "stub-model", "timestamp": 1700000200}
+          {"session_id": "sess-post-2", "weighted": 7500, "turns": 3, "model": "stub-model", "timestamp": 1700000300}
+          JSON
+
+      - name: Generate Report
+        id: report
+        run: |
+          python3 core/scripts/token_telemetry_report.py --path baseline.jsonl --compare post.jsonl > report.txt || true
+          echo "REPORT<<EOF" >> $GITHUB_ENV
+          cat report.txt >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "### 📊 Token Consumption Benchmark Report
+          
+          \`\`\`text
+          ${{ env.REPORT }}
+          \`\`\`
+          " || true
