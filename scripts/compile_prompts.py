@@ -178,12 +178,14 @@ def _build_command(hook, config):
 _CC_EVENT_MAP = {
     "session_start": "SessionStart",
     "session_start_compact": "SessionStart",
+    "pre_tool_use": "PreToolUse",
     "post_tool_use": "PostToolUse",
     "stop": "Stop",
 }
 _CC_MATCHER_MAP = {
     "session_start": "*",
     "session_start_compact": "compact",
+    "pre_tool_use": "*",
     "post_tool_use": "*",
     "stop": "*",
 }
