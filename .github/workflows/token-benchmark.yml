@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened]
+  release:
+    types: [published]
 
 permissions:
   pull-requests: write
@@ -24,15 +26,42 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Generate stub baseline telemetry
+      - name: Install dependencies
+        if: github.event_name == 'release'
+        run: |
+          npm i -g @anthropic-ai/claude-code
+          claude plugin marketplace add ./
+          claude plugin install marc@nexaduo
+
+      - name: Execute Real LLM Task
+        if: github.event_name == 'release'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          mkdir -p .agents
+          echo "[telemetry]" > .agents/team.toml
+          echo "enabled = true" >> .agents/team.toml
+          
+          # Run the task
+          claude -p "read core/scripts/board.py and output a summary"
+          
+          # Copy telemetry to expected names
+          if [ -f ~/.claude/marc-state/token-telemetry.jsonl ]; then
+            cp ~/.claude/marc-state/token-telemetry.jsonl baseline.jsonl
+            cp ~/.claude/marc-state/token-telemetry.jsonl post.jsonl
+          else
+            echo "Warning: Telemetry file not found"
+            touch baseline.jsonl post.jsonl
+          fi
+
+      - name: Generate stub telemetry for PR/push
+        if: github.event_name != 'release'
         run: |
           cat << 'JSON' > baseline.jsonl
           {"session_id": "sess-baseline-1", "weighted": 15000, "turns": 5, "model": "stub-model", "timestamp": 1700000000}
           {"session_id": "sess-baseline-2", "weighted": 8000, "turns": 3, "model": "stub-model", "timestamp": 1700000100}
           JSON
-
-      - name: Generate stub post-optimization telemetry
-        run: |
           cat << 'JSON' > post.jsonl
           {"session_id": "sess-post-1", "weighted": 12000, "turns": 4, "model": "stub-model", "timestamp": 1700000200}
           {"session_id": "sess-post-2", "weighted": 7500, "turns": 3, "model": "stub-model", "timestamp": 1700000300}
@@ -55,7 +84,7 @@ jobs:
           python3 core/scripts/generate_telemetry_dashboard.py --path baseline.jsonl --compare post.jsonl
           
       - name: Commit Dashboard
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'release'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
