@@ -122,6 +122,7 @@ repository, not in this plugin. At the start of a task, discover them at runtime
    including failures.
 
 ## Efficiency (token discipline)
+- **Disk-first scaffolding for repetitive structure.** When generating large, predictable blocks of syntax (e.g. repeated components, boilerplate configs), scaffold them directly to disk via background scripts or isolated worktrees. Avoid streaming the full text into the conversation history. (origin: #267 · 2026-09-11)
 - **Schema-first DB access.** Confirm the schema once (`\d <table>` or
   `information_schema.columns`) and use defensive casts (`jsonb::text`) before
   value queries. Blind queries with wrong columns / bad casts / empty joins waste
