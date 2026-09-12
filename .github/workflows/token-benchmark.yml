@@ -80,11 +80,12 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Generate Dashboard Files
+        if: github.event_name == 'release'
         run: |
           python3 scripts/generate_telemetry_dashboard.py --path post.jsonl
           
       - name: Commit Dashboard
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'release'
+        if: github.event_name == 'release'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
