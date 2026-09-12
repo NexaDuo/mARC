@@ -58,21 +58,28 @@ def main():
             for toml_path in ('.agents/team.toml', '.claude/team.toml'):
                 if os.path.isfile(toml_path):
                     try:
-                        with open(toml_path, 'r', encoding='utf-8') as tf:
-                            in_token_guard = False
-                            for line in tf:
-                                line = line.split('#')[0].strip()
-                                if not line:
-                                    continue
-                                if line.startswith('[') and line.endswith(']'):
-                                    in_token_guard = (line == '[token_guard]')
-                                elif in_token_guard and line.startswith('max_read_lines'):
-                                    parts = line.split('=')
-                                    if len(parts) == 2:
-                                        try:
-                                            max_lines = int(parts[1].strip())
-                                        except ValueError:
-                                            pass
+                        try:
+                            import tomllib
+                            with open(toml_path, 'rb') as tf:
+                                data = tomllib.load(tf)
+                                if 'token_guard' in data and 'max_read_lines' in data['token_guard']:
+                                    max_lines = int(data['token_guard']['max_read_lines'])
+                        except ImportError:
+                            with open(toml_path, 'r', encoding='utf-8') as tf:
+                                in_token_guard = False
+                                for line in tf:
+                                    line = line.strip()
+                                    if not line or line.startswith('#'):
+                                        continue
+                                    if line.startswith('[') and line.split('#')[0].strip().endswith(']'):
+                                        in_token_guard = (line.split('#')[0].strip() == '[token_guard]')
+                                    elif in_token_guard and line.startswith('max_read_lines'):
+                                        parts = line.split('=', 1)
+                                        if len(parts) == 2:
+                                            try:
+                                                max_lines = int(parts[1].split('#')[0].strip())
+                                            except ValueError:
+                                                pass
                     except Exception:
                         pass
                         
