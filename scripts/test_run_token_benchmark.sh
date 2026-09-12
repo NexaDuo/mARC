@@ -68,6 +68,13 @@ echo "$*" >> "$MARC_TEST_CALL_LOG"
 if [ "$1" = "plugin" ] && [ "$2" = "marketplace" ]; then
     case "$3" in
         list)
+            # Simulates the failure `@rev` found in the PR #283 review: a
+            # `list --json` call that exits non-zero (empty registry is the
+            # documented trigger case, plausible on arm A's very first call).
+            if [ "${MARC_TEST_LIST_FAILS:-0}" = "1" ]; then
+                echo "list: no marketplaces configured" >&2
+                exit 1
+            fi
             if [ "${MARC_TEST_REGISTERED:-0}" = "1" ]; then
                 echo '[{"name": "nexaduo", "path": "/old/path"}]'
             else
@@ -133,6 +140,67 @@ if ensure_marketplace_added "$WORK/source-a" > /dev/null 2>&1; then
     fail "ensure_marketplace_added swallowed a genuine 'add' failure"
 else
     pass "ensure_marketplace_added propagates a genuine 'add' failure (not masked)"
+fi
+export MARC_TEST_ADD_FAILS=0
+
+# 1d. `@rev` finding (PR #283 review, HIGH): 'list --json' exiting non-zero
+# (empty registry is the documented trigger, plausible on arm A's very first
+# call, before anything has ever been registered) must be treated as an
+# ordinary "not registered yet" outcome under `set -eo pipefail` — NOT let
+# the pipeline's own failure abort the whole function/script before `add` is
+# ever reached. This test is run in a SEPARATE subshell driven by `bash -c`
+# with `set -eo pipefail` explicitly re-enabled (matching the real script's
+# ambient state), so a regression here reproduces the exact "DRIVE EXIT: 1,
+# SURVIVED never printed" failure `@rev` found, not just a soft assertion
+# inside this already-relaxed (`set -euo pipefail` without `-e` propagating
+# through `if`) test driver.
+export MARC_TEST_REGISTERED=0
+export MARC_TEST_LIST_FAILS=1
+: > "$CALL_LOG"
+if PATH="$FAKE_BIN:$PATH" MARC_TEST_CALL_LOG="$CALL_LOG" \
+    MARC_TEST_LIST_FAILS=1 MARC_TEST_REGISTERED=0 MARC_TEST_ADD_FAILS=0 \
+    bash -c '
+        set -eo pipefail
+        source "'"$TARGET"'"
+        ensure_marketplace_added "'"$WORK"'/source-a"
+        echo SURVIVED
+    ' > "$WORK/1d.out" 2>&1
+then
+    if grep -q "^SURVIVED$" "$WORK/1d.out"; then
+        pass "ensure_marketplace_added survives a failing 'list --json' (does not abort under set -eo pipefail)"
+    else
+        fail "ensure_marketplace_added exited 0 but did not reach past the list-failure path (unexpected)"
+    fi
+else
+    fail "ensure_marketplace_added aborted the whole script when 'list --json' failed (see: $(cat "$WORK/1d.out"))"
+fi
+if grep -q "marketplace add $WORK/source-a" "$CALL_LOG"; then
+    pass "ensure_marketplace_added still calls 'add' after a failing 'list --json'"
+else
+    fail "ensure_marketplace_added did not call 'add' after a failing 'list --json'"
+fi
+if grep -q "marketplace remove" "$CALL_LOG"; then
+    fail "ensure_marketplace_added called 'remove' after a failing (i.e. 'nothing registered') 'list --json'"
+else
+    pass "ensure_marketplace_added skips remove when 'list --json' failed (treated as not-registered)"
+fi
+unset MARC_TEST_LIST_FAILS
+
+# 1e. An empty registry (`list --json` succeeds, returns `[]`) must also
+# result in a plain add, no remove — same outcome as 1b, restated explicitly
+# per the coordinator's ask to cover "list returning an empty/absent
+# registry" as its own case, independent of the failing-list case above.
+export MARC_TEST_REGISTERED=0
+: > "$CALL_LOG"
+if ensure_marketplace_added "$WORK/source-a" > /dev/null; then
+    pass "ensure_marketplace_added survives an empty ('[]') registry"
+else
+    fail "ensure_marketplace_added aborted on an empty ('[]') registry"
+fi
+if grep -q "marketplace remove" "$CALL_LOG"; then
+    fail "ensure_marketplace_added called 'remove' on an empty registry"
+else
+    pass "ensure_marketplace_added skips remove on an empty registry"
 fi
 unset MARC_TEST_REGISTERED MARC_TEST_ADD_FAILS
 

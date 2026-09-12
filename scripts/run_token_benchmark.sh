@@ -47,37 +47,71 @@ compute_task_hash() {
 # Instead: check `claude plugin marketplace list --json` for an entry with
 # this name BEFORE adding. If one exists, remove it explicitly so the
 # subsequent `add` is guaranteed to (re)point the name at $source rather than
-# relying on undocumented add-when-exists semantics. Any failure from `list`,
-# `remove`, or the final `add` propagates normally (no `|| true` around them),
-# so real failures still abort the script under `set -eo pipefail`.
+# relying on undocumented add-when-exists semantics.
+#
+# IMPORTANT (issue #281 PR #283 review, `@rev` finding, HIGH): `claude plugin
+# marketplace list --json` is captured into a variable with `|| echo '[]'`
+# BEFORE it is ever piped into python3, specifically so its own exit status
+# never takes part in the `set -eo pipefail` pipeline. An empty/failing list
+# on the very first call (nothing registered yet, e.g. arm A's first-ever
+# call) must read as an ordinary "not registered" outcome, not a fatal error
+# that kills the whole release before it ever reaches `add`. Genuine `remove`/
+# `add` failures still propagate normally (no `|| true` around those).
+#
+# Also (`@sec` finding, LOW, open point resolved): if `remove` succeeds but
+# the following `add` then fails (transient network error, bad path), the
+# entry would otherwise be left deleted — worse than the old code's failure
+# mode, which at least left the stale-but-valid prior entry intact. We
+# snapshot the previous entry's source before removing it and, if the re-add
+# fails, attempt to restore that previous registration before propagating the
+# original failure.
 ensure_marketplace_added() {
     local source="$1"
     local name
-    name="$(python3 -c "import json; print(json.load(open('$source/.claude-plugin/marketplace.json'))['name'])")" || {
+    name="$(python3 -c "
+import json, sys
+print(json.load(open(sys.argv[1] + '/.claude-plugin/marketplace.json'))['name'])
+" "$source")" || {
         echo "Error: could not read marketplace name from $source/.claude-plugin/marketplace.json" >&2
         return 1
     }
 
-    local existing
-    existing="$(claude plugin marketplace list --json 2>/dev/null | python3 -c "
+    local list_json
+    list_json="$(claude plugin marketplace list --json 2>/dev/null || echo '[]')"
+    [ -n "$list_json" ] || list_json='[]'
+
+    local existing_source
+    if existing_source="$(python3 -c "
 import json, sys
-name = sys.argv[1]
+list_json, name = sys.argv[1], sys.argv[2]
 try:
-    entries = json.load(sys.stdin)
+    entries = json.loads(list_json)
 except Exception:
     entries = []
 for e in entries:
     if e.get('name') == name:
-        print(e.get('path') or e.get('repo') or 'registered')
-        break
-" "$name")"
-
-    if [ -n "$existing" ]; then
-        echo "Marketplace '$name' already registered (was: $existing); removing stale entry so it re-points at $source"
+        print(e.get('path') or e.get('repo') or '')
+        sys.exit(0)
+sys.exit(1)
+" "$list_json" "$name")"; then
+        echo "Marketplace '$name' already registered (was: ${existing_source:-unknown source}); removing stale entry so it re-points at $source"
         claude plugin marketplace remove "$name"
-    fi
 
-    claude plugin marketplace add "$source"
+        if ! claude plugin marketplace add "$source"; then
+            echo "Error: re-adding marketplace '$name' at $source failed after removing the stale entry." >&2
+            if [ -n "$existing_source" ]; then
+                echo "Attempting to restore the previous registration at $existing_source ..." >&2
+                if claude plugin marketplace add "$existing_source"; then
+                    echo "Restored previous registration; '$name' still points at $existing_source (NOT $source)." >&2
+                else
+                    echo "Error: restore attempt also failed; marketplace '$name' is now UNREGISTERED." >&2
+                fi
+            fi
+            return 1
+        fi
+    else
+        claude plugin marketplace add "$source"
+    fi
 }
 
 run_claude_safely() {

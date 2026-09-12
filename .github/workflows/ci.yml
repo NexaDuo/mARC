@@ -396,6 +396,22 @@ jobs:
           shellcheck install.sh
           bash -n install.sh
 
+      # 6a2. Release-benchmark script self-test (issue #281, PR #283 review).
+      #      scripts/run_token_benchmark.sh's release-only path (model pin,
+      #      marketplace-add idempotency, CLI drift-guard ordering) can't be
+      #      exercised end-to-end here (needs a real tag, the claude CLI, and
+      #      credentials), so scripts/test_run_token_benchmark.sh sources the
+      #      script (its `main()` sourcing guard keeps the release pipeline
+      #      from actually running) and exercises the extracted
+      #      ensure_marketplace_added / resolve_claude_version /
+      #      compute_task_hash functions directly against a stubbed `claude`.
+      #      Deterministic, offline, zero token cost, no credentials.
+      - name: run_token_benchmark.sh — shellcheck + self-test
+        run: |
+          shellcheck scripts/run_token_benchmark.sh scripts/test_run_token_benchmark.sh
+          bash -n scripts/run_token_benchmark.sh
+          bash scripts/test_run_token_benchmark.sh
+
       # 6b. Outdated-version hooks: shellcheck-clean + >=7-day PostToolUse
       #     re-check gate (origin #52). outdated-check.sh (SessionStart) and
       #     outdated-recheck.sh (PostToolUse) share hooks/lib/version-check.sh
