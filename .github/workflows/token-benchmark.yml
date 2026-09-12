@@ -48,8 +48,8 @@ jobs:
           
           # Copy telemetry to expected names
           if [ -f ~/.claude/marc-state/token-telemetry.jsonl ]; then
-            cp ~/.claude/marc-state/token-telemetry.jsonl baseline.jsonl
             cp ~/.claude/marc-state/token-telemetry.jsonl post.jsonl
+            touch baseline.jsonl
           else
             echo "Warning: Telemetry file not found"
             touch baseline.jsonl post.jsonl
@@ -81,7 +81,7 @@ jobs:
 
       - name: Generate Dashboard Files
         run: |
-          python3 core/scripts/generate_telemetry_dashboard.py --path baseline.jsonl --compare post.jsonl
+          python3 scripts/generate_telemetry_dashboard.py --path baseline.jsonl --compare post.jsonl
           
       - name: Commit Dashboard
         if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'release'
