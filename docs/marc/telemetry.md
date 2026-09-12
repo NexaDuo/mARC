@@ -1,11 +1,5 @@
 # Token Telemetry Dashboard
 
-## Token Consumption Trend
-
-```mermaid
-xychart-beta
-    title "Weighted Tokens per Session"
-    x-axis [sess-bas, sess-bas]
-    y-axis "Tokens"
-    line [15000, 8000]
-```
+No measured telemetry has been published yet. This dashboard is populated only
+from a real release run (`github.event_name == 'release'`); no chart is shown
+until that has happened at least once.

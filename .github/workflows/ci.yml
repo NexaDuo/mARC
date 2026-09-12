@@ -412,6 +412,17 @@ jobs:
           bash -n scripts/run_token_benchmark.sh
           bash scripts/test_run_token_benchmark.sh
 
+      # 6a3. Published telemetry must never carry fabricated/stub data
+      #      (issue #274). Asserts docs/marc/telemetry.md and
+      #      docs/marc/telemetry-badge.json contain none of the stub markers
+      #      that scripts/run_token_benchmark.sh's non-release branch writes,
+      #      so a future regression (stub data reaching a published doc
+      #      again) fails CI instead of shipping silently.
+      - name: telemetry docs — no stub data self-test
+        run: |
+          shellcheck scripts/test_telemetry_no_stub_data.sh
+          bash scripts/test_telemetry_no_stub_data.sh
+
       # 6b. Outdated-version hooks: shellcheck-clean + >=7-day PostToolUse
       #     re-check gate (origin #52). outdated-check.sh (SessionStart) and
       #     outdated-recheck.sh (PostToolUse) share hooks/lib/version-check.sh
