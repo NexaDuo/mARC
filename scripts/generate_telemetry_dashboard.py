@@ -4,7 +4,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../core/scripts'))
 import token_telemetry_report
 
 def generate_markdown(sessions, output_path):
@@ -36,7 +36,7 @@ def generate_markdown(sessions, output_path):
         ""
     ]
     
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     with open(output_path, "w") as f:
         f.write("\n".join(md))
 
@@ -56,7 +56,7 @@ def generate_badge(base_sessions, post_sessions, output_path):
         "color": "success" if pct > 0 else "orange"
     }
     
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(badge, f, indent=2)
 

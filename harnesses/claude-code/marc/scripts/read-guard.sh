@@ -61,7 +61,9 @@ def main():
                         with open(toml_path, 'r', encoding='utf-8') as tf:
                             in_token_guard = False
                             for line in tf:
-                                line = line.strip()
+                                line = line.split('#')[0].strip()
+                                if not line:
+                                    continue
                                 if line.startswith('[') and line.endswith(']'):
                                     in_token_guard = (line == '[token_guard]')
                                 elif in_token_guard and line.startswith('max_read_lines'):
