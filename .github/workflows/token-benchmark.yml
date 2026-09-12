@@ -46,11 +46,19 @@ jobs:
           cat report.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
+      # Regenerated on every release from the SAME baseline.jsonl/post.jsonl
+      # this job already produced above (origin: #285): --baseline feeds the
+      # "Tokens Saved" badge, --path feeds the telemetry.md trend chart, and
+      # generate_badge() inside generate_telemetry_dashboard.py now runs
+      # unconditionally in the same invocation, so the badge and the
+      # dashboard can never diverge (one script run, one data source, one
+      # commit). See scripts/test_telemetry_badge_dashboard_same_run.sh for
+      # the wired-in regression test.
       - name: Generate Dashboard Files
         if: github.event_name == 'release'
         run: |
-          python3 scripts/generate_telemetry_dashboard.py --path post.jsonl
-          
+          python3 scripts/generate_telemetry_dashboard.py --path post.jsonl --baseline baseline.jsonl
+
       - name: Commit Dashboard and Benchmarks
         if: github.event_name == 'release'
         env:
