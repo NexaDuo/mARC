@@ -32,12 +32,16 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          bash core/scripts/run_token_benchmark.sh
+          bash scripts/run_token_benchmark.sh
 
       - name: Generate Report
         id: report
         run: |
-          python3 core/scripts/token_telemetry_report.py --path baseline.jsonl --compare post.jsonl > report.txt
+          echo "## Inter-release Comparison (Previous Release vs Current)" > report.txt
+          python3 core/scripts/token_telemetry_report.py --path baseline.jsonl --compare post.jsonl >> report.txt
+          echo "" >> report.txt
+          echo "## Causal Proof (No Guard vs Guard=350 in Current)" >> report.txt
+          python3 core/scripts/token_telemetry_report.py --path toggle_baseline.jsonl --compare toggle_post.jsonl >> report.txt
           echo "REPORT<<EOF" >> $GITHUB_ENV
           cat report.txt >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
