@@ -435,6 +435,22 @@ jobs:
           shellcheck scripts/test_token_benchmark_no_pr_comment.sh
           bash scripts/test_token_benchmark_no_pr_comment.sh
 
+      # 6a5. Badge and dashboard must be generated from the SAME run/data,
+      #      never drift apart (issue #285, `@rev` finding on PR #284:
+      #      generate_badge() only ran when --compare was passed, and the
+      #      release step never passed it, so a real release would leave
+      #      docs/marc/telemetry-badge.json frozen at "No Data" forever
+      #      while docs/marc/telemetry.md filled in with real chart data).
+      #      Asserts, offline and deterministically, that the release step
+      #      wires --baseline through and that one invocation of
+      #      generate_telemetry_dashboard.py always regenerates both
+      #      outputs together (or honestly "No Data" together — never one
+      #      populated and the other stale).
+      - name: telemetry badge/dashboard — same-run self-test
+        run: |
+          shellcheck scripts/test_telemetry_badge_dashboard_same_run.sh
+          bash scripts/test_telemetry_badge_dashboard_same_run.sh
+
       # 6b. Outdated-version hooks: shellcheck-clean + >=7-day PostToolUse
       #     re-check gate (origin #52). outdated-check.sh (SessionStart) and
       #     outdated-recheck.sh (PostToolUse) share hooks/lib/version-check.sh
