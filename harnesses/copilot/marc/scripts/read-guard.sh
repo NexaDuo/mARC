@@ -29,7 +29,7 @@ def main():
     tool = payload.get('toolName') or payload.get('tool') or payload.get('name') or ''
     inputs = payload.get('toolInput') or payload.get('input') or payload.get('arguments') or {}
     
-    file_to_check = None
+    files_to_check = []
     
     if tool in ('View', 'view_file', 'ViewSource', 'ReadFile'):
         limit = inputs.get('limit') or inputs.get('EndLine')
@@ -37,60 +37,71 @@ def main():
         if limit is not None or offset is not None:
             sys.exit(0)
             
-        file_to_check = inputs.get('path') or inputs.get('AbsolutePath') or inputs.get('file_path')
+        path = inputs.get('path') or inputs.get('AbsolutePath') or inputs.get('file_path')
+        if path:
+            files_to_check.append(path)
         
     elif tool in ('Bash', 'run_command', 'RunCommand'):
-        command = inputs.get('command') or inputs.get('CommandLine') or ''
-        if any(c in command for c in ['|', '>', '<', '&', ';']):
-            sys.exit(0)
-            
         import shlex
-        try:
-            parts = shlex.split(command)
-            if parts and parts[0] in ('cat', 'less', 'more', 'head', 'tail') and len(parts) == 2:
-                file_to_check = parts[1]
-        except Exception:
-            pass
-            
-    if file_to_check and os.path.isfile(file_to_check):
+        command = inputs.get('command') or inputs.get('CommandLine') or ''
+        for m in re.finditer(r'\b(?:cat|less|more|head|tail)\s+([^&;|><]+)', command):
+            args_str = m.group(1)
+            try:
+                for arg in shlex.split(args_str):
+                    if not arg.startswith('-'):
+                        files_to_check.append(arg)
+            except Exception:
+                pass
+                    
+    valid_files = [f for f in files_to_check if f and os.path.isfile(f)]
+    
+    if valid_files:
         try:
             max_lines = 350
             for toml_path in ('.agents/team.toml', '.claude/team.toml'):
                 if os.path.isfile(toml_path):
                     try:
-                        with open(toml_path, 'r', encoding='utf-8') as tf:
-                            in_token_guard = False
-                            for line in tf:
-                                line = line.split('#')[0].strip()
-                                if not line:
-                                    continue
-                                if line.startswith('[') and line.endswith(']'):
-                                    in_token_guard = (line == '[token_guard]')
-                                elif in_token_guard and line.startswith('max_read_lines'):
-                                    parts = line.split('=')
-                                    if len(parts) == 2:
-                                        try:
-                                            max_lines = int(parts[1].strip())
-                                        except ValueError:
-                                            pass
+                        try:
+                            import tomllib
+                            with open(toml_path, 'rb') as tf:
+                                data = tomllib.load(tf)
+                                if 'token_guard' in data and 'max_read_lines' in data['token_guard']:
+                                    max_lines = int(data['token_guard']['max_read_lines'])
+                        except ImportError:
+                            with open(toml_path, 'r', encoding='utf-8') as tf:
+                                in_token_guard = False
+                                for line in tf:
+                                    line = line.strip()
+                                    if not line or line.startswith('#'):
+                                        continue
+                                    if line.startswith('[') and line.split('#')[0].strip().endswith(']'):
+                                        in_token_guard = (line.split('#')[0].strip() == '[token_guard]')
+                                    elif in_token_guard and line.startswith('max_read_lines'):
+                                        parts = line.split('=', 1)
+                                        if len(parts) == 2:
+                                            try:
+                                                max_lines = int(parts[1].split('#')[0].strip())
+                                            except ValueError:
+                                                pass
                     except Exception:
                         pass
                         
-            lines = 0
-            with open(file_to_check, 'r', encoding='utf-8', errors='ignore') as f:
-                for _ in f:
-                    lines += 1
-                    if lines > max_lines:
-                        break
-                        
-            if lines > max_lines:
-                print(json.dumps({
-                    'hookSpecificOutput': {
-                        'permissionDecision': 'deny',
-                        'permissionDecisionReason': f'File exceeds threshold ({lines} > {max_lines} lines). Use targeted reads (limit/offset) or grep.'
-                    }
-                }))
-                sys.exit(0)
+            for file_to_check in valid_files:
+                lines = 0
+                with open(file_to_check, 'r', encoding='utf-8', errors='ignore') as f:
+                    for _ in f:
+                        lines += 1
+                        if lines > max_lines:
+                            break
+                            
+                if lines > max_lines:
+                    print(json.dumps({
+                        'hookSpecificOutput': {
+                            'permissionDecision': 'deny',
+                            'permissionDecisionReason': f'File exceeds threshold ({lines} > {max_lines} lines). Use targeted reads (limit/offset) or grep.'
+                        }
+                    }))
+                    sys.exit(0)
         except Exception:
             pass
 
