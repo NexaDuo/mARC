@@ -423,6 +423,18 @@ jobs:
           shellcheck scripts/test_telemetry_no_stub_data.sh
           bash scripts/test_telemetry_no_stub_data.sh
 
+      # 6a4. token-benchmark.yml must never post a stub-derived report as a
+      #      public PR/issue comment (issue #274, `@rev` finding on PR #284:
+      #      the "Comment on PR" step posted "Percentage saved: 15.2%" on
+      #      every PR, computed from run_token_benchmark.sh's stub branch).
+      #      Parses the workflow text (no PyYAML dependency) and fails if
+      #      any step posting via `gh pr comment`/`gh issue comment` is not
+      #      gated to a release-only `if:` condition.
+      - name: token-benchmark.yml — no un-gated PR-comment self-test
+        run: |
+          shellcheck scripts/test_token_benchmark_no_pr_comment.sh
+          bash scripts/test_token_benchmark_no_pr_comment.sh
+
       # 6b. Outdated-version hooks: shellcheck-clean + >=7-day PostToolUse
       #     re-check gate (origin #52). outdated-check.sh (SessionStart) and
       #     outdated-recheck.sh (PostToolUse) share hooks/lib/version-check.sh

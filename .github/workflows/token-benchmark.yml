@@ -9,7 +9,6 @@ on:
     types: [published]
 
 permissions:
-  pull-requests: write
   contents: write
 
 jobs:
@@ -42,9 +41,6 @@ jobs:
           echo "" >> report.txt
           echo "## Causal Proof (No Guard vs Guard=350 in Current)" >> report.txt
           python3 core/scripts/token_telemetry_report.py --path toggle_baseline.jsonl --compare toggle_post.jsonl >> report.txt
-          echo "REPORT<<EOF" >> $GITHUB_ENV
-          cat report.txt >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
           echo "### 📊 Token Consumption Benchmark Report" >> $GITHUB_STEP_SUMMARY
           echo '```text' >> $GITHUB_STEP_SUMMARY
           cat report.txt >> $GITHUB_STEP_SUMMARY
@@ -66,14 +62,16 @@ jobs:
           git commit -m "docs: auto-update telemetry dashboard and cache benchmarks" || true
           git push
 
-      - name: Comment on PR
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr comment ${{ github.event.pull_request.number }} --body "### 📊 Token Consumption Benchmark Report
-          
-          \`\`\`text
-          ${{ env.REPORT }}
-          \`\`\`
-          " || true
+      # Deliberately no PR-comment step. On `pull_request` (and `push`) events
+      # `Run Token Benchmark` always takes the stub branch of
+      # scripts/run_token_benchmark.sh (there is no previous release tag to
+      # A/B against on a PR), so any report generated here is synthetic —
+      # never a real measurement. Per issue #274's acceptance criteria, stub
+      # output for smoke-testing the report scripts stays confined to the
+      # job summary (`Generate Report`, above); it must never be posted as a
+      # public PR comment, which reads to a human as an announced result. A
+      # prior version of this workflow posted such a comment
+      # (`Percentage saved: 15.2%` on stub inputs) on every PR, which is the
+      # exact fabrication #274 was reopened over — see
+      # scripts/test_token_benchmark_no_pr_comment.sh for the regression
+      # test guarding this.
