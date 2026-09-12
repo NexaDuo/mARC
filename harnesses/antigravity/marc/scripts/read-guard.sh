@@ -42,12 +42,16 @@ def main():
             files_to_check.append(path)
         
     elif tool in ('Bash', 'run_command', 'RunCommand'):
+        import shlex
         command = inputs.get('command') or inputs.get('CommandLine') or ''
         for m in re.finditer(r'\b(?:cat|less|more|head|tail)\s+([^&;|><]+)', command):
             args_str = m.group(1)
-            for arg in args_str.split():
-                if not arg.startswith('-'):
-                    files_to_check.append(arg.strip("'\""))
+            try:
+                for arg in shlex.split(args_str):
+                    if not arg.startswith('-'):
+                        files_to_check.append(arg)
+            except Exception:
+                pass
                     
     valid_files = [f for f in files_to_check if f and os.path.isfile(f)]
     
