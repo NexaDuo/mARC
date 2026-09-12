@@ -20,7 +20,7 @@ def main():
         sys.exit(0)
 
     try:
-        out = subprocess.check_output(['ps', '-o', 'args=', '-A'], text=True)
+        out = subprocess.check_output(['ps', '-o', 'args=', '-s', str(os.getsid(0))], text=True)
         if re.search(r'(--agent\s+(sec|rev)|/marc:(sec|rev))', out):
             sys.exit(0)
     except Exception:
@@ -41,18 +41,19 @@ def main():
         
     elif tool in ('Bash', 'run_command', 'RunCommand'):
         command = inputs.get('command') or inputs.get('CommandLine') or ''
-        if '|' in command or '>' in command:
+        if any(c in command for c in ['|', '>', '<', '&', ';']):
             sys.exit(0)
             
-        m = re.match(r'^\s*(cat|less|more|head|tail)\s+([^\s|><]+)\s*$', command)
-        if m:
-            file_to_check = m.group(2)
+        import shlex
+        try:
+            parts = shlex.split(command)
+            if parts and parts[0] in ('cat', 'less', 'more', 'head', 'tail') and len(parts) == 2:
+                file_to_check = parts[1]
+        except Exception:
+            pass
             
     if file_to_check and os.path.isfile(file_to_check):
         try:
-            with open(file_to_check, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = sum(1 for _ in f)
-                
             max_lines = 350
             for toml_path in ('.agents/team.toml', '.claude/team.toml'):
                 if os.path.isfile(toml_path):
@@ -72,6 +73,13 @@ def main():
                                             pass
                     except Exception:
                         pass
+                        
+            lines = 0
+            with open(file_to_check, 'r', encoding='utf-8', errors='ignore') as f:
+                for _ in f:
+                    lines += 1
+                    if lines > max_lines:
+                        break
                         
             if lines > max_lines:
                 print(json.dumps({
