@@ -20,7 +20,7 @@ def main():
         sys.exit(0)
 
     try:
-        out = subprocess.check_output(['ps', '-o', 'args=', '-A'], text=True)
+        out = subprocess.check_output(['ps', '-o', 'args=', '-s', str(os.getsid(0))], text=True)
         if re.search(r'(--agent\s+(sec|rev)|/marc:(sec|rev))', out):
             sys.exit(0)
     except Exception:
@@ -43,7 +43,6 @@ def main():
         
     elif tool in ('Bash', 'run_command', 'RunCommand'):
         command = inputs.get('command') or inputs.get('CommandLine') or ''
-        
         for m in re.finditer(r'\b(?:cat|less|more|head|tail)\s+([^&;|><]+)', command):
             args_str = m.group(1)
             for arg in args_str.split():
@@ -84,9 +83,13 @@ def main():
                         pass
                         
             for file_to_check in valid_files:
+                lines = 0
                 with open(file_to_check, 'r', encoding='utf-8', errors='ignore') as f:
-                    lines = sum(1 for _ in f)
-                    
+                    for _ in f:
+                        lines += 1
+                        if lines > max_lines:
+                            break
+                            
                 if lines > max_lines:
                     print(json.dumps({
                         'hookSpecificOutput': {
