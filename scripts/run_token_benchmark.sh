@@ -5,58 +5,80 @@ EVENT_NAME="${GITHUB_EVENT_NAME:-push}"
 CURRENT_REF="${GITHUB_REF_NAME:-main}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
 
-if [ "$EVENT_NAME" != "release" ]; then
-    echo "Not a release. Generating stubs for PR/push."
-    cat << 'JSON' > baseline.jsonl
-{"session_id": "sess-baseline-1", "weighted": 15000, "turns": 5, "model": "stub-model", "timestamp": 1700000000}
-{"session_id": "sess-baseline-2", "weighted": 8000, "turns": 3, "model": "stub-model", "timestamp": 1700000100}
-JSON
-    cat << 'JSON' > post.jsonl
-{"session_id": "sess-post-1", "weighted": 12000, "turns": 4, "model": "stub-model", "timestamp": 1700000200}
-{"session_id": "sess-post-2", "weighted": 7500, "turns": 3, "model": "stub-model", "timestamp": 1700000300}
-JSON
-    cp baseline.jsonl toggle_baseline.jsonl
-    cp post.jsonl toggle_post.jsonl
-    exit 0
-fi
-
-MODEL="claude-3-5-sonnet-20241022"
+MODEL="claude-sonnet-5"
 # Target a file larger than 350 lines so read-guard actually fires
 TASK="read core/scripts/board.py and output a summary"
 
-# Hash claude --version to prevent drift
-CLAUDE_VERSION=$(claude --version 2>/dev/null || echo "unknown")
-TASK_HASH=$(echo -n "$CLAUDE_VERSION:$MODEL:$TASK:3" | sha256sum | awk '{print $1}' | cut -c 1-8)
+# --- Testable helpers (defined before main(); see the sourcing guard at the
+# bottom of this file). Keeping these as standalone functions lets a companion
+# test source this script (which then does NOT execute main()) and exercise
+# them directly with stubbed `claude`/`python3` state, without a real release
+# environment (tag, CLI, credentials). ---------------------------------------
 
-git fetch --tags --force
-PREV_TAG=$(git describe --tags --abbrev=0 "$CURRENT_REF^" 2>/dev/null || echo "")
+# resolve_claude_version: capture `claude --version`. MUST be called after the
+# CLI is actually installed (see main(), below) — a failure here means the
+# CLI is genuinely missing/broken post-install, which is a real environment
+# error. We deliberately do NOT swallow it into a placeholder like "unknown":
+# doing so would silently defeat the drift-guard hash that depends on this
+# value (issue #281).
+resolve_claude_version() {
+    claude --version 2>/dev/null || {
+        echo "Error: 'claude --version' failed after CLI install. Refusing to hash a placeholder 'unknown' version — this would silently disable the drift guard." >&2
+        return 1
+    }
+}
 
-if [ -z "$PREV_TAG" ]; then
-    echo "Error: No previous tag found. Cannot perform A/B test."
-    exit 1
-fi
+# compute_task_hash: pure function, no side effects.
+compute_task_hash() {
+    local claude_version="$1" model="$2" task="$3"
+    echo -n "$claude_version:$model:$task:3" | sha256sum | awk '{print $1}' | cut -c 1-8
+}
 
-echo "Comparing $PREV_TAG (A) vs $CURRENT_REF (B)"
+# ensure_marketplace_added: idempotent `claude plugin marketplace add`.
+#
+# `claude plugin marketplace add "$source"` is called once per arm (arm A,
+# inside the ../arm-a worktree, and arm B/C in the current workspace) because
+# each arm needs the marketplace re-pointed at ITS OWN checkout — a blind
+# `|| true` (like the neighbouring `git worktree add ... || true`) would risk
+# masking a genuine failure (network, bad path, permissions) on the second
+# call, and would still leave the marketplace pointed at the wrong source if
+# the CLI's add-on-existing-name behavior ever isn't an upsert.
+#
+# Instead: check `claude plugin marketplace list --json` for an entry with
+# this name BEFORE adding. If one exists, remove it explicitly so the
+# subsequent `add` is guaranteed to (re)point the name at $source rather than
+# relying on undocumented add-when-exists semantics. Any failure from `list`,
+# `remove`, or the final `add` propagates normally (no `|| true` around them),
+# so real failures still abort the script under `set -eo pipefail`.
+ensure_marketplace_added() {
+    local source="$1"
+    local name
+    name="$(python3 -c "import json; print(json.load(open('$source/.claude-plugin/marketplace.json'))['name'])")" || {
+        echo "Error: could not read marketplace name from $source/.claude-plugin/marketplace.json" >&2
+        return 1
+    }
 
-MANIFEST_PATH="docs/marc/benchmarks/$PREV_TAG/manifest.json"
-BASELINE_PATH="docs/marc/benchmarks/$PREV_TAG/baseline.jsonl"
-RERUN_A=true
+    local existing
+    existing="$(claude plugin marketplace list --json 2>/dev/null | python3 -c "
+import json, sys
+name = sys.argv[1]
+try:
+    entries = json.load(sys.stdin)
+except Exception:
+    entries = []
+for e in entries:
+    if e.get('name') == name:
+        print(e.get('path') or e.get('repo') or 'registered')
+        break
+" "$name")"
 
-if [ -f "$MANIFEST_PATH" ] && [ -f "$BASELINE_PATH" ]; then
-    CACHED_HASH=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1])).get('task_hash', ''))" "$MANIFEST_PATH")
-    if [ "$CACHED_HASH" == "$TASK_HASH" ]; then
-        echo "Manifest matches! Reusing baseline."
-        cp "$BASELINE_PATH" baseline.jsonl
-        RERUN_A=false
-    else
-        echo "Manifest drift detected. Re-running arm A."
+    if [ -n "$existing" ]; then
+        echo "Marketplace '$name' already registered (was: $existing); removing stale entry so it re-points at $source"
+        claude plugin marketplace remove "$name"
     fi
-else
-    echo "No cached baseline found for $PREV_TAG. Running arm A."
-fi
 
-# Clean up global state
-npm i -g @anthropic-ai/claude-code
+    claude plugin marketplace add "$source"
+}
 
 run_claude_safely() {
     local target_file=$1
@@ -65,12 +87,12 @@ run_claude_safely() {
         local temp_state="$state_dir/temp_run_$i"
         mkdir -p "$temp_state"
         export MARC_STATE_DIR="$temp_state"
-        
+
         set +e
         claude --model "$MODEL" -p "$TASK"
         EXIT_CODE=$?
         set -e
-        
+
         if [ $EXIT_CODE -eq 0 ] && [ -f "$temp_state/token-telemetry.jsonl" ]; then
             cat "$temp_state/token-telemetry.jsonl" >> "$target_file"
         else
@@ -79,56 +101,118 @@ run_claude_safely() {
     done
 }
 
-if [ "$RERUN_A" = true ]; then
-    echo "--- RUNNING ARM A ($PREV_TAG) ---"
-    git worktree add ../arm-a "$PREV_TAG" || true
-    pushd ../arm-a
-    
-    claude plugin marketplace add ./
+main() {
+    if [ "$EVENT_NAME" != "release" ]; then
+        echo "Not a release. Generating stubs for PR/push."
+        cat << 'JSON' > baseline.jsonl
+{"session_id": "sess-baseline-1", "weighted": 15000, "turns": 5, "model": "stub-model", "timestamp": 1700000000}
+{"session_id": "sess-baseline-2", "weighted": 8000, "turns": 3, "model": "stub-model", "timestamp": 1700000100}
+JSON
+        cat << 'JSON' > post.jsonl
+{"session_id": "sess-post-1", "weighted": 12000, "turns": 4, "model": "stub-model", "timestamp": 1700000200}
+{"session_id": "sess-post-2", "weighted": 7500, "turns": 3, "model": "stub-model", "timestamp": 1700000300}
+JSON
+        cp baseline.jsonl toggle_baseline.jsonl
+        cp post.jsonl toggle_post.jsonl
+        exit 0
+    fi
+
+    git fetch --tags --force
+    PREV_TAG=$(git describe --tags --abbrev=0 "$CURRENT_REF^" 2>/dev/null || echo "")
+
+    if [ -z "$PREV_TAG" ]; then
+        echo "Error: No previous tag found. Cannot perform A/B test."
+        exit 1
+    fi
+
+    echo "Comparing $PREV_TAG (A) vs $CURRENT_REF (B)"
+
+    # Install the CLI here, AFTER the (cheap) previous-tag resolution above but
+    # BEFORE anything that hashes or otherwise depends on its version. This is
+    # a deliberate reordering fix for issue #281 (item 3): the old script
+    # captured `claude --version` at the top of the file, before this install
+    # step ever ran, so on a clean runner it always hashed the constant
+    # "unknown" and the drift guard never fired.
+    #
+    # We evaluated the alternative (leave the install where it was, move the
+    # hash computation down after it) and rejected it: the cache-reuse
+    # decision right below already needs a correct, final TASK_HASH, so that
+    # alternative would just relocate the same ordering constraint one block
+    # later for no benefit. Installing right here also avoids installing the
+    # CLI at all when the script is about to exit above for lack of a previous
+    # tag.
+    npm i -g @anthropic-ai/claude-code
+
+    CLAUDE_VERSION=$(resolve_claude_version) || exit 1
+    TASK_HASH=$(compute_task_hash "$CLAUDE_VERSION" "$MODEL" "$TASK")
+
+    MANIFEST_PATH="docs/marc/benchmarks/$PREV_TAG/manifest.json"
+    BASELINE_PATH="docs/marc/benchmarks/$PREV_TAG/baseline.jsonl"
+    RERUN_A=true
+
+    if [ -f "$MANIFEST_PATH" ] && [ -f "$BASELINE_PATH" ]; then
+        CACHED_HASH=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1])).get('task_hash', ''))" "$MANIFEST_PATH")
+        if [ "$CACHED_HASH" == "$TASK_HASH" ]; then
+            echo "Manifest matches! Reusing baseline."
+            cp "$BASELINE_PATH" baseline.jsonl
+            RERUN_A=false
+        else
+            echo "Manifest drift detected. Re-running arm A."
+        fi
+    else
+        echo "No cached baseline found for $PREV_TAG. Running arm A."
+    fi
+
+    if [ "$RERUN_A" = true ]; then
+        echo "--- RUNNING ARM A ($PREV_TAG) ---"
+        git worktree add ../arm-a "$PREV_TAG" || true
+        pushd ../arm-a
+
+        ensure_marketplace_added "./"
+        claude plugin install marc@nexaduo
+
+        mkdir -p .agents
+        echo "[telemetry]" > .agents/team.toml
+        echo "enabled = true" >> .agents/team.toml
+
+        rm -f "$GITHUB_WORKSPACE/baseline.jsonl"
+        run_claude_safely "$GITHUB_WORKSPACE/baseline.jsonl" "$HOME/.claude/marc-state-a"
+
+        popd
+    fi
+
+    echo "--- RUNNING ARM B ($CURRENT_REF with guard=350) ---"
+    ensure_marketplace_added "./"
     claude plugin install marc@nexaduo
-    
+
     mkdir -p .agents
-    echo "[telemetry]" > .agents/team.toml
-    echo "enabled = true" >> .agents/team.toml
-    
-    rm -f "$GITHUB_WORKSPACE/baseline.jsonl"
-    run_claude_safely "$GITHUB_WORKSPACE/baseline.jsonl" "$HOME/.claude/marc-state-a"
-    
-    popd
-fi
-
-echo "--- RUNNING ARM B ($CURRENT_REF with guard=350) ---"
-claude plugin marketplace add ./
-claude plugin install marc@nexaduo
-
-mkdir -p .agents
-cat << CONFIG > .agents/team.toml
+    cat << CONFIG > .agents/team.toml
 [telemetry]
 enabled = true
 [token_guard]
 max_read_lines = 350
 CONFIG
 
-rm -f post.jsonl
-run_claude_safely "$PWD/post.jsonl" "$HOME/.claude/marc-state-b"
+    rm -f post.jsonl
+    run_claude_safely "$PWD/post.jsonl" "$HOME/.claude/marc-state-b"
 
-echo "--- RUNNING ARM C ($CURRENT_REF with guard=999999) ---"
-cat << CONFIG > .agents/team.toml
+    echo "--- RUNNING ARM C ($CURRENT_REF with guard=999999) ---"
+    cat << CONFIG > .agents/team.toml
 [telemetry]
 enabled = true
 [token_guard]
 max_read_lines = 999999
 CONFIG
 
-rm -f toggle_baseline.jsonl
-run_claude_safely "$PWD/toggle_baseline.jsonl" "$HOME/.claude/marc-state-c"
+    rm -f toggle_baseline.jsonl
+    run_claude_safely "$PWD/toggle_baseline.jsonl" "$HOME/.claude/marc-state-c"
 
-cp post.jsonl toggle_post.jsonl
+    cp post.jsonl toggle_post.jsonl
 
-# Save current run as baseline for future
-mkdir -p "docs/marc/benchmarks/$CURRENT_REF"
-cp post.jsonl "docs/marc/benchmarks/$CURRENT_REF/baseline.jsonl"
-cat << JSON > "docs/marc/benchmarks/$CURRENT_REF/manifest.json"
+    # Save current run as baseline for future
+    mkdir -p "docs/marc/benchmarks/$CURRENT_REF"
+    cp post.jsonl "docs/marc/benchmarks/$CURRENT_REF/baseline.jsonl"
+    cat << JSON > "docs/marc/benchmarks/$CURRENT_REF/manifest.json"
 {
   "model": "$MODEL",
   "task": "$TASK",
@@ -137,3 +221,11 @@ cat << JSON > "docs/marc/benchmarks/$CURRENT_REF/manifest.json"
   "claude_version": "$CLAUDE_VERSION"
 }
 JSON
+}
+
+# Only run main() when executed directly, not when sourced by the companion
+# test (scripts/test_run_token_benchmark.sh), which needs the functions above
+# defined without the release pipeline actually running.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
