@@ -70,7 +70,7 @@ jobs:
       - name: Generate Report
         id: report
         run: |
-          python3 core/scripts/token_telemetry_report.py --path post.jsonl > report.txt || true
+          python3 core/scripts/token_telemetry_report.py --path baseline.jsonl --compare post.jsonl > report.txt || true
           echo "REPORT<<EOF" >> $GITHUB_ENV
           cat report.txt >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
@@ -82,7 +82,7 @@ jobs:
       - name: Generate Dashboard Files
         if: github.event_name == 'release'
         run: |
-          python3 scripts/generate_telemetry_dashboard.py --path post.jsonl
+          python3 scripts/generate_telemetry_dashboard.py --path baseline.jsonl --compare post.jsonl
           
       - name: Commit Dashboard
         if: github.event_name == 'release'

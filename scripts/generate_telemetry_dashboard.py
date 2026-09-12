@@ -46,16 +46,20 @@ def generate_badge(base_sessions, post_sessions, output_path):
     
     if base_weighted > 0:
         pct = ((base_weighted - post_weighted) / base_weighted) * 100
+        badge = {
+            "schemaVersion": 1,
+            "label": "Tokens Saved",
+            "message": f"{pct:.1f}%",
+            "color": "success" if pct > 0 else "orange"
+        }
     else:
-        pct = 0.0
+        badge = {
+            "schemaVersion": 1,
+            "label": "Tokens Saved",
+            "message": "No Data",
+            "color": "inactive"
+        }
         
-    badge = {
-        "schemaVersion": 1,
-        "label": "Tokens Saved",
-        "message": f"{pct:.1f}%",
-        "color": "success" if pct > 0 else "orange"
-    }
-    
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(badge, f, indent=2)
