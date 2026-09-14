@@ -45,8 +45,7 @@ provider = "github"
 # Path (relative to repo root) to the file `@techlead`/specialists must respect.
 agents_doc = "AGENTS.md"
 
-# --- Team artifacts workspace (optional) ---
-[workspace]
+# --- Team artifacts workspace (optional, OFF unless you uncomment it) ---
 # Folder (relative to repo root) where the OPERATOR materializes durable
 # specialist artifacts (research briefs, security reports, decision records)
 # from issue comments, landing them via reviewed PRs only. Read-only agents
@@ -54,9 +53,11 @@ agents_doc = "AGENTS.md"
 # path — reject absolute paths and any `..` component; a violating value is
 # treated as unset and flagged to the user. Before choosing a path, check
 # whether it is publicly served (e.g. docs/ on GitHub Pages publishes on push)
-# — never put sensitive content in a published folder. Omit to keep artifacts
-# in issue comments only.
-workspace_dir = "docs/marc"
+# — never put sensitive content in a published folder. Omitting this section
+# (the default — matches /marc:init's generated template) keeps artifacts in
+# issue comments only; uncomment both lines below to opt in.
+# [workspace]
+# workspace_dir = "docs/marc"
 
 # --- Correctness review gate (optional) ---
 [review]
@@ -99,6 +100,22 @@ health_check_command = "./scripts/health-check.sh"
 # ceiling) session history once enabled, and `scripts/token_telemetry_report.py`
 # prints a summary — both are manual/opt-in, never auto-run.
 enabled = false
+
+# --- Read guard: large-file-read interception (optional, OFF unless you uncomment it, origin: #262, #287) ---
+# The `read-guard` PreToolUse hook (Claude Code only, currently) denies a
+# `Read` of any file over `max_read_lines` lines (or a `cat`/`less`/`more`/
+# `head`/`tail` of one via `Bash`), pushing the model toward targeted reads
+# (`limit`/`offset`) or `grep` instead of pulling a whole large file into
+# context. This section's mere PRESENCE is the on/off switch (there is no
+# separate `enabled` key) — see `core/scripts/read-guard.sh`. Uncomment both
+# lines below to opt in; leaving them commented (the default when this file
+# is copied verbatim) keeps the guard fully inert, matching every other
+# harness's default and this repo's own un-set-up state (issue #287: a prior
+# revision of this example shipped the section uncommented, which activated
+# the guard immediately on any repo that copied this file as documented —
+# do not repeat that when editing this block).
+# [token_guard]
+# max_read_lines = 350
 
 # --- Cross-harness orchestration & routing (optional, origin: #239, #241) ---
 [orchestration]
