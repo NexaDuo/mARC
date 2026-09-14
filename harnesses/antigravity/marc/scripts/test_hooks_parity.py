@@ -159,6 +159,30 @@ def check_session_id_extraction() -> None:
             check(bool(output) and output.isdigit(), f"session extraction ({desc}): got non-empty numeric PID ({output!r})")
 
 
+def check_every_spec_hook_is_shipped(spec: dict, all_hook_ids_by_harness: dict[str, set[str]]) -> None:
+    """Regression test for #287: every hook declared in hooks.spec.json must
+    be shipped (present in 'hook_ids') by at least one harness that declares
+    a 'hook_dialect'. A hook can be declared-but-shipped-by-nobody without
+    any compiler error — compile_hooks() simply selects the intersection of
+    the spec and each harness's hook_ids, so an id present in the spec but
+    absent from every harness's hook_ids list compiles into nothing,
+    anywhere, silently (issue #287: 'read-guard' shipped in the spec and in
+    core/scripts/ but wired into zero harnesses, making four merged PRs and
+    a release benchmark's guarded arm dead code). This check closes that gap
+    at the spec level, independent of any single harness's hook_ids."""
+    spec_ids = {h["id"] for h in spec["hooks"]}
+    shipped_ids: set[str] = set()
+    for ids in all_hook_ids_by_harness.values():
+        shipped_ids |= ids
+
+    unshipped = sorted(spec_ids - shipped_ids)
+    check(
+        not unshipped,
+        f"every hooks.spec.json hook id is shipped by >=1 harness's hook_ids "
+        f"(unshipped: {unshipped!r})",
+    )
+
+
 def check_command_env_fallbacks(harness: str, marc_dir: str, config: dict, hooks_obj: dict) -> None:
     """Regression test for #220: verify that every script-backed hook command and inline
     command in compiled hooks.json has robust fallbacks for unset environment variables
@@ -258,6 +282,10 @@ def main() -> int:
 
     hook_dialect_harnesses = 0
     total_script_refs = 0
+    all_hook_ids_by_harness: dict[str, set[str]] = {}
+
+    with open(spec_path, "r", encoding="utf-8") as f:
+        top_level_spec = json.load(f)
 
     for harness in harnesses:
         marc_dir = os.path.join(HARNESSES_DIR, harness, "marc")
@@ -274,6 +302,7 @@ def main() -> int:
             print(f"SKIP: {harness} declares no 'hook_dialect' in compile.json (opt-out of hooks entirely)")
             continue
         hook_dialect_harnesses += 1
+        all_hook_ids_by_harness[harness] = set(config.get("hook_ids", []))
 
         dest_hooks_dir = os.path.join(marc_dir, "hooks")
 
@@ -348,6 +377,7 @@ def main() -> int:
 
     check(hook_dialect_harnesses >= 1, f"found >=1 harness declaring hook_dialect (got {hook_dialect_harnesses})")
     check(total_script_refs > 0, f"scanned >=1 hook-script reference across all harnesses (got {total_script_refs})")
+    check_every_spec_hook_is_shipped(top_level_spec, all_hook_ids_by_harness)
     check_session_id_extraction()
 
     if _failures:

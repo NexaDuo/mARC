@@ -100,6 +100,18 @@ health_check_command = "./scripts/health-check.sh"
 # prints a summary — both are manual/opt-in, never auto-run.
 enabled = false
 
+# --- Read guard: large-file-read interception (optional, opt-in, origin: #262, #287) ---
+[token_guard]
+# Opt-in, no effect on any repo unless this section is present. The
+# `read-guard` PreToolUse hook (Claude Code only, currently) denies a `Read`
+# of any file over `max_read_lines` lines (or a `cat`/`less`/`more`/`head`/
+# `tail` of one via `Bash`), pushing the model toward targeted reads
+# (`limit`/`offset`) or `grep` instead of pulling a whole large file into
+# context. Adding this section (even empty) turns the guard on for this repo
+# with the 350-line default below; omitting it entirely leaves the guard
+# inert — see `core/scripts/read-guard.sh`.
+max_read_lines = 350
+
 # --- Cross-harness orchestration & routing (optional, origin: #239, #241) ---
 [orchestration]
 # Dispatch mode: "native" (default, dispatch within current harness) or "hybrid" (route per specialist role).

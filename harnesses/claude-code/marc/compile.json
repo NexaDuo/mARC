@@ -16,6 +16,7 @@
     "invariants-card",
     "token-guard",
     "outdated-recheck",
-    "token-telemetry"
+    "token-telemetry",
+    "read-guard"
   ]
 }
