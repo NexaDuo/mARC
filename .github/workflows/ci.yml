@@ -412,6 +412,27 @@ jobs:
           bash -n scripts/run_token_benchmark.sh
           bash scripts/test_run_token_benchmark.sh
 
+      # 6a1b. Issue #291: the real (non-stub) measurement path must have a
+      #       reachable trigger that does not require cutting a release —
+      #       `release` never fires in this repo (releases are published
+      #       via GITHUB_TOKEN, which cannot raise workflow events). Asserts
+      #       both the workflow's workflow_dispatch/real_run wiring and the
+      #       script's is_real_run() decision function directly, offline.
+      #
+      #       This job's `ubuntu-latest` python3 is the bare hosted-runner
+      #       interpreter (no actions/setup-python step, no pip installs
+      #       elsewhere in this file), so PyYAML cannot be assumed present.
+      #       The test REQUIRES it (PR #292 review: a raw-text fallback was
+      #       tried and found foolable by valid YAML that removes real step
+      #       wiring while leaving the token name elsewhere as a comment),
+      #       so install it explicitly here rather than hope it's already
+      #       there.
+      - name: run_token_benchmark.sh — dispatch-reachability self-test
+        run: |
+          python3 -m pip install --quiet pyyaml
+          shellcheck scripts/test_benchmark_dispatch_reachable.sh
+          bash scripts/test_benchmark_dispatch_reachable.sh
+
       # 6a3. Published telemetry must never carry fabricated/stub data
       #      (issue #274). Asserts docs/marc/telemetry.md and
       #      docs/marc/telemetry-badge.json contain none of the stub markers

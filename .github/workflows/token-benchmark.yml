@@ -7,6 +7,27 @@ on:
     types: [opened, synchronize, reopened]
   release:
     types: [published]
+  # Issue #291: `release` can never fire in this repo (releases are
+  # published by release.yml using GITHUB_TOKEN, and GitHub does not raise
+  # workflow events from GITHUB_TOKEN actions), so the real three-arm
+  # measurement was permanently unreachable. workflow_dispatch makes it
+  # runnable on demand instead. `real_run` defaults to false (the free
+  # stub/report path) so a casual dispatch never spends money; it must be
+  # explicitly set to run the real, nine-`claude`-invocation measurement.
+  # A dispatched run NEVER commits/pushes docs or publishes the badge (see
+  # the `if: github.event_name == 'release'` gates below) — only a
+  # `release` event may publish. It only reports to the job summary and
+  # uploads the raw measurement as a workflow artifact.
+  workflow_dispatch:
+    inputs:
+      real_run:
+        description: >-
+          Run the REAL three-arm measurement (costs real API money: nine
+          live `claude` invocations). Leave false to just exercise the
+          stub/report path for free.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -30,8 +51,32 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REAL_RUN_INPUT: ${{ github.event.inputs.real_run }}
         run: |
           bash scripts/run_token_benchmark.sh
+
+      # Issue #291 (second defect): a run's raw measurement — the four
+      # jsonl files and the manifest run_token_benchmark.sh generates — must
+      # be captured as a workflow artifact BEFORE any commit/push is
+      # attempted, and unconditionally (`if: always()`), so a failed publish
+      # (e.g. the detached-HEAD push failure this issue also fixes) never
+      # again destroys a paid-for measurement. Real run or stub, the upload
+      # is cheap; skipping it is what was expensive last time (run
+      # 34925472394: nine real `claude` invocations produced numbers that
+      # only ever existed on the runner).
+      - name: Upload Raw Benchmark Data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: token-benchmark-raw-${{ github.run_id }}
+          path: |
+            baseline.jsonl
+            post.jsonl
+            toggle_baseline.jsonl
+            toggle_post.jsonl
+            docs/marc/benchmarks/**/manifest.json
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Generate Report
         id: report
@@ -59,6 +104,17 @@ jobs:
         run: |
           python3 scripts/generate_telemetry_dashboard.py --path post.jsonl --baseline baseline.jsonl
 
+      # Issue #291 (second defect): on a `release` event actions/checkout
+      # checks out the tag, leaving the workspace in detached HEAD. `git
+      # commit` succeeds there (it did, in run 34925472394), but a plain
+      # `git push` then fails with "fatal: You are not currently on a
+      # branch." — nothing published, the measurement stranded on the
+      # runner. Fix: push the detached commit directly onto the remote
+      # `main` branch by ref-spec (`HEAD:refs/heads/main`) instead of
+      # relying on being "on" a branch locally. This never puts the runner
+      # itself on a branch, so it works whether the checkout is detached
+      # (release) or already on a branch (any future trigger that reaches
+      # this step).
       - name: Commit Dashboard and Benchmarks
         if: github.event_name == 'release'
         env:
@@ -68,7 +124,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/marc/telemetry.md docs/marc/telemetry-badge.json docs/marc/benchmarks/
           git commit -m "docs: auto-update telemetry dashboard and cache benchmarks" || true
-          git push
+          git push origin HEAD:refs/heads/main
 
       # Deliberately no PR-comment step. On `pull_request` (and `push`) events
       # `Run Token Benchmark` always takes the stub branch of
