@@ -200,6 +200,9 @@ if ! declare -F is_real_run > /dev/null; then
     exit 1
 fi
 
+MATRIX_FILE="$(mktemp)"
+trap 'rm -f "$MATRIX_FILE"' EXIT
+
 check_real_run() {
     local desc="$1" expected="$2" event="$3" real_run_input="${4:-}"
     local got
@@ -208,6 +211,7 @@ check_real_run() {
     else
         got="false"
     fi
+    printf '%s\t%s\t%s\n' "$event" "$real_run_input" "$got" >> "$MATRIX_FILE"
     if [ "$got" = "$expected" ]; then
         pass "$desc (got: $got)"
     else
@@ -221,6 +225,214 @@ check_real_run "release event takes the real path" true "release" ""
 check_real_run "workflow_dispatch with real_run unset stays on the stub path (safe default)" false "workflow_dispatch" ""
 check_real_run "workflow_dispatch with real_run=false stays on the stub path" false "workflow_dispatch" "false"
 check_real_run "workflow_dispatch with real_run=true takes the real path -- THE reachable trigger this issue requires" true "workflow_dispatch" "true"
+
+# -----------------------------------------------------------------------
+# Part 3: lockstep check between token-benchmark.yml's publish `if:`
+# conditions and is_real_run() (issue #296 review, finding 4).
+#
+# The workflow expresses "is this a real-measurement run" a SECOND time, in
+# GitHub Actions expression syntax on the "Generate Dashboard Files" /
+# "Commit Dashboard and Benchmarks" steps' `if:` -- independently of
+# is_real_run() in run_token_benchmark.sh, with nothing keeping the two in
+# sync. This repo has shipped an inert drift guard once before (#281); a
+# silent divergence here has two failure directions, both bad: a dispatched
+# real run that stops publishing (a paid measurement stranded again, the
+# exact #291 failure), or a stub run that starts publishing (fabricated
+# data reaching the public badge again, the #274 failure).
+#
+# This parses BOTH publish steps' `if:` strings as a restricted boolean
+# grammar (`&&` / `||` / parens over `github.event_name == 'X'` and
+# `github.event.inputs.<name> == 'Y'` comparisons -- the only shape these
+# conditions use) and evaluates them against the EXACT SAME
+# (event, real_run_input) matrix the check_real_run() calls above just ran
+# through is_real_run() directly, reusing their actual results (never a
+# second hardcoded "expected" table, which would just be re-asserting this
+# script's own opinion against itself). A real divergence -- either publish
+# step disagreeing with is_real_run(), or the two publish steps disagreeing
+# with each other -- fails loudly. If the grammar ever can't parse a step's
+# `if:` (someone rewrites it in a shape this parser doesn't understand),
+# this ALSO fails loudly rather than skipping the check silently -- a
+# lockstep test that can go quiet on its own subject would be worse than
+# none.
+# -----------------------------------------------------------------------
+
+echo
+echo "--- lockstep check: workflow publish if: vs is_real_run() (parsed YAML) ---"
+
+if ! python3 - "$WORKFLOW" "$MATRIX_FILE" <<'PYEOF'
+import re
+import sys
+
+import yaml
+
+workflow_path, matrix_path = sys.argv[1], sys.argv[2]
+
+FAILS = 0
+
+
+def check(ok, msg):
+    global FAILS
+    print(("ok   - " if ok else "FAIL - ") + msg)
+    if not ok:
+        FAILS += 1
+
+
+# --- restricted boolean-expression parser -----------------------------
+# Grammar: expr := and_term ('||' and_term)*
+#          and_term := atom ('&&' atom)*
+#          atom := '(' expr ')' | IDENT '==' STRING
+class ParseError(Exception):
+    pass
+
+
+TOKEN_RE = re.compile(r"\s*(\|\||&&|==|\(|\)|'[^']*'|[A-Za-z0-9_.]+)")
+
+
+def tokenize(text):
+    pos = 0
+    tokens = []
+    while pos < len(text):
+        m = TOKEN_RE.match(text, pos)
+        if not m:
+            if text[pos:].strip() == "":
+                break
+            raise ParseError(f"unrecognized token at: {text[pos:]!r}")
+        tokens.append(m.group(1))
+        pos = m.end()
+    return tokens
+
+
+class Parser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.i = 0
+
+    def peek(self):
+        return self.tokens[self.i] if self.i < len(self.tokens) else None
+
+    def advance(self):
+        tok = self.peek()
+        self.i += 1
+        return tok
+
+    def parse_expr(self):
+        node = self.parse_and()
+        while self.peek() == "||":
+            self.advance()
+            node = ("or", node, self.parse_and())
+        return node
+
+    def parse_and(self):
+        node = self.parse_atom()
+        while self.peek() == "&&":
+            self.advance()
+            node = ("and", node, self.parse_atom())
+        return node
+
+    def parse_atom(self):
+        tok = self.peek()
+        if tok == "(":
+            self.advance()
+            node = self.parse_expr()
+            if self.advance() != ")":
+                raise ParseError("expected closing ')'")
+            return node
+        ident = self.advance()
+        if ident is None or not re.match(r"^[A-Za-z0-9_.]+$", ident):
+            raise ParseError(f"expected identifier, got {ident!r}")
+        if self.advance() != "==":
+            raise ParseError(f"expected '==' after {ident!r}")
+        lit = self.advance()
+        if lit is None or not (lit.startswith("'") and lit.endswith("'")):
+            raise ParseError(f"expected string literal, got {lit!r}")
+        return ("eq", ident, lit[1:-1])
+
+
+def parse_condition(text):
+    tokens = tokenize(text)
+    parser = Parser(tokens)
+    node = parser.parse_expr()
+    if parser.i != len(parser.tokens):
+        raise ParseError(f"trailing tokens: {parser.tokens[parser.i:]}")
+    return node
+
+
+def eval_node(node, event_name, real_run_input):
+    kind = node[0]
+    if kind == "or":
+        return eval_node(node[1], event_name, real_run_input) or eval_node(node[2], event_name, real_run_input)
+    if kind == "and":
+        return eval_node(node[1], event_name, real_run_input) and eval_node(node[2], event_name, real_run_input)
+    if kind == "eq":
+        ident, value = node[1], node[2]
+        if ident == "github.event_name":
+            return event_name == value
+        if ident == "github.event.inputs.real_run":
+            return real_run_input == value
+        raise ParseError(f"unrecognized identifier in publish if: condition: {ident!r}")
+    raise ParseError(f"unrecognized node: {node!r}")
+
+
+# --- extract the two publish steps' if: from the parsed workflow -------
+with open(workflow_path) as f:
+    doc = yaml.safe_load(f)
+
+jobs = doc.get("jobs", {}) if isinstance(doc, dict) else {}
+steps = []
+for job in jobs.values():
+    if isinstance(job, dict):
+        steps.extend(job.get("steps", []) or [])
+
+PUBLISH_STEP_NAMES = ("Generate Dashboard Files", "Commit Dashboard and Benchmarks")
+publish_steps = {s.get("name"): s.get("if") for s in steps if isinstance(s, dict) and s.get("name") in PUBLISH_STEP_NAMES}
+
+if set(publish_steps) != set(PUBLISH_STEP_NAMES):
+    check(False, f"could not find both publish steps in {workflow_path} (found: {sorted(publish_steps)})")
+    sys.exit(1)
+
+conditions = {name: str(cond) for name, cond in publish_steps.items()}
+distinct = set(conditions.values())
+if len(distinct) == 1:
+    check(True, "'Generate Dashboard Files' and 'Commit Dashboard and Benchmarks' publish under the IDENTICAL if: condition")
+else:
+    check(False, f"publish steps have DIFFERENT if: conditions -- they can silently disagree about whether to publish: {conditions}")
+
+parsed = {}
+for name, cond in conditions.items():
+    try:
+        parsed[name] = parse_condition(cond)
+    except ParseError as exc:
+        check(False, f"could not parse '{name}' step's if: condition ({cond!r}) with the restricted boolean grammar: {exc} -- rewrite the condition to the 'github.event_name == ...' / 'github.event.inputs.NAME == ...' shape this lockstep check understands, or extend the parser (never skip the check)")
+
+if len(parsed) != len(PUBLISH_STEP_NAMES):
+    sys.exit(1 if FAILS else 0)
+
+with open(matrix_path) as f:
+    rows = [line.rstrip("\n").split("\t") for line in f if line.strip()]
+
+mismatches = 0
+for event_name, real_run_input, is_real_run_result in rows:
+    expected = is_real_run_result == "true"
+    for name, node in parsed.items():
+        try:
+            got = eval_node(node, event_name, real_run_input)
+        except ParseError as exc:
+            check(False, f"'{name}' if: condition references something this parser doesn't recognize: {exc}")
+            mismatches += 1
+            continue
+        if got != expected:
+            check(False, f"'{name}' if: condition disagrees with is_real_run() for event={event_name!r} real_run_input={real_run_input!r}: "
+                          f"if: says {got}, is_real_run() says {expected}")
+            mismatches += 1
+
+if mismatches == 0 and FAILS == 0:
+    check(True, f"both publish if: conditions agree with is_real_run() across all {len(rows)} matrix cases")
+
+sys.exit(1 if FAILS else 0)
+PYEOF
+then
+    FAILS=$((FAILS + 1))
+fi
 
 echo
 if [ "$FAILS" -eq 0 ]; then

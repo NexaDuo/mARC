@@ -1,0 +1,5 @@
+{"cache_read": 37312, "cache_write": 20440, "input": 4, "model": "claude-sonnet-5", "output": 166, "repo": "arm-a", "session_id": "cddc5be1-2816-437c-9fdf-deab7fb4d8ea", "ts": 1789485520.21, "turn_index": 0, "weighted": 24176}
+{"cache_read": 115504, "cache_write": 378, "input": 8, "model": "claude-sonnet-5", "output": 446, "repo": "arm-a", "session_id": "7856a6f4-4ea9-4d60-a156-38e76c3216dd", "ts": 1789485536.234, "turn_index": 0, "weighted": 11938}
+{"cache_read": 57752, "cache_write": 0, "input": 4, "model": "claude-sonnet-5", "output": 162, "repo": "arm-a", "session_id": "e60605b1-a2de-444d-86a3-37e88ee7c17f", "ts": 1789485551.299, "turn_index": 0, "weighted": 5780}
+{"cache_read": 86628, "cache_write": 185, "input": 6, "model": "claude-sonnet-5", "output": 301, "repo": "arm-a", "session_id": "7140f853-7b04-428e-83a4-aa66eedcf30f", "ts": 1789485566.96, "turn_index": 0, "weighted": 8855}
+{"cache_read": 57752, "cache_write": 0, "input": 4, "model": "claude-sonnet-5", "output": 166, "repo": "arm-a", "session_id": "1cc294f5-9674-41a5-8d45-a65ac9c8f1e7", "ts": 1789485578.384, "turn_index": 0, "weighted": 5780}
