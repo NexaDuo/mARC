@@ -24,19 +24,10 @@ Design (see PR body for the full justification):
 
   * An AGGREGATE (sum of per-task medians) is also printed, because issue
     #275's acceptance criteria ask for both. It is explicitly labeled as
-    decoration, not a finding: a single number across dissimilar workload
-    shapes answers "what would this look like if you always got a ~1:1:1:1
-    mix of these task shapes", which is not a question anyone actually has.
-    Read the per-task section for the real result.
-
-  * `fixture` (added issue #293) is INSTRUMENT CALIBRATION, not a product
-    claim: a synthetic, generated-at-benchmark-time positive control (see
-    scripts/generate_benchmark_fixture.py) built so the guard's target shape
-    is guaranteed by construction rather than hoped for, the way `sweep`'s
-    is. Its row is explicitly annotated below so a reader skimming only the
-    per-task table cannot mistake it for evidence about real work. Like every
-    other task here, it never feeds the badge or dashboard (see
-    scripts/generate_telemetry_dashboard.py, which is fed `control` alone).
+    decoration, not a finding: a single number across three dissimilar
+    workload shapes answers "what would this look like if you always got a
+    ~1:1:1 mix of these three task shapes", which is not a question anyone
+    actually has. Read the per-task section for the real result.
 """
 from __future__ import annotations
 
@@ -65,13 +56,6 @@ def median_weighted(path: str) -> tuple[float, int] | None:
     return statistics.median(weighted), len(weighted)
 
 
-# Tasks whose number is instrument calibration, not evidence about real
-# work (issue #293). Excluded from the badge/dashboard (fed by `control`
-# alone) and explicitly flagged in every per-task row here, so a reader
-# skimming only the table cannot mistake one for a product claim.
-CALIBRATION_TASKS = {"fixture"}
-
-
 def fmt_cell(sample) -> str:
     if sample is None:
         return "n/a"
@@ -86,11 +70,10 @@ def print_comparison_table(title: str, task_names: list[str], base_suffix: str, 
     aggregate_post = 0.0
     any_data = False
     for name in task_names:
-        label = f"{name} [CONTROL]" if name in CALIBRATION_TASKS else name
         base = median_weighted(os.path.join(base_dir, f"{base_suffix}-{name}.jsonl"))
         post = median_weighted(os.path.join(base_dir, f"{post_suffix}-{name}.jsonl"))
         if base is None or post is None:
-            print(f"{label:<10} {fmt_cell(base):>22} {fmt_cell(post):>22} {'n/a':>14} {'n/a':>8}")
+            print(f"{name:<10} {fmt_cell(base):>22} {fmt_cell(post):>22} {'n/a':>14} {'n/a':>8}")
             continue
         any_data = True
         base_med, post_med = base[0], post[0]
@@ -99,7 +82,7 @@ def print_comparison_table(title: str, task_names: list[str], base_suffix: str, 
         aggregate_base += base_med
         aggregate_post += post_med
         sign = "saved" if delta >= 0 else "cost more"
-        print(f"{label:<10} {fmt_cell(base):>22} {fmt_cell(post):>22} {delta:>+14,.0f} {pct:>+7.1f}%  ({sign})")
+        print(f"{name:<10} {fmt_cell(base):>22} {fmt_cell(post):>22} {delta:>+14,.0f} {pct:>+7.1f}%  ({sign})")
 
     if any_data:
         agg_delta = aggregate_base - aggregate_post
@@ -132,12 +115,7 @@ def main(argv=None) -> int:
         print(f"{names_path} exists but lists no tasks.", file=sys.stderr)
         return 1
 
-    print(f"Task set: {', '.join(task_names)}")
-    calibration_present = [n for n in task_names if n in CALIBRATION_TASKS]
-    if calibration_present:
-        print(f"[CONTROL] = instrument calibration only ({', '.join(calibration_present)}); "
-              f"not evidence about real work, never feeds the badge/dashboard.")
-    print()
+    print(f"Task set: {', '.join(task_names)}\n")
 
     print_comparison_table(
         "Inter-release Comparison (Previous Release vs Current, guard=350)",

@@ -412,22 +412,6 @@ jobs:
           bash -n scripts/run_token_benchmark.sh
           bash scripts/test_run_token_benchmark.sh
 
-      # 6a2b. Synthetic `fixture` task self-test (issue #293 review, `@rev`
-      #       finding: `sweep`'s guard-favorable shape is an unverified bet
-      #       on this repo's file sizes). Offline, stdlib-only, deterministic
-      #       — asserts build_fixture() is reproducible, that a clear
-      #       majority of the default file set is comfortably over the
-      #       350-line guard threshold by construction, that the recorded
-      #       ground-truth total matches an INDEPENDENT word-to-number decode
-      #       of the generated content (not a re-use of the generator's own
-      #       running total), and that a naive digit-sum over the raw text
-      #       does NOT match it (the decoy-digit property that makes a full
-      #       read the natural strategy). See
-      #       scripts/generate_benchmark_fixture.py's module docstring.
-      - name: generate_benchmark_fixture.py — self-test
-        run: |
-          python3 scripts/test_generate_benchmark_fixture.py
-
       # 6a1b. Issue #291: the real (non-stub) measurement path must have a
       #       reachable trigger that does not require cutting a release —
       #       `release` never fires in this repo (releases are published

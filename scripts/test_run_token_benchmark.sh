@@ -305,25 +305,6 @@ else
     fi
 fi
 
-# 3d. Changing the 4th (`fixture`) task's prompt specifically -- the newest
-# task in the set (issue #293) -- also changes the hash. 3a already proves
-# the hash is not blind to non-first tasks in general (it alters `neutral`,
-# which was the LAST task before #293); this repeats that same proof
-# targeted at `fixture` specifically, since it is now the actual last task
-# and a future off-by-one in how the set is flattened could plausibly drop
-# or ignore trailing entries without either older test catching it.
-fixture_altered_blob="${base_blob/fixture_00.txt through fixture_05.txt/fixture_00.txt through fixture_09.txt}"
-if [ "$fixture_altered_blob" = "$base_blob" ]; then
-    fail "test setup bug: fixture_altered_blob did not actually differ from base_blob"
-else
-    fixture_altered_hash="$(compute_task_hash "2.1.272 (Claude Code)" "claude-sonnet-5" "$fixture_altered_blob" "$ITERATIONS")"
-    if [ "$fixture_altered_hash" != "$base_hash" ]; then
-        pass "task-set hash changes when the 'fixture' task's prompt changes"
-    else
-        fail "task-set hash did NOT change when the 'fixture' task's prompt changed -- drift guard blind to the trailing task in the set"
-    fi
-fi
-
 # 2c. A `claude --version` failure AFTER install must fail loudly, not hash
 # a placeholder.
 if PATH="$EMPTY_BIN" resolve_claude_version > /dev/null 2>&1; then
