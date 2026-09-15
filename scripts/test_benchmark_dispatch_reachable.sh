@@ -206,9 +206,8 @@ if ! declare -F emit_real_run_output > /dev/null; then
     exit 1
 fi
 
-MATRIX_FILE="$(mktemp)"
 OUTPUT_FILE="$(mktemp)"
-trap 'rm -f "$MATRIX_FILE" "$OUTPUT_FILE"' EXIT
+trap 'rm -f "$OUTPUT_FILE"' EXIT
 
 check_real_run() {
     local desc="$1" expected="$2" event="$3" ref_type="${4:-branch}" ref_name="${5:-main}" real_run_input="${6:-}"
@@ -218,7 +217,6 @@ check_real_run() {
     else
         got="false"
     fi
-    printf '%s\t%s\t%s\n' "$event" "$real_run_input" "$got" >> "$MATRIX_FILE"
     if [ "$got" = "$expected" ]; then
         pass "$desc (got: $got)"
     else

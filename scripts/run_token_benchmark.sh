@@ -236,14 +236,79 @@ sys.exit(1)
 # scripts/test_benchmark_dispatch_reachable.sh, which pins the full matrix.
 is_release_tag() {
     # Exactly 3 numeric dot-separated components: vYY.M.D. A real
-    # minor/major release per this repo's CalVer scheme.
-    [[ "$CURRENT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+    # minor/major release per this repo's CalVer scheme. Takes an optional
+    # ref argument (defaulting to $CURRENT_REF) so resolve_prev_release_tag()
+    # below can classify an arbitrary ancestor tag, not just the current one.
+    local ref="${1:-$CURRENT_REF}"
+    [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
 is_patch_tag() {
     # A 4th MICRO component: vYY.M.D.MICRO. Disambiguates a second release
-    # on an already-taken date -- a patch, never billed (issue #304).
-    [[ "$CURRENT_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+    # on an already-taken date -- a patch, never billed (issue #304). Same
+    # optional-ref shape as is_release_tag() above; called from
+    # resolve_prev_release_tag() to log which ancestor tags it skips.
+    local ref="${1:-$CURRENT_REF}"
+    [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+# resolve_prev_release_tag: find the nearest ANCESTOR tag that is
+# release-shaped (is_release_tag), skipping any patch tags in between.
+#
+# Issue #304 review (`@rev`): the original fix routed patch tags to the free
+# stub path, which is correct in isolation, but left `PREV_TAG` resolution
+# (main(), below) as a bare `git describe --tags --abbrev=0 "$CURRENT_REF^"`
+# -- nearest tag by ANCESTRY, with no regard for release-vs-patch shape.
+# Because a patch tag never reaches the real path, it never writes
+# docs/marc/benchmarks/<tag>/manifest.json (issue #295's cache). So the next
+# minor/major release's cache lookup would key on that patch tag, miss
+# unconditionally, and re-run arm A -- ~15 extra PAID `claude` invocations,
+# reopening exactly the waste this issue exists to close. Verified live
+# ahead of this fix: `git describe --tags --abbrev=0 HEAD` resolved to
+# `v26.9.15.1` (a patch tag) with no manifest under docs/marc/benchmarks/.
+#
+# Fix: walk back past any patch-shaped ancestor tag until a release-shaped
+# one is found (or none exists).
+#
+# No-previous-release case: if no release-shaped ancestor tag exists at all,
+# this returns an empty string -- the SAME signal `main()`'s existing
+# `[ -z "$PREV_TAG" ]` check already treats as "no previous tag found,
+# cannot perform A/B test" (a hard, honest failure, not a silent
+# no-op/false-baseline comparison). That behavior is unchanged by this fix;
+# only what counts as a valid PREV_TAG changed.
+#
+# Legacy tags: `git tag --sort=-creatordate` shows 3-component `v0.28.0`,
+# `v0.27.0`, etc. alongside the CalVer `vYY.M.D` tags, and both classify as
+# "release" under is_release_tag()'s rule (exactly 3 numeric components).
+# This walk is deliberately allowed to cross that scheme boundary: v0.28.0
+# is a genuine prior release of this project, not a different kind of
+# artifact, and the only tag preceding the first CalVer release (v26.9.8).
+# Refusing to walk that far back would just turn a legitimate (if old)
+# comparison into the same hard "no previous tag" failure above, for no
+# safety benefit -- there is nothing about the versioning-scheme change
+# itself that makes v0.28.0 an invalid baseline.
+resolve_prev_release_tag() {
+    local from_ref="$1"
+    local candidate="$from_ref"
+    local skipped_any=false
+
+    while true; do
+        if ! candidate=$(git describe --tags --abbrev=0 "${candidate}^" 2>/dev/null); then
+            if [ "$skipped_any" = true ]; then
+                echo "No release-shaped ancestor tag found (walked back past one or more patch tags)." >&2
+            fi
+            echo ""
+            return 0
+        fi
+        if is_release_tag "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+        if is_patch_tag "$candidate"; then
+            echo "Skipping patch tag $candidate while resolving the previous RELEASE tag (issue #304)." >&2
+        fi
+        skipped_any=true
+    done
 }
 
 is_real_run() {
@@ -393,7 +458,7 @@ JSON
     fi
 
     git fetch --tags --force
-    PREV_TAG=$(git describe --tags --abbrev=0 "$CURRENT_REF^" 2>/dev/null || echo "")
+    PREV_TAG=$(resolve_prev_release_tag "$CURRENT_REF")
 
     if [ -z "$PREV_TAG" ]; then
         echo "Error: No previous tag found. Cannot perform A/B test."
