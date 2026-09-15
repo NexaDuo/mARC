@@ -43,24 +43,49 @@ fail() { echo "FAIL - $1"; FAILS=$((FAILS + 1)); }
 # shipped four prior "looked wired, wasn't" defects. A backstop a
 # commented-out trigger walks through is worse than none.
 #
-# Fix: parse the workflow as structured YAML and assert against the parsed
-# tree (a `workflow_dispatch:` key literally does not exist in the parsed
-# document if it's commented out — there is no text-matching hole left).
-# PyYAML is present in this dev environment but its availability on the CI
-# runner's bare system python3 is NOT guaranteed (see
-# scripts/test_token_benchmark_no_pr_comment.sh's own comment on this same
-# point). So: try a real YAML parse first; if PyYAML is unavailable, fall
-# back to a comment-aware structural scan (strip full-comment lines, then
-# require the trigger key at the correct top-level indent) rather than
-# silently degrading to the same raw-text grep that just failed review.
+# Fix (round 1): parse the workflow as structured YAML and assert against
+# the parsed tree (a `workflow_dispatch:` key literally does not exist in
+# the parsed document if it's commented out — there is no text-matching
+# hole left).
+#
+# Fix (round 2, `@rev` review): round 1 kept a "comment-aware" raw-text
+# fallback for when PyYAML is unavailable, reasoning its availability on
+# the CI runner wasn't guaranteed. `@rev` then broke THAT fallback with a
+# more surgical mutation: remove the actual `REAL_RUN_INPUT` wiring from
+# the step's `env:` block (the real "declared but never reaches the
+# script" regression this whole issue is about), while leaving the literal
+# string `REAL_RUN_INPUT` present as a trailing comment on an unrelated
+# line. Valid YAML. The PyYAML path (which resolves the wiring through
+# actual step/env structure) correctly failed; the bare "does this token
+# appear anywhere in the live text" fallback check did not — it wasn't
+# scoped to step structure the way the other two fallback checks were.
+#
+# Decision: DROP the fallback and require PyYAML, failing loudly (not
+# silently skipping) if it's absent, rather than patching the fallback to
+# be structurally equivalent to the primary path. Two structurally
+# different parsers of the same YAML, one of which is weaker in ways
+# nobody tracks, is exactly the "looked wired, wasn't" shape this issue
+# exists to close — a green result would no longer tell you which check
+# actually ran. `@rev` also established the fallback was not dead code
+# (nothing in this repo does a bare `import yaml` or pins PyYAML), so
+# "keep it as a defensive fallback" was a real, not theoretical, risk.
+# Verified before making this call: this repo's Tier 1 CI job runs on
+# `ubuntu-latest` with NO `actions/setup-python` step (bare hosted-runner
+# python3) and installs no pip packages anywhere in ci.yml today, so
+# PyYAML's presence cannot be assumed from the existing setup — ci.yml is
+# updated in this same change to `pip install` it explicitly before this
+# test runs, so the strong path is guaranteed rather than hoped for.
 # -----------------------------------------------------------------------
 
 if [ ! -f "$WORKFLOW" ]; then
     fail "workflow not found at $WORKFLOW"
+elif ! python3 -c "import yaml" 2>/dev/null; then
+    fail "PyYAML is not available (python3 -c 'import yaml' failed). This test REQUIRES PyYAML to structurally parse token-benchmark.yml -- a raw-text fallback was tried and found foolable (issue #291/PR #292 review: valid YAML that removes real step wiring while leaving the token name present elsewhere as a comment passed a text-based check). Install PyYAML ('pip install pyyaml' / 'python3 -m pip install pyyaml') rather than let this test silently run a weaker check."
 else
     if ! python3 - "$WORKFLOW" <<'PYEOF'
-import re
 import sys
+
+import yaml
 
 path = sys.argv[1]
 with open(path) as f:
@@ -71,127 +96,74 @@ results = []  # (ok: bool, message: str)
 def check(ok, msg):
     results.append((ok, msg))
 
-try:
-    import yaml
-    USED = "PyYAML structural parse"
+doc = yaml.safe_load(text)
+# YAML 1.1 quirk (PyYAML default loader): a bare top-level `on:` key is
+# parsed as the boolean True, not the string "on". Check both so this
+# doesn't itself become a silent false-negative.
+triggers = doc.get("on", doc.get(True))
 
-    doc = yaml.safe_load(text)
-    # YAML 1.1 quirk (PyYAML default loader): a bare top-level `on:` key is
-    # parsed as the boolean True, not the string "on". Check both so this
-    # doesn't itself become a silent false-negative.
-    triggers = doc.get("on", doc.get(True))
+workflow_dispatch = None
+if isinstance(triggers, dict):
+    workflow_dispatch = triggers.get("workflow_dispatch")
 
-    workflow_dispatch = None
-    if isinstance(triggers, dict):
-        workflow_dispatch = triggers.get("workflow_dispatch")
+if isinstance(workflow_dispatch, dict):
+    check(True, "token-benchmark.yml declares a workflow_dispatch trigger (parsed YAML)")
+else:
+    check(False, "token-benchmark.yml has no live workflow_dispatch trigger under 'on:' -- the real path is still reachable only via 'release', which never fires (issue #291)")
+    workflow_dispatch = {}
 
-    if isinstance(workflow_dispatch, dict):
-        check(True, "token-benchmark.yml declares a workflow_dispatch trigger (parsed YAML)")
+inputs = workflow_dispatch.get("inputs", {}) if isinstance(workflow_dispatch, dict) else {}
+if isinstance(inputs, dict) and "real_run" in inputs:
+    check(True, "workflow_dispatch declares a 'real_run' input to opt into the paid measurement (parsed YAML)")
+else:
+    check(False, "workflow_dispatch has no 'real_run' input -- a dispatched run would either always stub (unreachable) or always spend money (unsafe)")
+
+jobs = doc.get("jobs", {}) if isinstance(doc, dict) else {}
+steps = []
+for job in jobs.values():
+    if isinstance(job, dict):
+        steps.extend(job.get("steps", []) or [])
+
+def step_run_text(step):
+    return step.get("run", "") if isinstance(step, dict) else ""
+
+def step_uses(step):
+    return step.get("uses", "") if isinstance(step, dict) else ""
+
+def step_env(step):
+    return step.get("env", {}) if isinstance(step, dict) else {}
+
+# Scoped to actual step structure (env keys / run text of each step), NOT a
+# bare "does this token appear anywhere in the file" search -- that bare
+# form is exactly what `@rev` demonstrated is foolable by a trailing
+# comment elsewhere in the file while the real env wiring is removed.
+wired = any(
+    "REAL_RUN_INPUT" in (step_env(s) or {}) or "REAL_RUN_INPUT" in step_run_text(s)
+    for s in steps
+)
+if wired:
+    check(True, "a step wires the dispatch input through to the script (REAL_RUN_INPUT, parsed YAML)")
+else:
+    check(False, "no step passes the real_run input to run_token_benchmark.sh as REAL_RUN_INPUT -- the input would be declared but never reach the script")
+
+upload_idx = next((i for i, s in enumerate(steps) if "actions/upload-artifact" in step_uses(s)), None)
+if upload_idx is not None:
+    upload_step = steps[upload_idx]
+    if_cond = str(upload_step.get("if", "")).strip()
+    if if_cond == "always()":
+        check(True, "workflow uploads the raw measurement as an artifact unconditionally (if: always(), parsed YAML)")
     else:
-        check(False, "token-benchmark.yml has no live workflow_dispatch trigger under 'on:' -- the real path is still reachable only via 'release', which never fires (issue #291)")
-        workflow_dispatch = {}
+        check(False, f"artifact-upload step exists but its 'if:' is not exactly 'always()' (got: {if_cond!r}) -- a failed publish could destroy a paid-for measurement again")
+else:
+    check(False, "no step uses actions/upload-artifact -- a failed publish would destroy a paid-for measurement again")
 
-    inputs = workflow_dispatch.get("inputs", {}) if isinstance(workflow_dispatch, dict) else {}
-    if isinstance(inputs, dict) and "real_run" in inputs:
-        check(True, "workflow_dispatch declares a 'real_run' input to opt into the paid measurement (parsed YAML)")
-    else:
-        check(False, "workflow_dispatch has no 'real_run' input -- a dispatched run would either always stub (unreachable) or always spend money (unsafe)")
+push_idx = next((i for i, s in enumerate(steps) if "git push" in step_run_text(s)), None)
+if upload_idx is not None and push_idx is not None and upload_idx < push_idx:
+    check(True, "artifact upload step is ordered before the commit/push step (parsed step order)")
+else:
+    check(False, f"artifact upload step is not ordered before the commit/push step (upload_idx={upload_idx} push_idx={push_idx})")
 
-    jobs = doc.get("jobs", {}) if isinstance(doc, dict) else {}
-    steps = []
-    for job in jobs.values():
-        if isinstance(job, dict):
-            steps.extend(job.get("steps", []) or [])
-
-    def step_run_text(step):
-        return step.get("run", "") if isinstance(step, dict) else ""
-
-    def step_uses(step):
-        return step.get("uses", "") if isinstance(step, dict) else ""
-
-    def step_env(step):
-        return step.get("env", {}) if isinstance(step, dict) else {}
-
-    wired = any(
-        "REAL_RUN_INPUT" in (step_env(s) or {}) or "REAL_RUN_INPUT" in step_run_text(s)
-        for s in steps
-    )
-    if wired:
-        check(True, "a step wires the dispatch input through to the script (REAL_RUN_INPUT, parsed YAML)")
-    else:
-        check(False, "no step passes the real_run input to run_token_benchmark.sh as REAL_RUN_INPUT -- the input would be declared but never reach the script")
-
-    upload_idx = next((i for i, s in enumerate(steps) if "actions/upload-artifact" in step_uses(s)), None)
-    if upload_idx is not None:
-        upload_step = steps[upload_idx]
-        if_cond = str(upload_step.get("if", "")).strip()
-        if if_cond == "always()":
-            check(True, "workflow uploads the raw measurement as an artifact unconditionally (if: always(), parsed YAML)")
-        else:
-            check(False, f"artifact-upload step exists but its 'if:' is not exactly 'always()' (got: {if_cond!r}) -- a failed publish could destroy a paid-for measurement again")
-    else:
-        check(False, "no step uses actions/upload-artifact -- a failed publish would destroy a paid-for measurement again")
-
-    push_idx = next((i for i, s in enumerate(steps) if "git push" in step_run_text(s)), None)
-    if upload_idx is not None and push_idx is not None and upload_idx < push_idx:
-        check(True, "artifact upload step is ordered before the commit/push step (parsed step order)")
-    else:
-        check(False, f"artifact upload step is not ordered before the commit/push step (upload_idx={upload_idx} push_idx={push_idx})")
-
-except ImportError:
-    USED = "comment-aware structural fallback (PyYAML unavailable)"
-
-    # Strip full-comment lines (leading '#', any indent) before scanning, so
-    # a commented-out trigger's substrings do not survive into the checks
-    # below -- this is the specific hole `@rev` found in the old plain-grep
-    # version.
-    live_lines = [ln for ln in text.splitlines() if not re.match(r'^\s*#', ln)]
-    live_text = "\n".join(live_lines)
-
-    on_match = re.search(r'^on:\s*$', live_text, re.MULTILINE)
-    if on_match:
-        # Slice from the 'on:' block to the next top-level (col-0) key.
-        rest = live_text[on_match.end():]
-        next_top = re.search(r'^\S', rest, re.MULTILINE)
-        on_block = rest[: next_top.start()] if next_top else rest
-    else:
-        on_block = ""
-
-    wd_match = re.search(r'^  workflow_dispatch:\s*$', on_block, re.MULTILINE)
-    if wd_match:
-        check(True, "token-benchmark.yml declares a workflow_dispatch trigger (comment-aware scan)")
-        wd_rest = on_block[wd_match.end():]
-        next_same_or_lower = re.search(r'^  \S', wd_rest, re.MULTILINE)
-        wd_block = wd_rest[: next_same_or_lower.start()] if next_same_or_lower else wd_rest
-    else:
-        check(False, "token-benchmark.yml has no live (non-commented) workflow_dispatch trigger under 'on:' -- the real path is still reachable only via 'release', which never fires (issue #291)")
-        wd_block = ""
-
-    if re.search(r'real_run:\s*$', wd_block, re.MULTILINE):
-        check(True, "workflow_dispatch declares a 'real_run' input (comment-aware scan)")
-    else:
-        check(False, "workflow_dispatch has no live 'real_run' input -- a dispatched run would either always stub (unreachable) or always spend money (unsafe)")
-
-    if "REAL_RUN_INPUT" in live_text:
-        check(True, "a step wires the dispatch input through to the script (REAL_RUN_INPUT, comment-aware scan)")
-    else:
-        check(False, "no live reference to REAL_RUN_INPUT -- the real_run input would be declared but never reach the script")
-
-    live_lines_enum = list(enumerate(live_lines))
-    upload_line = next((i for i, ln in live_lines_enum if "actions/upload-artifact" in ln), None)
-    always_line = next((i for i, ln in live_lines_enum if re.search(r'if:\s*always\(\)', ln)), None)
-    if upload_line is not None and always_line is not None:
-        check(True, "workflow uploads the raw measurement as an artifact unconditionally (if: always(), comment-aware scan)")
-    else:
-        check(False, "no live, unconditional (if: always()) artifact-upload step found -- a failed publish could destroy a paid-for measurement again")
-
-    push_line = next((i for i, ln in live_lines_enum if "git push" in ln), None)
-    if upload_line is not None and push_line is not None and upload_line < push_line:
-        check(True, "artifact upload step is ordered before the commit/push step (comment-aware scan)")
-    else:
-        check(False, f"artifact upload step is not ordered before the commit/push step (upload_line={upload_line} push_line={push_line})")
-
-print(f"--- workflow structural checks via: {USED} ---")
+print("--- workflow structural checks via: PyYAML structural parse ---")
 for ok, msg in results:
     print(("ok   - " if ok else "FAIL - ") + msg)
 
