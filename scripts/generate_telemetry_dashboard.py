@@ -57,13 +57,24 @@ def _pct_delta(base_median: float, post_median: float) -> float:
     return ((base_median - post_median) / base_median) * 100
 
 
-def generate_badge(baseline_path, current_path, neutral_no_guard_path, neutral_guarded_path, output_path):
+def generate_badge(baseline_path, badge_current_path, neutral_no_guard_path, neutral_guarded_path, output_path):
     """Write the "Tokens Saved (Last Release)" shields.io endpoint badge.
 
     Unconditional by design (origin: #285): this is always called from
     main(), in the same invocation/run the markdown dashboard was just
     written from, so the badge can never be left stale while the dashboard
     moves on.
+
+    Issue #303: `badge_current_path` MUST be the SHIPPED DEFAULT arm — the
+    guard is opt-in and ships DISABLED (no `[token_guard]` in
+    `.agents/team.toml`; the template ships it commented out) — never the
+    guard-ON arm B (`post-<task>.jsonl`, guard=350). Before this fix the
+    caller passed `post-control.jsonl` (arm B) here, so the badge measured a
+    configuration nobody runs and could invert sign relative to what a real
+    user experiences (run 34987534132: -68.9% from arm B vs +35.0% from the
+    guard-off arm C `toggle_baseline-control.jsonl` — the SAME commit's own
+    shipped-default behavior). The guard-off, same-commit arm C file is the
+    correct "current" value to diff against the previous release's baseline.
 
     Issue #296 re-scope: the badge answers "tokens saved on THIS release",
     not a standing "mARC saves X%" property — 0/"No Change" is the correct,
@@ -108,12 +119,12 @@ def generate_badge(baseline_path, current_path, neutral_no_guard_path, neutral_g
         with open(output_path, "w") as f:
             json.dump(badge, f, indent=2)
 
-    if not baseline_path or not current_path:
+    if not baseline_path or not badge_current_path:
         write(no_data_badge)
         return
 
     baseline_sample = benchmark_report.median_weighted(baseline_path)
-    current_sample = benchmark_report.median_weighted(current_path)
+    current_sample = benchmark_report.median_weighted(badge_current_path)
     if baseline_sample is None or current_sample is None:
         write(no_data_badge)
         return
@@ -166,8 +177,15 @@ def main():
                          help="current/post-optimization telemetry JSONL (drives the markdown trend chart)")
     parser.add_argument("--baseline", required=False,
                          help="baseline (pre-optimization / previous-release) telemetry JSONL to diff "
-                              "against --path for the 'Tokens Saved (Last Release)' badge; omit for an "
-                              "honest 'No Data' badge")
+                              "against --badge-current (or --path, if --badge-current is omitted) for the "
+                              "'Tokens Saved (Last Release)' badge; omit for an honest 'No Data' badge")
+    parser.add_argument("--badge-current", required=False,
+                         help="'current release' telemetry JSONL that feeds the badge diff against "
+                              "--baseline. Issue #303: this MUST be the SHIPPED DEFAULT arm (guard "
+                              "disabled, e.g. the same-commit toggle_baseline-<task>.jsonl), never the "
+                              "guard-ON arm B post-<task>.jsonl -- see generate_badge()'s docstring. "
+                              "Defaults to --path (the dashboard trend-chart source) if omitted, for "
+                              "backward compatibility with callers that only pass one 'current' file.")
     parser.add_argument("--neutral-no-guard", required=False,
                          help="'neutral' task telemetry JSONL from the SAME-COMMIT no-guard arm "
                               "(arm C / toggle_baseline, guard=999999). Paired with --neutral-guarded "
@@ -194,7 +212,8 @@ def main():
     # benchmark_report.median_weighted) rather than reusing `sessions`
     # above, which sums per-session — the badge needs the median-per-sample
     # methodology benchmark_report.py already implements (issue #296).
-    generate_badge(args.baseline, args.path, args.neutral_no_guard, args.neutral_guarded, args.badge_out)
+    badge_current_path = args.badge_current or args.path
+    generate_badge(args.baseline, badge_current_path, args.neutral_no_guard, args.neutral_guarded, args.badge_out)
 
 if __name__ == "__main__":
     main()
