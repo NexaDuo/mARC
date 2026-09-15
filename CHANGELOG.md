@@ -6,9 +6,130 @@ this project adopts [Calendar Versioning](https://calver.org/) (`YY.M.D`).
 
 ## [Unreleased]
 
+## [26.9.15] - 2026-09-15
+
+### Added
+- **Opt-in `read-guard` PreToolUse hook, Claude Code only (#262, #266, #287).**
+  - Adds a hook that intercepts an oversized file read before it is ingested,
+    denying a `Read` of a file over `max_read_lines` lines (or a `cat`/`less`/
+    `more`/`head`/`tail` of one via `Bash`) and steering the model toward
+    targeted reads (`limit`/`offset`) or `grep`. Targeted reads and
+    sub-threshold files pass through untouched.
+  - **Opt-in by presence.** The guard is completely inert unless
+    `.agents/team.toml` contains a `[token_guard]` section; there is no
+    separate `enabled` key. `docs/team.toml.example` ships the section
+    commented out, so copying the template verbatim does not activate it.
+  - Exempts the `@sec` and `@rev` roles, whose audits must never reason over
+    truncated input (origin: #137, #227). That exemption is currently
+    identified by process inspection and is forgeable — tracked in #289.
+  - Wired into the `claude-code` harness only. `antigravity` was observed to
+    nest its tool call under `toolCall.name`/`toolCall.args` rather than the
+    top-level fields the guard reads, so shipping it there would register a
+    hook that never fires; left deliberately unwired. (That payload shape was
+    established by probing the antigravity CLI directly and is not verifiable
+    from this repository.) `copilot` ships a different hook set with no
+    `pre_tool_use` dialect entry.
+  - Landed in PRs #264, #269, #272, #277 and #288.
+- **`PreToolUse` hook support in the compilation pipeline (#259).**
+  - `scripts/compile_prompts.py` now emits `PreToolUse` hooks for the
+    `claude-code` harness, which previously supported only the other events.
+  - Landed in PR #260.
+- **Real end-to-end token benchmark on release (#255, #257, #261).**
+  - Adds `.github/workflows/token-benchmark.yml`, which on a `release` event
+    runs three real `claude` CLI arms — the previous release (telemetry only),
+    the current checkout with the guard at 350 lines, and the current checkout
+    with the guard effectively off — three iterations each, and publishes the
+    measured delta to `docs/marc/telemetry.md` and a shields.io endpoint badge
+    in `README.md`.
+  - Adds `scripts/run_token_benchmark.sh` (arm orchestration, task hashing,
+    cache invalidation) and `scripts/generate_telemetry_dashboard.py`.
+  - Pushes and pull requests take a stubbed, non-publishing path confined to
+    the job summary, so the token cost is paid only on an actual release.
+  - The three-arm design replaced an earlier single-session version that
+    copied the same telemetry file over both sides of the comparison, so the
+    delta was always 0%; the redesign also removed the blanket failure
+    suppressions (`continue-on-error` and `|| true`) that made a broken
+    measurement report green. See `Known limitations` below — the task-design
+    half of that work (#275) is not finished.
+  - Landed in PRs #256, #258, #263, #278 and #280.
+- **Token-savings measurement in the telemetry report (#253).**
+  - `token_telemetry_report.py` gained `--compare` and `--cost-per-million` to
+    compute the token and cost delta between two telemetry datasets.
+  - Landed in PR #254.
+- **Research brief on token-optimization techniques (#251).** Landed in PR #252.
+
 ### Changed
+- **`docs/team.toml.example` no longer activates behaviour merely by being
+  copied (#287).**
+  - Both `[token_guard]` and `[workspace]`/`workspace_dir` shipped uncommented
+    with live values, while README's hand-setup path instructs copying the file
+    verbatim to `.agents/team.toml`. An unedited copy therefore switched on the
+    read guard and redirected durable specialist artifacts to a published
+    folder, neither of which the user had opted into. Both sections now ship
+    commented out, matching `/marc:init`'s generated template.
+  - Landed in PR #288.
 - **Autonomously dispatch pre-merge gates immediately upon PR open (#243).**
-  - Updated `@techlead`'s Step 5 ("Track to done") in `core/skills/tech-lead/SKILL.md` to mandate immediate, proactive background dispatch of `@sec` and `@rev` reviews as soon as a PR is opened, preventing the channel operator from halting or waiting for user permission before pre-merge review gates are executed.
+  - `@techlead`'s Step 5 ("Track to done") in `core/skills/tech-lead/SKILL.md`
+    now mandates proactive background dispatch of `@sec` and `@rev` the moment
+    a PR opens, instead of halting to ask permission to review. Landed in PR #245.
+- **Report-only dispatch instructions are now strictly honored (#237).**
+  - When a dispatch specifies read-only / do-not-post, `@sec` and `@rev` return
+    their marked verdict block in their response rather than publishing it to
+    the PR, and `@rev` invokes `/code-review` without `--comment`. Default
+    orchestration behaviour is unchanged. Landed in PR #249.
+- **Bundled review skills are recorded as inconclusive (#236).**
+  - `/security-review` and `/code-review` can diff the working tree, the wrong
+    commit, or a stale branch instead of the PR's merge-base diff, which makes
+    an empty result indistinguishable from a clean one. `@sec` and `@rev` must
+    anchor their verdict on their own diff audit at the anchored head SHA.
+    Landed in PR #248.
+- **`rules:origin-required` fences scoped per section (#230).** Landed in PR #247.
+- **`@dev` scaffolds to disk first (#267).** Landed in PR #268.
+- **GitHub Actions bumped to Node 24 (#265),** clearing the Node 20 deprecation
+  warning.
+- **Backfilled the `26.9.8` notes** with the cross-harness dispatch and hybrid
+  specialization matrix entries (#239, #241) that shipped in that release but
+  were omitted from its changelog. Landed in PR #246.
+
+### Fixed
+- **The published "Tokens Saved" badge was fabricated from CI stub data (#274).**
+  - The benchmark's stubbed pull-request path committed its placeholder numbers
+    to the real telemetry artifacts, so the badge in `README.md` publicly
+    advertised a `15.2%` saving that had never been measured, and
+    `docs/marc/telemetry.md` carried a chart plotted from the same
+    placeholders. Stub runs are now confined to the job summary, the fabricated
+    chart is gone, the badge reads `No Data` until a real release measures one,
+    and the pull-request comment channel that republished the stub figure on
+    every push was removed outright.
+  - Landed in PRs #276, #279 and #284, each with a regression test in CI Tier 1.
+- **The telemetry badge never regenerated on a release (#285).**
+  - `generate_badge()` sat behind a `--compare` flag the release workflow never
+    passed, so the badge would have stayed at `No Data` permanently even after
+    a real measurement. It is now regenerated unconditionally from the same run
+    and the same session data as the dashboard, and the flag was renamed to
+    `--baseline` with its argument order corrected — passing it the old way
+    inverted the sign of the published percentage. Landed in PR #286.
+- **Benchmark model pin, marketplace idempotency and an inert drift guard (#281).**
+  - The benchmark pinned an outdated model; `claude plugin marketplace add ./`
+    ran twice and failed the second time; and `claude_version` was recorded in
+    the manifest but captured *before* the CLI was installed, so the cache key
+    hashed the constant `"unknown"` and the drift guard could never fire.
+    Landed in PR #283.
+- **`read-guard.sh` bypasses, performance and global state leak (#270).**
+  - Shell operators (`&&`, `;`, `|`) could be chained to slip a read past the
+    guard; the guard read whole files to count their lines; and process
+    detection leaked across sessions. Landed in PRs #272 and #277.
+- **Telemetry baseline tracking and leaked out-of-scope files (#271).** Landed
+  in PR #273.
+
+### Known limitations
+- **The benchmark's measured task is one the guard denies (#275, open).**
+  The task set is a single task — `read core/scripts/board.py`, 991 lines —
+  which the guard denies at the 350-line arm. A run in which the agent does
+  not fall back to targeted reads would compare a blocked task against a
+  completed one rather than measuring token savings. The release path has
+  never been executed end to end, so which way it goes is not yet known.
+  Treat the first measured number as provisional until #275 closes.
 
 ## [26.9.8] - 2026-09-08
 
