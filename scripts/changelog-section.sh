@@ -6,7 +6,9 @@
 # workflow and the backfill script call this, so a release body always equals
 # the CHANGELOG section byte-for-byte (dates preserved via the section header).
 #
-# Usage: changelog-section.sh X.Y.Z [CHANGELOG.md]
+# Usage: changelog-section.sh X.Y.Z[.MICRO] [CHANGELOG.md]
+# The optional fourth component is CalVer's same-day disambiguator (`YY.M.D.MICRO`,
+# adopted in 26.9.15.1): a second release on a date whose `YY.M.D` is already taken.
 # Prints the section (header line included, so the date is preserved) up to but
 # not including the next `## [` header. Interspersed reference-link definitions
 # (`[X.Y.Z]: https://...`) are stripped, and leading/trailing blank lines are
@@ -25,7 +27,7 @@ section="$(
     grab && /^## \[/           { exit }
     grab                        { print }
   ' "$changelog" \
-  | grep -vE '^\[[0-9]+\.[0-9]+\.[0-9]+\]:' \
+  | grep -vE '^\[[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?\]:' \
   | awk '
     # Trim leading blank lines, and collapse/drop trailing blank lines.
     { lines[NR]=$0 }
