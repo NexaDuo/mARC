@@ -6,13 +6,62 @@ CURRENT_REF="${GITHUB_REF_NAME:-main}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
 # Set by the workflow from the `real_run` workflow_dispatch input (issue
 # #291). A dispatched run defaults to the stub path unless explicitly asked
-# for the real (paid, nine-`claude`-invocation) measurement — see
+# for the real (paid, multi-`claude`-invocation) measurement — see
 # is_real_run() below.
 REAL_RUN_INPUT="${REAL_RUN_INPUT:-false}"
 
 MODEL="claude-sonnet-5"
-# Target a file larger than 350 lines so read-guard actually fires
-TASK="read core/scripts/board.py and output a summary"
+
+# --- Task set (issue #275) ---------------------------------------------------
+# The single hardcoded board.py task measured exactly one workload shape: a
+# large single-file read where the work IS the read, so a read-guard (which
+# only forces targeted reads/grep instead of one big Read) has no cheaper path
+# available and can only lose. Run 34961492007 confirmed that (guard cost
+# 3.1x more on that task) and confirmed the harness itself is sound (two
+# unguarded arms, different releases, 2% apart) — the missing piece was task
+# diversity, not instrument validity.
+#
+# Three tasks, three different shapes:
+#   control  - VERBATIM the original task. A calibrated control with known
+#              sign/magnitude (guard loses, 3.1x, run 34961492007). Kept
+#              unchanged so this run stays comparable to that measurement.
+#   sweep    - Chosen to plausibly favor bulk-I/O offloading (i.e. hurt the
+#              read-guard less, or not at all): it requires visiting all 10
+#              non-test core/scripts/*.py files (3346 lines total), but the
+#              information needed (top-level `def` lines) is a sparse
+#              fraction of that content, and 3 of the 10 files exceed the
+#              350-line guard threshold (dispatch_agent.py, token_sentinel.py,
+#              board.py). A full-Read-everything approach pays for all 3346
+#              lines; a grep-for-`^def`/targeted-read approach (which the
+#              guard forces on the 3 large files, and which the agent may
+#              reach for anyway even unguarded) pays for a much smaller
+#              fraction. This is a genuine hypothesis, not a certainty — grep
+#              is unaffected by the guard either way, so if the model already
+#              defaults to grep for this shape of task regardless of arm,
+#              this task will read as "neutral" rather than "guard wins", and
+#              that itself would be a real, reportable finding (see PR body).
+#   neutral  - AGENTS.md (143 lines), comfortably under the 350-line
+#              threshold used by arm B. The guard structurally cannot fire on
+#              it in either configured arm, so any difference this task shows
+#              between arm B and arm C is pure run-to-run variance, not a
+#              guard effect — a sanity check on the other two tasks' deltas.
+TASK_NAMES=(control sweep neutral)
+TASK_PROMPTS=(
+    "read core/scripts/board.py and output a summary"
+    "List every top-level (module-level) function definition across all non-test .py files in core/scripts/ (skip any file whose name starts with test_). Format each as '<filename>: <function_name>(...)'. Do not include methods defined inside classes, or functions nested inside other functions."
+    "read AGENTS.md and summarize its \"Operating principles\" section in 3 bullet points"
+)
+
+# Iterations per (task, arm). Run 34961492007's single arm C ranged 14,600 /
+# 14,630 / 5,742 weighted tokens across 3 runs of the IDENTICAL task+arm — a
+# 2.5x spread from n=3 alone. n=3 cannot distinguish a real effect that size
+# from noise. Raising to n=5 and switching SUM -> MEDIAN (scripts/
+# benchmark_report.py) means one outlier run (like that 5,742) no longer
+# drags or dominates the aggregate the way summing 3 values does; the median
+# of 5 needs 3 of 5 runs to agree before it moves. n=5 (not more) is a
+# deliberate cost tradeoff — see the PR body for the full invocation-count
+# and cost accounting across 3 tasks x 3 arms x 5 iterations.
+ITERATIONS=5
 
 # --- Testable helpers (defined before main(); see the sourcing guard at the
 # bottom of this file). Keeping these as standalone functions lets a companion
@@ -33,10 +82,30 @@ resolve_claude_version() {
     }
 }
 
-# compute_task_hash: pure function, no side effects.
+# task_set_blob: pure function, no side effects. Deterministically serializes
+# the full task set (name=prompt pairs, in array order) into a single string
+# suitable for hashing. Separated from compute_task_hash so the hash itself
+# stays a trivial, directly-testable function over a plain string, while this
+# is the one place that knows how to flatten the TASK_NAMES/TASK_PROMPTS
+# arrays (issue #275: the old single-task hash covered only one TASK string
+# and would not have detected a change to any task other than the first).
+task_set_blob() {
+    local i blob=""
+    for i in "${!TASK_NAMES[@]}"; do
+        blob+="${TASK_NAMES[$i]}=${TASK_PROMPTS[$i]}|"
+    done
+    printf '%s' "$blob"
+}
+
+# compute_task_hash: pure function, no side effects. `tasks_blob` is expected
+# to be the output of task_set_blob() (or an equivalent literal, as the
+# companion test passes for reproducibility) rather than a single task
+# string — this is the issue #275 fix to the drift guard, which previously
+# hashed only the one hardcoded TASK and would not notice a change to the
+# task SET (add/remove/reorder a task, change iteration count) as drift.
 compute_task_hash() {
-    local claude_version="$1" model="$2" task="$3"
-    echo -n "$claude_version:$model:$task:3" | sha256sum | awk '{print $1}' | cut -c 1-8
+    local claude_version="$1" model="$2" tasks_blob="$3" iterations="$4"
+    echo -n "$claude_version:$model:$tasks_blob:$iterations" | sha256sum | awk '{print $1}' | cut -c 1-8
 }
 
 # ensure_marketplace_added: idempotent `claude plugin marketplace add`.
@@ -146,15 +215,17 @@ is_real_run() {
 }
 
 run_claude_safely() {
-    local target_file=$1
-    local state_dir=$2
-    for i in 1 2 3; do
+    local task_prompt=$1
+    local target_file=$2
+    local state_dir=$3
+    local n=$4
+    for ((i = 1; i <= n; i++)); do
         local temp_state="$state_dir/temp_run_$i"
         mkdir -p "$temp_state"
         export MARC_STATE_DIR="$temp_state"
 
         set +e
-        claude --model "$MODEL" -p "$TASK"
+        claude --model "$MODEL" -p "$task_prompt"
         EXIT_CODE=$?
         set -e
 
@@ -166,19 +237,29 @@ run_claude_safely() {
     done
 }
 
+# write_task_names: single source of truth for which task names exist in
+# this run, consumed by scripts/benchmark_report.py so the report never
+# drifts out of sync with the task set defined above (real run or stub).
+write_task_names() {
+    printf '%s\n' "${TASK_NAMES[@]}" > "$GITHUB_WORKSPACE/task_names.txt"
+}
+
 main() {
     if ! is_real_run; then
         echo "Not a real run (event=$EVENT_NAME, real_run input=$REAL_RUN_INPUT). Generating stubs for PR/push/unconfirmed dispatch."
-        cat << 'JSON' > baseline.jsonl
-{"session_id": "sess-baseline-1", "weighted": 15000, "turns": 5, "model": "stub-model", "timestamp": 1700000000}
-{"session_id": "sess-baseline-2", "weighted": 8000, "turns": 3, "model": "stub-model", "timestamp": 1700000100}
+        write_task_names
+        for name in "${TASK_NAMES[@]}"; do
+            cat << JSON > "baseline-$name.jsonl"
+{"session_id": "sess-baseline-$name-1", "weighted": 15000, "turns": 5, "model": "stub-model", "timestamp": 1700000000}
+{"session_id": "sess-baseline-$name-2", "weighted": 8000, "turns": 3, "model": "stub-model", "timestamp": 1700000100}
 JSON
-        cat << 'JSON' > post.jsonl
-{"session_id": "sess-post-1", "weighted": 12000, "turns": 4, "model": "stub-model", "timestamp": 1700000200}
-{"session_id": "sess-post-2", "weighted": 7500, "turns": 3, "model": "stub-model", "timestamp": 1700000300}
+            cat << JSON > "post-$name.jsonl"
+{"session_id": "sess-post-$name-1", "weighted": 12000, "turns": 4, "model": "stub-model", "timestamp": 1700000200}
+{"session_id": "sess-post-$name-2", "weighted": 7500, "turns": 3, "model": "stub-model", "timestamp": 1700000300}
 JSON
-        cp baseline.jsonl toggle_baseline.jsonl
-        cp post.jsonl toggle_post.jsonl
+            cp "baseline-$name.jsonl" "toggle_baseline-$name.jsonl"
+            cp "post-$name.jsonl" "toggle_post-$name.jsonl"
+        done
         exit 0
     fi
 
@@ -190,7 +271,7 @@ JSON
         exit 1
     fi
 
-    echo "Comparing $PREV_TAG (A) vs $CURRENT_REF (B)"
+    echo "Comparing $PREV_TAG (A) vs $CURRENT_REF (B/C), ${#TASK_NAMES[@]} tasks x $ITERATIONS iterations"
 
     # Install the CLI here, AFTER the (cheap) previous-tag resolution above but
     # BEFORE anything that hashes or otherwise depends on its version. This is
@@ -198,31 +279,28 @@ JSON
     # captured `claude --version` at the top of the file, before this install
     # step ever ran, so on a clean runner it always hashed the constant
     # "unknown" and the drift guard never fired.
-    #
-    # We evaluated the alternative (leave the install where it was, move the
-    # hash computation down after it) and rejected it: the cache-reuse
-    # decision right below already needs a correct, final TASK_HASH, so that
-    # alternative would just relocate the same ordering constraint one block
-    # later for no benefit. Installing right here also avoids installing the
-    # CLI at all when the script is about to exit above for lack of a previous
-    # tag.
     npm i -g @anthropic-ai/claude-code
 
     CLAUDE_VERSION=$(resolve_claude_version) || exit 1
-    TASK_HASH=$(compute_task_hash "$CLAUDE_VERSION" "$MODEL" "$TASK")
+    TASK_HASH=$(compute_task_hash "$CLAUDE_VERSION" "$MODEL" "$(task_set_blob)" "$ITERATIONS")
 
     MANIFEST_PATH="docs/marc/benchmarks/$PREV_TAG/manifest.json"
-    BASELINE_PATH="docs/marc/benchmarks/$PREV_TAG/baseline.jsonl"
     RERUN_A=true
 
-    if [ -f "$MANIFEST_PATH" ] && [ -f "$BASELINE_PATH" ]; then
+    if [ -f "$MANIFEST_PATH" ]; then
         CACHED_HASH=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1])).get('task_hash', ''))" "$MANIFEST_PATH")
-        if [ "$CACHED_HASH" == "$TASK_HASH" ]; then
-            echo "Manifest matches! Reusing baseline."
-            cp "$BASELINE_PATH" baseline.jsonl
+        ALL_BASELINES_PRESENT=true
+        for name in "${TASK_NAMES[@]}"; do
+            [ -f "docs/marc/benchmarks/$PREV_TAG/baseline-$name.jsonl" ] || ALL_BASELINES_PRESENT=false
+        done
+        if [ "$CACHED_HASH" == "$TASK_HASH" ] && [ "$ALL_BASELINES_PRESENT" = true ]; then
+            echo "Manifest matches (task set + CLI + model + iterations unchanged)! Reusing baseline for all tasks."
+            for name in "${TASK_NAMES[@]}"; do
+                cp "docs/marc/benchmarks/$PREV_TAG/baseline-$name.jsonl" "baseline-$name.jsonl"
+            done
             RERUN_A=false
         else
-            echo "Manifest drift detected. Re-running arm A."
+            echo "Manifest drift detected (task set, CLI, model, or iteration count changed) or a per-task baseline is missing. Re-running arm A."
         fi
     else
         echo "No cached baseline found for $PREV_TAG. Running arm A."
@@ -240,8 +318,13 @@ JSON
         echo "[telemetry]" > .agents/team.toml
         echo "enabled = true" >> .agents/team.toml
 
-        rm -f "$GITHUB_WORKSPACE/baseline.jsonl"
-        run_claude_safely "$GITHUB_WORKSPACE/baseline.jsonl" "$HOME/.claude/marc-state-a"
+        for idx in "${!TASK_NAMES[@]}"; do
+            name="${TASK_NAMES[$idx]}"
+            prompt="${TASK_PROMPTS[$idx]}"
+            echo "  arm A / task=$name"
+            rm -f "$GITHUB_WORKSPACE/baseline-$name.jsonl"
+            run_claude_safely "$prompt" "$GITHUB_WORKSPACE/baseline-$name.jsonl" "$HOME/.claude/marc-state-a-$name" "$ITERATIONS"
+        done
 
         popd
     fi
@@ -258,8 +341,13 @@ enabled = true
 max_read_lines = 350
 CONFIG
 
-    rm -f post.jsonl
-    run_claude_safely "$PWD/post.jsonl" "$HOME/.claude/marc-state-b"
+    for idx in "${!TASK_NAMES[@]}"; do
+        name="${TASK_NAMES[$idx]}"
+        prompt="${TASK_PROMPTS[$idx]}"
+        echo "  arm B / task=$name"
+        rm -f "$PWD/post-$name.jsonl"
+        run_claude_safely "$prompt" "$PWD/post-$name.jsonl" "$HOME/.claude/marc-state-b-$name" "$ITERATIONS"
+    done
 
     echo "--- RUNNING ARM C ($CURRENT_REF with guard=999999) ---"
     cat << CONFIG > .agents/team.toml
@@ -269,10 +357,16 @@ enabled = true
 max_read_lines = 999999
 CONFIG
 
-    rm -f toggle_baseline.jsonl
-    run_claude_safely "$PWD/toggle_baseline.jsonl" "$HOME/.claude/marc-state-c"
+    for idx in "${!TASK_NAMES[@]}"; do
+        name="${TASK_NAMES[$idx]}"
+        prompt="${TASK_PROMPTS[$idx]}"
+        echo "  arm C / task=$name"
+        rm -f "$PWD/toggle_baseline-$name.jsonl"
+        run_claude_safely "$prompt" "$PWD/toggle_baseline-$name.jsonl" "$HOME/.claude/marc-state-c-$name" "$ITERATIONS"
+        cp "$PWD/post-$name.jsonl" "$PWD/toggle_post-$name.jsonl"
+    done
 
-    cp post.jsonl toggle_post.jsonl
+    write_task_names
 
     # Save current run as baseline for future. On a `workflow_dispatch` real
     # run CURRENT_REF is a branch name (e.g. "main"), not a tag, so this
@@ -283,11 +377,20 @@ CONFIG
     # on the runner and is captured by the artifact upload step, never in
     # the repo's real docs/marc/benchmarks/ tree.
     mkdir -p "docs/marc/benchmarks/$CURRENT_REF"
-    cp post.jsonl "docs/marc/benchmarks/$CURRENT_REF/baseline.jsonl"
+    for name in "${TASK_NAMES[@]}"; do
+        cp "post-$name.jsonl" "docs/marc/benchmarks/$CURRENT_REF/baseline-$name.jsonl"
+    done
+    TASKS_JSON=$(python3 -c "
+import json, sys
+names = sys.argv[1].split(chr(31))
+prompts = sys.argv[2].split(chr(31))
+print(json.dumps([{'name': n, 'prompt': p} for n, p in zip(names, prompts)]))
+" "$(IFS=$'\x1f'; echo "${TASK_NAMES[*]}")" "$(IFS=$'\x1f'; echo "${TASK_PROMPTS[*]}")")
     cat << JSON > "docs/marc/benchmarks/$CURRENT_REF/manifest.json"
 {
   "model": "$MODEL",
-  "task": "$TASK",
+  "tasks": $TASKS_JSON,
+  "iterations": $ITERATIONS,
   "task_hash": "$TASK_HASH",
   "tag": "$CURRENT_REF",
   "claude_version": "$CLAUDE_VERSION"

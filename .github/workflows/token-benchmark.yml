@@ -70,39 +70,48 @@ jobs:
         with:
           name: token-benchmark-raw-${{ github.run_id }}
           path: |
-            baseline.jsonl
-            post.jsonl
-            toggle_baseline.jsonl
-            toggle_post.jsonl
+            baseline-*.jsonl
+            post-*.jsonl
+            toggle_baseline-*.jsonl
+            toggle_post-*.jsonl
+            task_names.txt
             docs/marc/benchmarks/**/manifest.json
           if-no-files-found: warn
           retention-days: 90
 
+      # Issue #275: per-task, not a single blended number — see
+      # scripts/benchmark_report.py's module docstring for why. task_names.txt
+      # is written by run_token_benchmark.sh itself (real run or stub) so this
+      # step never has to know the task set independently.
       - name: Generate Report
         id: report
         run: |
-          echo "## Inter-release Comparison (Previous Release vs Current)" > report.txt
-          python3 core/scripts/token_telemetry_report.py --path baseline.jsonl --compare post.jsonl >> report.txt
-          echo "" >> report.txt
-          echo "## Causal Proof (No Guard vs Guard=350 in Current)" >> report.txt
-          python3 core/scripts/token_telemetry_report.py --path toggle_baseline.jsonl --compare toggle_post.jsonl >> report.txt
+          python3 scripts/benchmark_report.py --task-names-file task_names.txt --dir "$PWD" > report.txt
           echo "### 📊 Token Consumption Benchmark Report" >> $GITHUB_STEP_SUMMARY
           echo '```text' >> $GITHUB_STEP_SUMMARY
           cat report.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      # Regenerated on every release from the SAME baseline.jsonl/post.jsonl
-      # this job already produced above (origin: #285): --baseline feeds the
+      # Regenerated on every release from the SAME baseline-control.jsonl/
+      # post-control.jsonl this job already produced above (origin: #285):
+      # --baseline feeds the
       # "Tokens Saved" badge, --path feeds the telemetry.md trend chart, and
       # generate_badge() inside generate_telemetry_dashboard.py now runs
       # unconditionally in the same invocation, so the badge and the
       # dashboard can never diverge (one script run, one data source, one
       # commit). See scripts/test_telemetry_badge_dashboard_same_run.sh for
       # the wired-in regression test.
+      # Issue #275: the badge/dashboard need ONE number, but the task set is
+      # now three deliberately-different workload shapes, and a sum across
+      # them is decoration (see scripts/benchmark_report.py). Rather than
+      # invent a blended figure for a public badge, we feed it the "control"
+      # task alone (the original, verbatim board.py task this badge always
+      # represented pre-#275) — same semantics as before, now explicitly one
+      # task among several rather than implicitly the only one.
       - name: Generate Dashboard Files
         if: github.event_name == 'release'
         run: |
-          python3 scripts/generate_telemetry_dashboard.py --path post.jsonl --baseline baseline.jsonl
+          python3 scripts/generate_telemetry_dashboard.py --path post-control.jsonl --baseline baseline-control.jsonl
 
       # Issue #291 (second defect): on a `release` event actions/checkout
       # checks out the tag, leaving the workspace in detached HEAD. `git
