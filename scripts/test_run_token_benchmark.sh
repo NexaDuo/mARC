@@ -246,16 +246,63 @@ STUB
 
 write_claude_stub "2.1.200"
 v1="$(PATH="$CLAUDE_BIN" resolve_claude_version)"
-hash1="$(compute_task_hash "$v1" "claude-sonnet-5" "read core/scripts/board.py and output a summary")"
+hash1="$(compute_task_hash "$v1" "claude-sonnet-5" "$(task_set_blob)" "$ITERATIONS")"
 
 write_claude_stub "2.2.0"
 v2="$(PATH="$CLAUDE_BIN" resolve_claude_version)"
-hash2="$(compute_task_hash "$v2" "claude-sonnet-5" "read core/scripts/board.py and output a summary")"
+hash2="$(compute_task_hash "$v2" "claude-sonnet-5" "$(task_set_blob)" "$ITERATIONS")"
 
 if [ "$v1" != "$v2" ] && [ "$hash1" != "$hash2" ]; then
     pass "post-install capture differs across CLI versions ('$v1' vs '$v2') and so does the hash ('$hash1' vs '$hash2') -- drift guard is live"
 else
     fail "post-install capture/hash did not differ across CLI versions (v1='$v1' v2='$v2' hash1='$hash1' hash2='$hash2')"
+fi
+
+# -----------------------------------------------------------------------
+# Part 3: the task-SET hash covers the whole set, not just one task
+# (issue #275) -- changing any task's name/prompt, adding/removing a task,
+# or changing the iteration count must change the hash. This is the
+# specific regression #275 calls out: the old compute_task_hash() took a
+# single task string and would not notice drift in any task other than the
+# (former) only one.
+# -----------------------------------------------------------------------
+
+base_blob="$(task_set_blob)"
+base_hash="$(compute_task_hash "2.1.272 (Claude Code)" "claude-sonnet-5" "$base_blob" "$ITERATIONS")"
+
+# 3a. Changing a task's prompt (simulating drift in any task, not just the
+# first) changes the hash.
+altered_blob="${base_blob/read AGENTS.md/read SOMETHING_ELSE.md}"
+if [ "$altered_blob" = "$base_blob" ]; then
+    fail "test setup bug: altered_blob did not actually differ from base_blob"
+else
+    altered_hash="$(compute_task_hash "2.1.272 (Claude Code)" "claude-sonnet-5" "$altered_blob" "$ITERATIONS")"
+    if [ "$altered_hash" != "$base_hash" ]; then
+        pass "task-set hash changes when a non-first task's prompt changes"
+    else
+        fail "task-set hash did NOT change when a non-first task's prompt changed -- drift guard blind to tasks other than the first (issue #275 regression)"
+    fi
+fi
+
+# 3b. Changing the iteration count changes the hash.
+iter_hash="$(compute_task_hash "2.1.272 (Claude Code)" "claude-sonnet-5" "$base_blob" "3")"
+if [ "$iter_hash" != "$base_hash" ]; then
+    pass "task-set hash changes when the iteration count changes"
+else
+    fail "task-set hash did NOT change when the iteration count changed"
+fi
+
+# 3c. Removing a task (shorter blob) changes the hash.
+truncated_blob="${base_blob%%|neutral=*}|"
+if [ "$truncated_blob" = "$base_blob" ]; then
+    fail "test setup bug: truncated_blob did not actually differ from base_blob"
+else
+    truncated_hash="$(compute_task_hash "2.1.272 (Claude Code)" "claude-sonnet-5" "$truncated_blob" "$ITERATIONS")"
+    if [ "$truncated_hash" != "$base_hash" ]; then
+        pass "task-set hash changes when a task is removed from the set"
+    else
+        fail "task-set hash did NOT change when a task was removed from the set"
+    fi
 fi
 
 # 2c. A `claude --version` failure AFTER install must fail loudly, not hash
