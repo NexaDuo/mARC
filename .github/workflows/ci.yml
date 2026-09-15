@@ -412,6 +412,17 @@ jobs:
           bash -n scripts/run_token_benchmark.sh
           bash scripts/test_run_token_benchmark.sh
 
+      # 6a1b. Issue #291: the real (non-stub) measurement path must have a
+      #       reachable trigger that does not require cutting a release —
+      #       `release` never fires in this repo (releases are published
+      #       via GITHUB_TOKEN, which cannot raise workflow events). Asserts
+      #       both the workflow's workflow_dispatch/real_run wiring and the
+      #       script's is_real_run() decision function directly, offline.
+      - name: run_token_benchmark.sh — dispatch-reachability self-test
+        run: |
+          shellcheck scripts/test_benchmark_dispatch_reachable.sh
+          bash scripts/test_benchmark_dispatch_reachable.sh
+
       # 6a3. Published telemetry must never carry fabricated/stub data
       #      (issue #274). Asserts docs/marc/telemetry.md and
       #      docs/marc/telemetry-badge.json contain none of the stub markers

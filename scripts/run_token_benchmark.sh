@@ -4,6 +4,11 @@ set -eo pipefail
 EVENT_NAME="${GITHUB_EVENT_NAME:-push}"
 CURRENT_REF="${GITHUB_REF_NAME:-main}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
+# Set by the workflow from the `real_run` workflow_dispatch input (issue
+# #291). A dispatched run defaults to the stub path unless explicitly asked
+# for the real (paid, nine-`claude`-invocation) measurement — see
+# is_real_run() below.
+REAL_RUN_INPUT="${REAL_RUN_INPUT:-false}"
 
 MODEL="claude-sonnet-5"
 # Target a file larger than 350 lines so read-guard actually fires
@@ -114,6 +119,32 @@ sys.exit(1)
     fi
 }
 
+# is_real_run: decides whether this invocation should take the real
+# three-arm measurement path or the free stub path. Extracted as its own
+# testable function (issue #291): before this change, main() gated solely on
+# `[ "$EVENT_NAME" != "release" ]`, so a `release` event was the ONLY
+# reachable trigger for the real path — and that event can never fire in
+# this repo, because releases are published by `release.yml` using
+# `GITHUB_TOKEN`, and GitHub does not raise workflow events from
+# `GITHUB_TOKEN` actions (documented anti-recursion safeguard). The real
+# path was therefore permanently unreachable.
+#
+# Fix: a `workflow_dispatch` run with its `real_run` input explicitly set to
+# "true" is ALSO a real run. Every other case (push, pull_request, a
+# workflow_dispatch left at its default `real_run=false`) stays on the free
+# stub path — a bare "add a trigger" without this check would let a
+# dispatched run silently stub, which is a sixth layer of the exact same
+# bug (see scripts/test_benchmark_dispatch_reachable.sh, which pins this).
+is_real_run() {
+    if [ "$EVENT_NAME" = "release" ]; then
+        return 0
+    fi
+    if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REAL_RUN_INPUT" = "true" ]; then
+        return 0
+    fi
+    return 1
+}
+
 run_claude_safely() {
     local target_file=$1
     local state_dir=$2
@@ -136,8 +167,8 @@ run_claude_safely() {
 }
 
 main() {
-    if [ "$EVENT_NAME" != "release" ]; then
-        echo "Not a release. Generating stubs for PR/push."
+    if ! is_real_run; then
+        echo "Not a real run (event=$EVENT_NAME, real_run input=$REAL_RUN_INPUT). Generating stubs for PR/push/unconfirmed dispatch."
         cat << 'JSON' > baseline.jsonl
 {"session_id": "sess-baseline-1", "weighted": 15000, "turns": 5, "model": "stub-model", "timestamp": 1700000000}
 {"session_id": "sess-baseline-2", "weighted": 8000, "turns": 3, "model": "stub-model", "timestamp": 1700000100}
@@ -243,7 +274,14 @@ CONFIG
 
     cp post.jsonl toggle_post.jsonl
 
-    # Save current run as baseline for future
+    # Save current run as baseline for future. On a `workflow_dispatch` real
+    # run CURRENT_REF is a branch name (e.g. "main"), not a tag, so this
+    # writes to a "main"-named cache directory instead of a version-named
+    # one. That's harmless: token-benchmark.yml never commits/pushes docs/
+    # for a workflow_dispatch run (see the workflow's `if:
+    # github.event_name == 'release'` gates), so this directory only lives
+    # on the runner and is captured by the artifact upload step, never in
+    # the repo's real docs/marc/benchmarks/ tree.
     mkdir -p "docs/marc/benchmarks/$CURRENT_REF"
     cp post.jsonl "docs/marc/benchmarks/$CURRENT_REF/baseline.jsonl"
     cat << JSON > "docs/marc/benchmarks/$CURRENT_REF/manifest.json"
