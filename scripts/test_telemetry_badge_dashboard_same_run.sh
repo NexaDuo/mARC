@@ -70,10 +70,14 @@ elif ! echo "$STEP_TEXT" | grep -q "generate_telemetry_dashboard.py"; then
     fail "'Generate Dashboard Files' step no longer calls generate_telemetry_dashboard.py"
 elif ! echo "$STEP_TEXT" | grep -q -- "--baseline"; then
     fail "'Generate Dashboard Files' step does not pass --baseline — the badge would have no real comparison data on release"
-elif ! echo "$STEP_TEXT" | grep -q -- "--neutral-baseline" || ! echo "$STEP_TEXT" | grep -q -- "--neutral-path"; then
-    fail "'Generate Dashboard Files' step does not pass --neutral-baseline/--neutral-path -- the badge would have no noise floor to gate on (issue #296) and would fall back to 'No Data' on every real run"
+elif ! echo "$STEP_TEXT" | grep -q -- "--neutral-no-guard" || ! echo "$STEP_TEXT" | grep -q -- "--neutral-guarded"; then
+    fail "'Generate Dashboard Files' step does not pass --neutral-no-guard/--neutral-guarded -- the badge would have no noise floor to gate on (issue #296) and would fall back to 'No Data' on every real run"
+elif echo "$STEP_TEXT" | grep -q -- "--neutral-path\|--neutral-baseline"; then
+    fail "'Generate Dashboard Files' step still uses the retired --neutral-path/--neutral-baseline flags (the wrong, inter-release arm A vs B pairing caught in PR #297 review) instead of --neutral-no-guard/--neutral-guarded"
+elif ! echo "$STEP_TEXT" | grep -q "toggle_baseline-neutral.jsonl" || ! echo "$STEP_TEXT" | grep -q "toggle_post-neutral.jsonl"; then
+    fail "'Generate Dashboard Files' step does not feed the same-commit toggle_baseline/toggle_post neutral files -- the noise floor would absorb inter-release drift instead of measuring pure noise (issue #296/PR #297)"
 else
-    pass "'Generate Dashboard Files' step passes --baseline and --neutral-baseline/--neutral-path to generate_telemetry_dashboard.py"
+    pass "'Generate Dashboard Files' step passes --baseline and the same-commit --neutral-no-guard/--neutral-guarded pair to generate_telemetry_dashboard.py"
 fi
 
 # --- 2. Dynamic check -------------------------------------------------------
@@ -86,15 +90,17 @@ JSON
 cat > "$TMPDIR/post.jsonl" <<'JSON'
 {"session_id": "sess-fixture-post-1", "weighted": 9000, "turns": 4, "model": "fixture-model", "ts": 1800000500}
 JSON
-# `neutral` fixtures (issue #296): the guard structurally cannot fire on this
-# task, so its own baseline-vs-post gap is the noise floor. A tiny 2% gap
-# here keeps the control fixture's 55% delta well above it, so this check
-# still exercises the "real percentage" badge state, not "No Change".
-cat > "$TMPDIR/baseline-neutral.jsonl" <<'JSON'
-{"session_id": "sess-fixture-neutral-base-1", "weighted": 10000, "turns": 4, "model": "fixture-model", "ts": 1800000000}
+# `neutral` fixtures (issue #296, re-pointed to the same-commit pairing on
+# PR #297 review): the guard structurally cannot fire on this task, so the
+# gap between its SAME-COMMIT no-guard (arm C / toggle_baseline) and guarded
+# (arm B / toggle_post) files is the noise floor. A tiny 2% gap here keeps
+# the control fixture's 55% delta well above it, so this check still
+# exercises the "real percentage" badge state, not "No Change".
+cat > "$TMPDIR/toggle_baseline-neutral.jsonl" <<'JSON'
+{"session_id": "sess-fixture-neutral-noguard-1", "weighted": 10000, "turns": 4, "model": "fixture-model", "ts": 1800000000}
 JSON
-cat > "$TMPDIR/post-neutral.jsonl" <<'JSON'
-{"session_id": "sess-fixture-neutral-post-1", "weighted": 9800, "turns": 4, "model": "fixture-model", "ts": 1800000500}
+cat > "$TMPDIR/toggle_post-neutral.jsonl" <<'JSON'
+{"session_id": "sess-fixture-neutral-guarded-1", "weighted": 9800, "turns": 4, "model": "fixture-model", "ts": 1800000500}
 JSON
 
 MD_OUT="$TMPDIR/telemetry.md"
@@ -105,8 +111,8 @@ set +e
 python3 "$SCRIPT" \
     --path "$TMPDIR/post.jsonl" \
     --baseline "$TMPDIR/baseline.jsonl" \
-    --neutral-path "$TMPDIR/post-neutral.jsonl" \
-    --neutral-baseline "$TMPDIR/baseline-neutral.jsonl" \
+    --neutral-no-guard "$TMPDIR/toggle_baseline-neutral.jsonl" \
+    --neutral-guarded "$TMPDIR/toggle_post-neutral.jsonl" \
     --md-out "$MD_OUT" \
     --badge-out "$BADGE_OUT" 2>"$STDERR_LOG"
 RUN_STATUS=$?

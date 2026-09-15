@@ -2,14 +2,19 @@
 # Regression test for issue #296.
 #
 # Paid run 34987534132 measured the `neutral` task (the task the read-guard
-# structurally cannot fire on in either arm) at a 33.7% baseline-vs-post gap
-# -- pure measurement noise, since nothing under test could have moved it.
-# Publishing a per-release delta smaller than that gap as "savings" would
-# automate the exact fabrication issue #274 committed by hand (the "15.2%"
-# badge). generate_badge() in scripts/generate_telemetry_dashboard.py must:
+# structurally cannot fire on in either arm), on its SAME-COMMIT pairing
+# (arm C / toggle_baseline, no guard, vs arm B / toggle_post, guard=350), at
+# a 33.7% gap -- pure measurement noise, since nothing under test could have
+# moved it. Publishing a per-release delta smaller than that gap as
+# "savings" would automate the exact fabrication issue #274 committed by
+# hand (the "15.2%" badge). generate_badge() in
+# scripts/generate_telemetry_dashboard.py must:
 #
-#   1. Compute the noise floor from THIS run's own `neutral` baseline/post
-#      pair (never hardcoded).
+#   1. Compute the noise floor from THIS run's own same-commit `neutral`
+#      no-guard/guarded pair (never hardcoded, never the inter-release arm A
+#      vs B pairing -- that pairing differs by both release AND threshold
+#      and would absorb release drift into the floor; caught in PR #297
+#      review).
 #   2. Report "No Change" (not a number) when the reported task's delta does
 #      not exceed that floor.
 #   3. Still report a real percentage when the delta DOES exceed the floor
@@ -49,16 +54,20 @@ cat > "$TMPDIR/post-control.jsonl" <<'JSON'
 {"session_id": "c10", "weighted": 10550}
 JSON
 
-# Neutral task: ~25% delta -- larger than control's ~5%, so it IS the noise
-# floor and control's delta must NOT clear it.
-cat > "$TMPDIR/baseline-neutral.jsonl" <<'JSON'
+# Neutral task, same-commit pairing (arm C / toggle_baseline = no guard, vs
+# arm B / toggle_post = guard=350 -- re-pointed on PR #297 review from the
+# wrong inter-release arm A vs B pairing, which would have absorbed release
+# drift into the floor instead of measuring pure noise): ~25% delta --
+# larger than control's ~5%, so it IS the noise floor and control's delta
+# must NOT clear it.
+cat > "$TMPDIR/toggle_baseline-neutral.jsonl" <<'JSON'
 {"session_id": "n1", "weighted": 7900}
 {"session_id": "n2", "weighted": 8000}
 {"session_id": "n3", "weighted": 8100}
 {"session_id": "n4", "weighted": 7950}
 {"session_id": "n5", "weighted": 8050}
 JSON
-cat > "$TMPDIR/post-neutral.jsonl" <<'JSON'
+cat > "$TMPDIR/toggle_post-neutral.jsonl" <<'JSON'
 {"session_id": "n6", "weighted": 9900}
 {"session_id": "n7", "weighted": 10000}
 {"session_id": "n8", "weighted": 10100}
@@ -80,8 +89,8 @@ run_badge() {
 # --- 1. Within-noise: delta below the measured floor -> "No Change" -------
 WITHIN_NOISE_OUT="$TMPDIR/within-noise-badge.json"
 if ! run_badge "$WITHIN_NOISE_OUT" \
-    --neutral-path "$TMPDIR/post-neutral.jsonl" \
-    --neutral-baseline "$TMPDIR/baseline-neutral.jsonl"; then
+    --neutral-no-guard "$TMPDIR/toggle_baseline-neutral.jsonl" \
+    --neutral-guarded "$TMPDIR/toggle_post-neutral.jsonl"; then
     fail "generate_telemetry_dashboard.py exited non-zero on the within-noise fixture"
 elif grep -q '"No Change"' "$WITHIN_NOISE_OUT" && grep -q '"informational"' "$WITHIN_NOISE_OUT"; then
     pass "badge reports 'No Change'/informational when the reported delta does not exceed the measured noise floor"
@@ -110,14 +119,14 @@ else
 fi
 
 # --- 3. Neutral files present but empty -> also "No Data" (no usable floor)
-EMPTY_NEUTRAL_BASE="$TMPDIR/empty-baseline-neutral.jsonl"
-EMPTY_NEUTRAL_POST="$TMPDIR/empty-post-neutral.jsonl"
-: > "$EMPTY_NEUTRAL_BASE"
-: > "$EMPTY_NEUTRAL_POST"
+EMPTY_NEUTRAL_NO_GUARD="$TMPDIR/empty-toggle_baseline-neutral.jsonl"
+EMPTY_NEUTRAL_GUARDED="$TMPDIR/empty-toggle_post-neutral.jsonl"
+: > "$EMPTY_NEUTRAL_NO_GUARD"
+: > "$EMPTY_NEUTRAL_GUARDED"
 EMPTY_NEUTRAL_OUT="$TMPDIR/empty-neutral-badge.json"
 if ! run_badge "$EMPTY_NEUTRAL_OUT" \
-    --neutral-path "$EMPTY_NEUTRAL_POST" \
-    --neutral-baseline "$EMPTY_NEUTRAL_BASE"; then
+    --neutral-no-guard "$EMPTY_NEUTRAL_NO_GUARD" \
+    --neutral-guarded "$EMPTY_NEUTRAL_GUARDED"; then
     fail "generate_telemetry_dashboard.py exited non-zero with empty --neutral-* files"
 elif grep -q '"No Data"' "$EMPTY_NEUTRAL_OUT" && grep -q '"inactive"' "$EMPTY_NEUTRAL_OUT"; then
     pass "badge falls back to honest 'No Data'/inactive when neutral files exist but yield no floor"

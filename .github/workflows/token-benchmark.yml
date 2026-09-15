@@ -121,12 +121,19 @@ jobs:
       # task alone (the original, verbatim board.py task this badge always
       # represented pre-#275) — same semantics as before, now explicitly one
       # task among several rather than implicitly the only one.
-      # Issue #296: also feed the "neutral" task's baseline/post pair.
-      # `neutral` is the task the guard structurally cannot fire on in
-      # either arm B or C, so its own baseline-vs-post gap is pure
-      # measurement noise, not a guard effect — generate_badge() uses it as
-      # the noise floor the reported control-task delta must clear before
-      # the badge is allowed to show a number instead of "No Change".
+      # Issue #296: also feed the "neutral" task's noise-floor pair.
+      # `neutral` is the task the guard structurally cannot fire on, so any
+      # gap between two arms that only differ by the guard's threshold is
+      # pure measurement noise, not a guard effect. That pairing MUST be
+      # same-commit — arm C (toggle_baseline, guard=999999) vs arm B
+      # (toggle_post, guard=350), the codebase's own "Causal Proof" pairing
+      # — never baseline-neutral.jsonl/post-neutral.jsonl (arm A, the
+      # PREVIOUS release, vs arm B). That inter-release pairing differs by
+      # both release AND threshold, so it would absorb ordinary release-to-
+      # release drift into the floor and silently inflate it over time,
+      # suppressing real findings (review on PR #297 caught this — the
+      # first version of this step used the wrong pairing). See
+      # generate_badge()'s docstring in generate_telemetry_dashboard.py.
       # Issue #291/#296: publishing (this step and "Commit Dashboard and
       # Benchmarks" below) now runs on a `release` event OR a
       # `workflow_dispatch` run that opted into the real measurement
@@ -138,7 +145,7 @@ jobs:
         run: |
           python3 scripts/generate_telemetry_dashboard.py \
             --path post-control.jsonl --baseline baseline-control.jsonl \
-            --neutral-path post-neutral.jsonl --neutral-baseline baseline-neutral.jsonl
+            --neutral-no-guard toggle_baseline-neutral.jsonl --neutral-guarded toggle_post-neutral.jsonl
 
       # Issue #291 (second defect): on a `release` event actions/checkout
       # checks out the tag, leaving the workspace in detached HEAD. `git

@@ -371,11 +371,17 @@ CONFIG
     # Save current run as baseline for future. On a `workflow_dispatch` real
     # run CURRENT_REF is a branch name (e.g. "main"), not a tag, so this
     # writes to a "main"-named cache directory instead of a version-named
-    # one. That's harmless: token-benchmark.yml never commits/pushes docs/
-    # for a workflow_dispatch run (see the workflow's `if:
-    # github.event_name == 'release'` gates), so this directory only lives
-    # on the runner and is captured by the artifact upload step, never in
-    # the repo's real docs/marc/benchmarks/ tree.
+    # one. Issue #296: a `workflow_dispatch` run with `real_run=true` DOES
+    # now commit/push docs/ (see token-benchmark.yml's "Generate Dashboard
+    # Files" / "Commit Dashboard and Benchmarks" `if:` conditions, which
+    # publish on `release` OR a real-run dispatch) -- this directory is no
+    # longer runner-only in that case, and a repeated real dispatch on the
+    # same branch will overwrite its own prior "$CURRENT_REF" cache entry
+    # (see docs/marc/benchmarks/README.md for why that's an intentional
+    # cache, not an archive -- use a `run-<workflow-run-id>/` copy instead
+    # to preserve a specific measurement permanently). It only stays
+    # runner-only, captured solely by the artifact upload step, on the free
+    # stub path (push/pull_request/dispatch-without-real_run).
     mkdir -p "docs/marc/benchmarks/$CURRENT_REF"
     for name in "${TASK_NAMES[@]}"; do
         cp "post-$name.jsonl" "docs/marc/benchmarks/$CURRENT_REF/baseline-$name.jsonl"

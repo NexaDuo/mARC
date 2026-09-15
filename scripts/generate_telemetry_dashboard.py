@@ -57,7 +57,7 @@ def _pct_delta(base_median: float, post_median: float) -> float:
     return ((base_median - post_median) / base_median) * 100
 
 
-def generate_badge(baseline_path, current_path, neutral_baseline_path, neutral_current_path, output_path):
+def generate_badge(baseline_path, current_path, neutral_no_guard_path, neutral_guarded_path, output_path):
     """Write the "Tokens Saved (Last Release)" shields.io endpoint badge.
 
     Unconditional by design (origin: #285): this is always called from
@@ -70,16 +70,26 @@ def generate_badge(baseline_path, current_path, neutral_baseline_path, neutral_c
     expected reading for most releases. Three states, in order:
 
       1. "No Data" (inactive) — no baseline/current data, or no `neutral`
-         data to measure a noise floor from. A missing noise floor falls
+         pair to measure a noise floor from. A missing noise floor falls
          back to "No Data", NEVER to an ungated raw number — publishing a
          delta without a floor to gate it is the exact failure that put a
          fabricated 15.2% on this badge before (issue #274/#279).
       2. "No Change" (informational) — the reported task's delta does not
          exceed the noise floor measured from `neutral` (the task the guard
-         structurally cannot fire on in either arm; its own baseline-vs-post
-         gap is pure run-to-run variance — run 34987534132 measured it at
-         33.7%). Below that floor, a number is indistinguishable from noise.
+         structurally cannot fire on in either arm). Below that floor, a
+         number is indistinguishable from noise.
       3. A real percentage (success/orange) — the delta clears the floor.
+
+    The noise floor MUST be a same-commit pairing (`neutral_no_guard_path`
+    = arm C, guard=999999, vs `neutral_guarded_path` = arm B, guard=350 —
+    the "Causal Proof" pairing scripts/benchmark_report.py also uses for
+    `neutral`), never an inter-release pairing (arm A, the previous
+    release, vs arm B). An inter-release `neutral` gap differs by both
+    release AND threshold, so it would absorb ordinary release-to-release
+    drift into the floor and silently inflate it over time as more releases
+    ship, suppressing real findings — a mistake caught in review on PR #297
+    before it shipped. Run 34987534132's same-commit `neutral` pair
+    measured this floor at 33.7%.
 
     MEDIAN, not sum, across iterations (reusing benchmark_report.
     median_weighted — see its module docstring and the import comment above
@@ -115,16 +125,17 @@ def generate_badge(baseline_path, current_path, neutral_baseline_path, neutral_c
         write(no_data_badge)
         return
 
-    # Noise floor: the absolute percentage gap between `neutral`'s own two
-    # arms. `neutral` cannot be affected by the thing under test, so this
-    # gap IS the instrument's measurement noise, computed fresh from this
-    # run's own data — never hardcoded (issue #296).
+    # Noise floor: the absolute percentage gap between `neutral`'s two
+    # SAME-COMMIT arms (no-guard vs guard=350). `neutral` cannot be
+    # affected by the guard, so this gap IS the instrument's measurement
+    # noise, computed fresh from this run's own data — never hardcoded
+    # (issue #296).
     floor_pct = None
-    if neutral_baseline_path and neutral_current_path:
-        neutral_base_sample = benchmark_report.median_weighted(neutral_baseline_path)
-        neutral_post_sample = benchmark_report.median_weighted(neutral_current_path)
-        if neutral_base_sample is not None and neutral_post_sample is not None and neutral_base_sample[0] > 0:
-            floor_pct = abs(_pct_delta(neutral_base_sample[0], neutral_post_sample[0]))
+    if neutral_no_guard_path and neutral_guarded_path:
+        neutral_no_guard_sample = benchmark_report.median_weighted(neutral_no_guard_path)
+        neutral_guarded_sample = benchmark_report.median_weighted(neutral_guarded_path)
+        if neutral_no_guard_sample is not None and neutral_guarded_sample is not None and neutral_no_guard_sample[0] > 0:
+            floor_pct = abs(_pct_delta(neutral_no_guard_sample[0], neutral_guarded_sample[0]))
 
     if floor_pct is None:
         # `neutral` is missing or yields no usable floor — publish nothing
@@ -157,14 +168,17 @@ def main():
                          help="baseline (pre-optimization / previous-release) telemetry JSONL to diff "
                               "against --path for the 'Tokens Saved (Last Release)' badge; omit for an "
                               "honest 'No Data' badge")
-    parser.add_argument("--neutral-baseline", required=False,
-                         help="baseline telemetry JSONL for the 'neutral' task (the task the guard "
-                              "structurally cannot fire on) — its own baseline-vs-post gap is the "
-                              "measurement noise floor the badge gates on. Omit for an honest 'No Data' "
-                              "badge rather than an ungated number.")
-    parser.add_argument("--neutral-path", required=False,
-                         help="current/post telemetry JSONL for the 'neutral' task, paired with "
-                              "--neutral-baseline for the noise floor.")
+    parser.add_argument("--neutral-no-guard", required=False,
+                         help="'neutral' task telemetry JSONL from the SAME-COMMIT no-guard arm "
+                              "(arm C / toggle_baseline, guard=999999). Paired with --neutral-guarded "
+                              "for the noise floor the badge gates on -- MUST be same-commit as its "
+                              "pair, never an inter-release baseline (see generate_badge()'s "
+                              "docstring). Omit for an honest 'No Data' badge rather than an ungated "
+                              "number.")
+    parser.add_argument("--neutral-guarded", required=False,
+                         help="'neutral' task telemetry JSONL from the SAME-COMMIT guard=350 arm "
+                              "(arm B / toggle_post), paired with --neutral-no-guard for the noise "
+                              "floor.")
     parser.add_argument("--md-out", default="docs/marc/telemetry.md")
     parser.add_argument("--badge-out", default="docs/marc/telemetry-badge.json")
     args = parser.parse_args()
@@ -180,7 +194,7 @@ def main():
     # benchmark_report.median_weighted) rather than reusing `sessions`
     # above, which sums per-session — the badge needs the median-per-sample
     # methodology benchmark_report.py already implements (issue #296).
-    generate_badge(args.baseline, args.path, args.neutral_baseline, args.neutral_path, args.badge_out)
+    generate_badge(args.baseline, args.path, args.neutral_no_guard, args.neutral_guarded, args.badge_out)
 
 if __name__ == "__main__":
     main()
