@@ -13,7 +13,10 @@ on:
   # measurement was permanently unreachable. workflow_dispatch makes it
   # runnable on demand instead. `real_run` defaults to false (the free
   # stub/report path) so a casual dispatch never spends money; it must be
-  # explicitly set to run the real, nine-`claude`-invocation measurement.
+  # explicitly set to run the real measurement — issue #293: 4 tasks x 3
+  # arms x 5 iterations = 60 live `claude` invocations if arm A (the
+  # previous release) must be re-run, or 40 if its baseline is cached (see
+  # scripts/run_token_benchmark.sh's manifest/task-hash reuse logic).
   # A dispatched run NEVER commits/pushes docs or publishes the badge (see
   # the `if: github.event_name == 'release'` gates below) — only a
   # `release` event may publish. It only reports to the job summary and
@@ -22,9 +25,10 @@ on:
     inputs:
       real_run:
         description: >-
-          Run the REAL three-arm measurement (costs real API money: nine
-          live `claude` invocations). Leave false to just exercise the
-          stub/report path for free.
+          Run the REAL four-task, three-arm measurement (costs real API
+          money: 40-60 live `claude` invocations, depending on whether the
+          previous release's baseline is cached). Leave false to just
+          exercise the stub/report path for free.
         required: false
         type: boolean
         default: false
@@ -55,15 +59,18 @@ jobs:
         run: |
           bash scripts/run_token_benchmark.sh
 
-      # Issue #291 (second defect): a run's raw measurement — the four
-      # jsonl files and the manifest run_token_benchmark.sh generates — must
-      # be captured as a workflow artifact BEFORE any commit/push is
+      # Issue #291 (second defect): a run's raw measurement — the 16 jsonl
+      # files (4 file types: baseline/post/toggle_baseline/toggle_post x 4
+      # tasks, issue #293) and the manifest run_token_benchmark.sh generates
+      # — must be captured as a workflow artifact BEFORE any commit/push is
       # attempted, and unconditionally (`if: always()`), so a failed publish
       # (e.g. the detached-HEAD push failure this issue also fixes) never
       # again destroys a paid-for measurement. Real run or stub, the upload
       # is cheap; skipping it is what was expensive last time (run
       # 34925472394: nine real `claude` invocations produced numbers that
-      # only ever existed on the runner).
+      # only ever existed on the runner — the task set has since grown to 4
+      # tasks (issue #293), so a rerun of that same mistake today would be
+      # 40-60 invocations, not nine).
       - name: Upload Raw Benchmark Data
         if: always()
         uses: actions/upload-artifact@v4
@@ -102,12 +109,15 @@ jobs:
       # commit). See scripts/test_telemetry_badge_dashboard_same_run.sh for
       # the wired-in regression test.
       # Issue #275: the badge/dashboard need ONE number, but the task set is
-      # now three deliberately-different workload shapes, and a sum across
-      # them is decoration (see scripts/benchmark_report.py). Rather than
-      # invent a blended figure for a public badge, we feed it the "control"
-      # task alone (the original, verbatim board.py task this badge always
+      # now four deliberately-different workload shapes (issue #293 added
+      # `fixture`, a synthetic calibration control), and a sum across them is
+      # decoration (see scripts/benchmark_report.py). Rather than invent a
+      # blended figure for a public badge, we feed it the "control" task
+      # alone (the original, verbatim board.py task this badge always
       # represented pre-#275) — same semantics as before, now explicitly one
-      # task among several rather than implicitly the only one.
+      # task among several rather than implicitly the only one. `fixture` in
+      # particular must NEVER feed this: it is instrument calibration, not a
+      # claim about real work (see scripts/generate_benchmark_fixture.py).
       - name: Generate Dashboard Files
         if: github.event_name == 'release'
         run: |

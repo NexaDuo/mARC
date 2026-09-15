@@ -12,7 +12,18 @@ REAL_RUN_INPUT="${REAL_RUN_INPUT:-false}"
 
 MODEL="claude-sonnet-5"
 
-# --- Task set (issue #275) ---------------------------------------------------
+# FIXTURE_DIR: where the `fixture` task's synthetic data is generated at
+# benchmark time (issue #293 review, `@rev` finding — see the `fixture` task
+# comment below). Computed once, as an ABSOLUTE path outside $GITHUB_WORKSPACE
+# (a sibling of it), so the SAME path is valid whether a `claude` invocation
+# runs from $GITHUB_WORKSPACE itself (arm B/C) or from the `../arm-a` git
+# worktree main() adds below (arm A) — both are siblings of this directory.
+# Generation happens once in main()'s real-run branch (see
+# generate_fixture_data()), never on the free stub path.
+FIXTURE_DIR="$(cd "$GITHUB_WORKSPACE/.." && pwd)/benchmark-fixture"
+FIXTURE_EXPECTED_FILE="$FIXTURE_DIR.expected.json"
+
+# --- Task set (issue #275; 4th task added issue #293 review) -----------------
 # The single hardcoded board.py task measured exactly one workload shape: a
 # large single-file read where the work IS the read, so a read-guard (which
 # only forces targeted reads/grep instead of one big Read) has no cheaper path
@@ -21,7 +32,7 @@ MODEL="claude-sonnet-5"
 # unguarded arms, different releases, 2% apart) — the missing piece was task
 # diversity, not instrument validity.
 #
-# Three tasks, three different shapes:
+# Four tasks, four different shapes:
 #   control  - VERBATIM the original task. A calibrated control with known
 #              sign/magnitude (guard loses, 3.1x, run 34961492007). Kept
 #              unchanged so this run stays comparable to that measurement.
@@ -40,16 +51,38 @@ MODEL="claude-sonnet-5"
 #              defaults to grep for this shape of task regardless of arm,
 #              this task will read as "neutral" rather than "guard wins", and
 #              that itself would be a real, reportable finding (see PR body).
-#   neutral  - AGENTS.md (143 lines), comfortably under the 350-line
+#   fixture  - A SYNTHETIC POSITIVE CONTROL (issue #293 review, `@rev`,
+#              Medium): `sweep`'s guard-favorable shape is a bet on this
+#              repo's actual file sizes (only 3/10 core/scripts/*.py files
+#              exceed 350 lines), and the agent may reach for `Grep` (which
+#              the guard never intercepts) regardless of arm, which would
+#              read `sweep` as neutral rather than as evidence either way.
+#              `fixture` removes that bet: scripts/generate_benchmark_fixture.py
+#              deterministically generates 6 files at benchmark time (not
+#              committed), 5 of them comfortably over the 350-line threshold
+#              by construction, where the correct answer (a single integer:
+#              the sum of every spelled-out "signal" count across all 6
+#              files) is verifiable, and where each line ALSO contains decoy
+#              digits (module/pass ids) that are NOT part of the sum, so a
+#              lazy digit-`grep`-and-sum one-liner produces a WRONG answer
+#              rather than a cheaper-but-still-correct one. See that script's
+#              module docstring for the full design rationale. This task's
+#              number is INSTRUMENT CALIBRATION ONLY — like the other three,
+#              it never feeds the badge or dashboard (see
+#              scripts/generate_telemetry_dashboard.py's `control`-only
+#              wiring) — and scripts/benchmark_report.py labels it as a
+#              control in the report output.
+#   neutral  - AGENTS.md (142 lines), comfortably under the 350-line
 #              threshold used by arm B. The guard structurally cannot fire on
 #              it in either configured arm, so any difference this task shows
 #              between arm B and arm C is pure run-to-run variance, not a
 #              guard effect — a sanity check on the other two tasks' deltas.
-TASK_NAMES=(control sweep neutral)
+TASK_NAMES=(control sweep neutral fixture)
 TASK_PROMPTS=(
     "read core/scripts/board.py and output a summary"
     "List every top-level (module-level) function definition across all non-test .py files in core/scripts/ (skip any file whose name starts with test_). Format each as '<filename>: <function_name>(...)'. Do not include methods defined inside classes, or functions nested inside other functions."
     "read AGENTS.md and summarize its \"Operating principles\" section in 3 bullet points"
+    "Read every file in $FIXTURE_DIR (fixture_00.txt through fixture_05.txt). Each line describes an audit event for a numbered module and review pass; most lines also mention a small count of incidents, anomalies, alerts, regressions, warnings, or retries, spelled out in English words (e.g. 'seventeen'), never as digits. The digits that DO appear in each line are module and pass identifiers, not counts, and must NOT be included in your answer. Sum every spelled-out count across all 6 files and report the single grand total as one integer."
 )
 
 # Iterations per (task, arm). Run 34961492007's single arm C ranged 14,600 /
@@ -60,7 +93,8 @@ TASK_PROMPTS=(
 # drags or dominates the aggregate the way summing 3 values does; the median
 # of 5 needs 3 of 5 runs to agree before it moves. n=5 (not more) is a
 # deliberate cost tradeoff — see the PR body for the full invocation-count
-# and cost accounting across 3 tasks x 3 arms x 5 iterations.
+# and cost accounting across 4 tasks x 3 arms x 5 iterations (issue #293:
+# 40-60 live `claude` invocations, up from the 3-task set's 30-45).
 ITERATIONS=5
 
 # --- Testable helpers (defined before main(); see the sourcing guard at the
@@ -244,6 +278,18 @@ write_task_names() {
     printf '%s\n' "${TASK_NAMES[@]}" > "$GITHUB_WORKSPACE/task_names.txt"
 }
 
+# generate_fixture_data: (re)generates the `fixture` task's synthetic input
+# at FIXTURE_DIR via scripts/generate_benchmark_fixture.py. Only called from
+# main()'s real-run branch (never on the free stub path, which never invokes
+# `claude` and so has no use for the data). Generated ONCE per benchmark
+# invocation and reused across arms A/B/C/iterations — the generator is
+# deterministic (see its module docstring), so there is no correctness reason
+# to regenerate per arm, only cost reason not to.
+generate_fixture_data() {
+    echo "Generating synthetic fixture data for the 'fixture' task at $FIXTURE_DIR (not committed; issue #293)"
+    python3 "$GITHUB_WORKSPACE/scripts/generate_benchmark_fixture.py" "$FIXTURE_DIR" --expected-file "$FIXTURE_EXPECTED_FILE"
+}
+
 main() {
     if ! is_real_run; then
         echo "Not a real run (event=$EVENT_NAME, real_run input=$REAL_RUN_INPUT). Generating stubs for PR/push/unconfirmed dispatch."
@@ -272,6 +318,11 @@ JSON
     fi
 
     echo "Comparing $PREV_TAG (A) vs $CURRENT_REF (B/C), ${#TASK_NAMES[@]} tasks x $ITERATIONS iterations"
+
+    # Generated once, before any arm runs, so the exact same fixture content
+    # is available (by absolute path) to arm A's ../arm-a worktree and to
+    # arm B/C's $GITHUB_WORKSPACE — see FIXTURE_DIR's definition above.
+    generate_fixture_data
 
     # Install the CLI here, AFTER the (cheap) previous-tag resolution above but
     # BEFORE anything that hashes or otherwise depends on its version. This is
