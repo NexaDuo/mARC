@@ -56,24 +56,72 @@ def median_weighted(path: str) -> tuple[float, int] | None:
     return statistics.median(weighted), len(weighted)
 
 
-def fmt_cell(sample) -> str:
+def fmt_cell(sample, iterations: int | None = None) -> str:
     if sample is None:
-        return "n/a"
+        return "n/a" if iterations is None else f"n/a (n=0/{iterations})"
     median, n = sample
-    return f"{median:,.0f} (n={n})"
+    if iterations is None:
+        return f"{median:,.0f} (n={n})"
+    return f"{median:,.0f} (n={n}/{iterations})"
 
 
-def print_comparison_table(title: str, task_names: list[str], base_suffix: str, post_suffix: str, cost_per_million: float, base_dir: str) -> dict[str, float]:
+# Issue #295, AC3: the proposed threshold is literally "3 of 5" (this repo's
+# current ITERATIONS=5). Generalized as a 3/5 ratio of whatever ITERATIONS
+# this run actually used (floor), rather than hardcoding "3", so the gate
+# keeps working if ITERATIONS is ever changed elsewhere -- this PR does not
+# change ITERATIONS itself.
+UNTRUSTWORTHY_RATIO_NUM = 3
+UNTRUSTWORTHY_RATIO_DEN = 5
+
+
+def untrustworthy_threshold(iterations: int) -> int:
+    return (iterations * UNTRUSTWORTHY_RATIO_NUM) // UNTRUSTWORTHY_RATIO_DEN
+
+
+def cell_status(sample, iterations: int) -> str:
+    """Classify one (task, arm, file) cell against the requested iteration
+    count. Issue #295 AC2/AC3: any cell below ITERATIONS is flagged; a cell
+    at or below the untrustworthy threshold (3/5 by default) marks the row
+    untrustworthy rather than silently reporting a median over a
+    silently-reduced n."""
+    n = 0 if sample is None else sample[1]
+    if n >= iterations:
+        return "ok"
+    if n <= untrustworthy_threshold(iterations):
+        return "UNTRUSTWORTHY"
+    return "SHORT"
+
+
+def _worse(a: str, b: str) -> str:
+    rank = {"ok": 0, "SHORT": 1, "UNTRUSTWORTHY": 2}
+    return a if rank[a] >= rank[b] else b
+
+
+def print_comparison_table(title: str, task_names: list[str], base_suffix: str, post_suffix: str, cost_per_million: float, base_dir: str, iterations: int | None = None) -> dict:
     print(f"--- {title} ---")
-    print(f"{'task':<10} {'baseline (median)':>22} {'current (median)':>22} {'delta':>14} {'pct':>8}")
+    header = f"{'task':<10} {'baseline (median)':>22} {'current (median)':>22} {'delta':>14} {'pct':>8}"
+    if iterations is not None:
+        header += f"  {'status':<13}"
+    print(header)
     aggregate_base = 0.0
     aggregate_post = 0.0
     any_data = False
+    has_untrustworthy = False
     for name in task_names:
         base = median_weighted(os.path.join(base_dir, f"{base_suffix}-{name}.jsonl"))
         post = median_weighted(os.path.join(base_dir, f"{post_suffix}-{name}.jsonl"))
+
+        status_suffix = ""
+        if iterations is not None:
+            status = _worse(cell_status(base, iterations), cell_status(post, iterations))
+            if status != "ok":
+                has_untrustworthy = has_untrustworthy or status == "UNTRUSTWORTHY"
+                status_suffix = f"  {status:<13}"
+            else:
+                status_suffix = f"  {'ok':<13}"
+
         if base is None or post is None:
-            print(f"{name:<10} {fmt_cell(base):>22} {fmt_cell(post):>22} {'n/a':>14} {'n/a':>8}")
+            print(f"{name:<10} {fmt_cell(base, iterations):>22} {fmt_cell(post, iterations):>22} {'n/a':>14} {'n/a':>8}{status_suffix}")
             continue
         any_data = True
         base_med, post_med = base[0], post[0]
@@ -82,7 +130,7 @@ def print_comparison_table(title: str, task_names: list[str], base_suffix: str, 
         aggregate_base += base_med
         aggregate_post += post_med
         sign = "saved" if delta >= 0 else "cost more"
-        print(f"{name:<10} {fmt_cell(base):>22} {fmt_cell(post):>22} {delta:>+14,.0f} {pct:>+7.1f}%  ({sign})")
+        print(f"{name:<10} {fmt_cell(base, iterations):>22} {fmt_cell(post, iterations):>22} {delta:>+14,.0f} {pct:>+7.1f}%  ({sign}){status_suffix}")
 
     if any_data:
         agg_delta = aggregate_base - aggregate_post
@@ -94,8 +142,11 @@ def print_comparison_table(title: str, task_names: list[str], base_suffix: str, 
         print(f"(cost delta at ${cost_per_million}/1M weighted tokens, same caveat: ${cost_diff:+.4f})")
     else:
         print("\nno data for either side of this comparison.")
+    if iterations is not None and has_untrustworthy:
+        print(f"\n⚠ UNTRUSTWORTHY: at least one cell above has n <= {untrustworthy_threshold(iterations)}/{iterations} "
+              f"samples (issue #295) -- its median is over a silently-reduced n and should not be trusted.")
     print()
-    return {"aggregate_base": aggregate_base, "aggregate_post": aggregate_post}
+    return {"aggregate_base": aggregate_base, "aggregate_post": aggregate_post, "has_untrustworthy": has_untrustworthy}
 
 
 def main(argv=None) -> int:
@@ -103,6 +154,12 @@ def main(argv=None) -> int:
     ap.add_argument("--dir", default=".", help="directory containing the per-task JSONL files (default: cwd)")
     ap.add_argument("--task-names-file", default="task_names.txt", help="file listing task names, one per line (default: task_names.txt)")
     ap.add_argument("--cost-per-million", type=float, default=3.0, help="cost per million weighted tokens (default 3.0)")
+    ap.add_argument("--iterations", type=int, default=None,
+                     help="expected sample count per (task, arm) cell (issue #295). When given, each cell is "
+                          "compared against this count and flagged SHORT/UNTRUSTWORTHY; if any cell is "
+                          "UNTRUSTWORTHY (n <= 3/5 of --iterations) this script exits non-zero rather than "
+                          "silently reporting a median over a silently-reduced n. Omit for the free stub path, "
+                          "whose fixed n=2 samples are not a real measurement and must not trip this gate.")
     args = ap.parse_args(argv)
 
     names_path = args.task_names_file if os.path.isabs(args.task_names_file) else os.path.join(args.dir, args.task_names_file)
@@ -117,14 +174,22 @@ def main(argv=None) -> int:
 
     print(f"Task set: {', '.join(task_names)}\n")
 
-    print_comparison_table(
+    result_a = print_comparison_table(
         "Inter-release Comparison (Previous Release vs Current, guard=350)",
         task_names, "baseline", "post", args.cost_per_million, args.dir,
+        iterations=args.iterations,
     )
-    print_comparison_table(
+    result_b = print_comparison_table(
         "Causal Proof (No Guard vs Guard=350, same commit)",
         task_names, "toggle_baseline", "toggle_post", args.cost_per_million, args.dir,
+        iterations=args.iterations,
     )
+
+    if args.iterations is not None and (result_a["has_untrustworthy"] or result_b["has_untrustworthy"]):
+        print(f"FAIL: at least one (task, arm) cell has n <= {untrustworthy_threshold(args.iterations)}/{args.iterations} "
+              "samples (issue #295). Failing loudly instead of publishing a median over a silently-reduced n.",
+              file=sys.stderr)
+        return 1
     return 0
 
 

@@ -214,11 +214,54 @@ is_real_run() {
     return 1
 }
 
+# wait_for_telemetry_file: bounded poll for a file to appear, instead of a
+# single existence check right after `claude -p` returns.
+#
+# Issue #295: a paid run silently lost 3/15 `sweep` samples, all of them
+# `claude` invocations that exited 0 (i.e. succeeded and were billed) but
+# left no token-telemetry.jsonl behind. The suspected mechanism is a race
+# between the CLI reporting the turn/process as finished and the Stop hook
+# (a separate `bash`->`python3` subprocess the CLI itself spawns and whose
+# internal scheduling/blocking semantics are not documented/observable from
+# this repo) finishing its write to disk. We could NOT verify that
+# mechanism directly -- it lives inside the closed-source `claude` binary,
+# outside anything this repo controls or can instrument -- so this is a
+# mitigation for the hypothesis, not a confirmed fix: a short bounded wait
+# can only turn a would-be false "lost" into a correctly-counted "ok" (it
+# never manufactures a sample that wasn't actually written), so it is safe
+# to add even without proof of the exact root cause. If the file still
+# never appears, the caller still gets a distinctly-labeled, honestly
+# counted loss (see run_claude_safely below) instead of a silent drop.
+wait_for_telemetry_file() {
+    local file="$1"
+    local max_attempts="${2:-5}"
+    local delay_seconds="${3:-1}"
+    local attempt
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        [ -f "$file" ] && return 0
+        sleep "$delay_seconds"
+    done
+    [ -f "$file" ]
+}
+
+# run_claude_safely: run `claude -p` $n times, collecting telemetry.
+#
+# Issue #295 fix: a run that exits 0 with no telemetry file (an instrument
+# loss -- the invocation succeeded and was billed) is now reported with a
+# DISTINCT message and counted separately from a run that exits non-zero (a
+# genuine invocation failure). Before this fix both cases printed "failed
+# with code $EXIT_CODE" -- including the misleading "failed with code 0" for
+# a run that succeeded -- and were lumped into one silently-dropped bucket.
+# A per-cell summary (ok/lost/failed vs the requested $n) is printed at the
+# end of the loop so a short cell is visible in the raw log without having
+# to reconstruct it from individual iteration lines.
 run_claude_safely() {
     local task_prompt=$1
     local target_file=$2
     local state_dir=$3
     local n=$4
+    local label=${5:-"$target_file"}
+    local ok=0 lost=0 failed=0
     for ((i = 1; i <= n; i++)); do
         local temp_state="$state_dir/temp_run_$i"
         mkdir -p "$temp_state"
@@ -229,12 +272,21 @@ run_claude_safely() {
         EXIT_CODE=$?
         set -e
 
-        if [ $EXIT_CODE -eq 0 ] && [ -f "$temp_state/token-telemetry.jsonl" ]; then
+        if [ $EXIT_CODE -ne 0 ]; then
+            echo "Claude run $i ($label) FAILED: nonzero exit code $EXIT_CODE. Skipping telemetry (invocation error)."
+            failed=$((failed + 1))
+            continue
+        fi
+
+        if wait_for_telemetry_file "$temp_state/token-telemetry.jsonl" 5 1; then
             cat "$temp_state/token-telemetry.jsonl" >> "$target_file"
+            ok=$((ok + 1))
         else
-            echo "Claude run $i failed with code $EXIT_CODE. Skipping telemetry."
+            echo "Claude run $i ($label) completed (exit 0, billed) but no telemetry file appeared after a bounded 5s wait. INSTRUMENT LOSS -- sample discarded, counted separately from an invocation failure."
+            lost=$((lost + 1))
         fi
     done
+    echo "  [summary] $label: ok=$ok lost=$lost(instrument) failed=$failed(invocation) -- requested n=$n"
 }
 
 # write_task_names: single source of truth for which task names exist in
@@ -242,6 +294,18 @@ run_claude_safely() {
 # drifts out of sync with the task set defined above (real run or stub).
 write_task_names() {
     printf '%s\n' "${TASK_NAMES[@]}" > "$GITHUB_WORKSPACE/task_names.txt"
+}
+
+# write_iterations: issue #295, AC2/AC3. Written ONLY on the real
+# measurement path (never the free stub path) so scripts/benchmark_report.py
+# can compare each cell's actual sample count against the ITERATIONS this
+# run actually requested and flag/fail on a shortfall. The stub path
+# deliberately always emits n=2 fake samples per file regardless of
+# $ITERATIONS -- those are illustrative fixtures for exercising the
+# report/badge plumbing for free on every push/PR, not a real measurement,
+# so they must never trip the shortfall/untrustworthy gate.
+write_iterations() {
+    printf '%s\n' "$ITERATIONS" > "$GITHUB_WORKSPACE/iterations.txt"
 }
 
 main() {
@@ -323,7 +387,7 @@ JSON
             prompt="${TASK_PROMPTS[$idx]}"
             echo "  arm A / task=$name"
             rm -f "$GITHUB_WORKSPACE/baseline-$name.jsonl"
-            run_claude_safely "$prompt" "$GITHUB_WORKSPACE/baseline-$name.jsonl" "$HOME/.claude/marc-state-a-$name" "$ITERATIONS"
+            run_claude_safely "$prompt" "$GITHUB_WORKSPACE/baseline-$name.jsonl" "$HOME/.claude/marc-state-a-$name" "$ITERATIONS" "arm A / task=$name"
         done
 
         popd
@@ -346,7 +410,7 @@ CONFIG
         prompt="${TASK_PROMPTS[$idx]}"
         echo "  arm B / task=$name"
         rm -f "$PWD/post-$name.jsonl"
-        run_claude_safely "$prompt" "$PWD/post-$name.jsonl" "$HOME/.claude/marc-state-b-$name" "$ITERATIONS"
+        run_claude_safely "$prompt" "$PWD/post-$name.jsonl" "$HOME/.claude/marc-state-b-$name" "$ITERATIONS" "arm B / task=$name"
     done
 
     echo "--- RUNNING ARM C ($CURRENT_REF with guard=999999) ---"
@@ -362,11 +426,12 @@ CONFIG
         prompt="${TASK_PROMPTS[$idx]}"
         echo "  arm C / task=$name"
         rm -f "$PWD/toggle_baseline-$name.jsonl"
-        run_claude_safely "$prompt" "$PWD/toggle_baseline-$name.jsonl" "$HOME/.claude/marc-state-c-$name" "$ITERATIONS"
+        run_claude_safely "$prompt" "$PWD/toggle_baseline-$name.jsonl" "$HOME/.claude/marc-state-c-$name" "$ITERATIONS" "arm C / task=$name"
         cp "$PWD/post-$name.jsonl" "$PWD/toggle_post-$name.jsonl"
     done
 
     write_task_names
+    write_iterations
 
     # Save current run as baseline for future. On a `workflow_dispatch` real
     # run CURRENT_REF is a branch name (e.g. "main"), not a tag, so this

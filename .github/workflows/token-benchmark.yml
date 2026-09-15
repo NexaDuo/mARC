@@ -99,11 +99,29 @@ jobs:
       - name: Generate Report
         id: report
         run: |
-          python3 scripts/benchmark_report.py --task-names-file task_names.txt --dir "$PWD" > report.txt
+          # Issue #295 (AC2/AC3): --iterations is only passed when
+          # run_token_benchmark.sh actually wrote iterations.txt, which it
+          # does ONLY on the real measurement path. The free stub path
+          # always emits fixed n=2 fixture samples regardless of the real
+          # ITERATIONS constant, so it must never trip the shortfall/
+          # untrustworthy gate below.
+          ITER_ARGS=()
+          if [ -f iterations.txt ]; then
+            ITER_ARGS=(--iterations "$(cat iterations.txt)")
+          fi
+          # report.txt is written via redirection before checking the
+          # script's exit status, so a failing (untrustworthy-data) report
+          # still gets captured in full below and uploaded as an artifact by
+          # the unconditional step above -- only the job itself goes red.
+          set +e
+          python3 scripts/benchmark_report.py --task-names-file task_names.txt --dir "$PWD" "${ITER_ARGS[@]}" > report.txt
+          REPORT_EXIT=$?
+          set -e
           echo "### 📊 Token Consumption Benchmark Report" >> $GITHUB_STEP_SUMMARY
           echo '```text' >> $GITHUB_STEP_SUMMARY
           cat report.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          exit $REPORT_EXIT
 
       # Regenerated on every PUBLISHING run (see the `if:` below) from the
       # SAME baseline-control.jsonl/post-control.jsonl this job already
@@ -121,6 +139,19 @@ jobs:
       # task alone (the original, verbatim board.py task this badge always
       # represented pre-#275) — same semantics as before, now explicitly one
       # task among several rather than implicitly the only one.
+      # Issue #303: --badge-current is `toggle_baseline-control.jsonl` (arm
+      # C, guard=999999, i.e. structurally off), NOT `post-control.jsonl`
+      # (arm B, guard=350) — the read-guard ships opt-in and DISABLED (no
+      # `[token_guard]` in .agents/team.toml; the template ships it
+      # commented out), so arm C's guard-off, same-commit behavior is what a
+      # real user on the shipped default actually experiences. Arm A
+      # (baseline-control.jsonl, the previous release) also never configures
+      # `[token_guard]`, so this keeps both sides of the badge's diff on the
+      # same "guard off" footing. Feeding the badge arm B previously
+      # inverted its sign relative to reality (run 34987534132: -68.9% from
+      # arm B vs +35.0% from arm C on the exact same current-commit data).
+      # --path stays `post-control.jsonl` for the markdown trend chart only
+      # (unrelated to the badge computation as of this fix).
       # Issue #296: also feed the "neutral" task's noise-floor pair.
       # `neutral` is the task the guard structurally cannot fire on, so any
       # gap between two arms that only differ by the guard's threshold is
@@ -145,6 +176,7 @@ jobs:
         run: |
           python3 scripts/generate_telemetry_dashboard.py \
             --path post-control.jsonl --baseline baseline-control.jsonl \
+            --badge-current toggle_baseline-control.jsonl \
             --neutral-no-guard toggle_baseline-neutral.jsonl --neutral-guarded toggle_post-neutral.jsonl
 
       # Issue #291 (second defect): on a `release` event actions/checkout

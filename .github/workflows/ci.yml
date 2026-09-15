@@ -433,6 +433,41 @@ jobs:
           shellcheck scripts/test_benchmark_dispatch_reachable.sh
           bash scripts/test_benchmark_dispatch_reachable.sh
 
+      # 6a1c. Issue #295: a `claude` invocation that exits 0 (succeeds,
+      #       billed) but leaves no telemetry file behind must be reported
+      #       DISTINCTLY from a genuine invocation failure (nonzero exit),
+      #       and counted separately -- not silently dropped as "failed with
+      #       code 0" (paid run: 3/15 `sweep` samples lost this way).
+      #       Deterministic, offline, against a stubbed `claude`.
+      - name: run_token_benchmark.sh — loss-accounting self-test
+        run: |
+          shellcheck scripts/test_benchmark_loss_accounting.sh
+          bash scripts/test_benchmark_loss_accounting.sh
+
+      # 6a1d. Issue #295: scripts/benchmark_report.py must surface each
+      #       (task, arm) cell's sample count against --iterations and fail
+      #       loudly (non-zero exit) rather than silently reporting a median
+      #       over a short cell. Verified against the ARCHIVED paid run
+      #       docs/marc/benchmarks/run-34987534132/, which has this exact
+      #       loss (post-sweep.jsonl 4/5, toggle_baseline-sweep.jsonl 3/5) --
+      #       free, no `claude` invocations, no network.
+      - name: benchmark_report.py — sample-count gate self-test
+        run: |
+          shellcheck scripts/test_benchmark_report_sample_counts.sh
+          bash scripts/test_benchmark_report_sample_counts.sh
+
+      # 6a6b. Issue #303: the "Tokens Saved (Last Release)" badge must diff
+      #       the previous release against the SHIPPED DEFAULT arm (guard
+      #       off), never the guard-ON arm B -- the guard ships opt-in and
+      #       disabled. Verified against the same archived paid run's own
+      #       data: reproduces the documented -68.9% (guard-on, the bug) and
+      #       +35.0% (guard-off, the fix), and confirms the noise floor
+      #       gate (issue #296) is not loosened by this change.
+      - name: telemetry badge — shipped-default-arm self-test
+        run: |
+          shellcheck scripts/test_telemetry_badge_shipped_default_arm.sh
+          bash scripts/test_telemetry_badge_shipped_default_arm.sh
+
       # 6a3. Published telemetry must never carry fabricated/stub data
       #      (issue #274). Asserts docs/marc/telemetry.md and
       #      docs/marc/telemetry-badge.json contain none of the stub markers
