@@ -22,11 +22,13 @@ this project adopts [Calendar Versioning](https://calver.org/) (`YY.M.D`).
   - Exempts the `@sec` and `@rev` roles, whose audits must never reason over
     truncated input (origin: #137, #227). That exemption is currently
     identified by process inspection and is forgeable — tracked in #289.
-  - Wired into the `claude-code` harness only. `antigravity` nests its tool
-    call under `toolCall.name`/`toolCall.args` rather than the top-level
-    fields the guard reads, so shipping it there would register a hook that
-    never fires; left deliberately unwired. `copilot` ships a different hook
-    set with no `pre_tool_use` dialect entry.
+  - Wired into the `claude-code` harness only. `antigravity` was observed to
+    nest its tool call under `toolCall.name`/`toolCall.args` rather than the
+    top-level fields the guard reads, so shipping it there would register a
+    hook that never fires; left deliberately unwired. (That payload shape was
+    established by probing the antigravity CLI directly and is not verifiable
+    from this repository.) `copilot` ships a different hook set with no
+    `pre_tool_use` dialect entry.
   - Landed in PRs #264, #269, #272, #277 and #288.
 - **`PreToolUse` hook support in the compilation pipeline (#259).**
   - `scripts/compile_prompts.py` now emits `PreToolUse` hooks for the
@@ -43,7 +45,13 @@ this project adopts [Calendar Versioning](https://calver.org/) (`YY.M.D`).
     cache invalidation) and `scripts/generate_telemetry_dashboard.py`.
   - Pushes and pull requests take a stubbed, non-publishing path confined to
     the job summary, so the token cost is paid only on an actual release.
-  - Landed in PRs #256, #258 and #263.
+  - The three-arm design replaced an earlier single-session version that
+    copied the same telemetry file over both sides of the comparison, so the
+    delta was always 0%; the redesign also removed the blanket failure
+    suppressions (`continue-on-error` and `|| true`) that made a broken
+    measurement report green. See `Known limitations` below — the task-design
+    half of that work (#275) is not finished.
+  - Landed in PRs #256, #258, #263, #278 and #280.
 - **Token-savings measurement in the telemetry report (#253).**
   - `token_telemetry_report.py` gained `--compare` and `--cost-per-million` to
     compute the token and cost delta between two telemetry datasets.
