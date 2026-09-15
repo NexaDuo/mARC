@@ -87,6 +87,84 @@ else
     fail "the fixed badge's margin over the measured floor ($CLEARS_BY points over ${FLOOR_PCT}%) is wider than expected -- check the floor computation wasn't bypassed"
 fi
 
+# --- 4. STATIC pin on the workflow wiring itself (`@rev` review on PR #305,
+# MEDIUM). Parts 1-3 above only prove generate_telemetry_dashboard.py's
+# --badge-current flag behaves correctly when given the right value -- they
+# say nothing about .github/workflows/token-benchmark.yml actually PASSING
+# that value. That gap is exactly the bug class issue #303 was (the badge
+# silently pointed at the wrong arm; every other test still passed). This
+# extracts the "Generate Dashboard Files" step's run: script from the real
+# workflow file and asserts --badge-current is present AND pinned to the
+# shipped-default guard-off arm, failing on BOTH regression shapes: the flag
+# renamed/re-pointed at the wrong file, or the flag dropped entirely
+# (falling back to --path's guard-on arm B, the original #303 bug).
+WORKFLOW="$REPO_ROOT/.github/workflows/token-benchmark.yml"
+EXPECTED_BADGE_CURRENT="toggle_baseline-control.jsonl"
+
+# extract_step_run_block: print the lines between "- name: <step>" and the
+# next "      - name:" (i.e. the next step at the same indent level).
+extract_step_run_block() {
+    local step_name="$1" file="$2"
+    awk -v marker="- name: ${step_name}" '
+        index($0, marker) { found=1; next }
+        found && /^      - name:/ { exit }
+        found { print }
+    ' "$file"
+}
+
+# check_badge_current_arm: prints one of OK / MISSING_STEP / MISSING_FLAG /
+# WRONG_VALUE:<value> for the "Generate Dashboard Files" step in $1.
+check_badge_current_arm() {
+    local wf="$1"
+    local block
+    block="$(extract_step_run_block "Generate Dashboard Files" "$wf")"
+    if [ -z "$block" ]; then
+        echo "MISSING_STEP"
+        return
+    fi
+    local value
+    value="$(printf '%s\n' "$block" | grep -oE -- '--badge-current[[:space:]]+\S+' | awk '{print $2}' | head -n1)"
+    if [ -z "$value" ]; then
+        echo "MISSING_FLAG"
+        return
+    fi
+    if [ "$value" != "$EXPECTED_BADGE_CURRENT" ]; then
+        echo "WRONG_VALUE:$value"
+        return
+    fi
+    echo "OK"
+}
+
+# POSITIVE: the real, shipped workflow must be pinned correctly.
+REAL_RESULT="$(check_badge_current_arm "$WORKFLOW")"
+if [ "$REAL_RESULT" = "OK" ]; then
+    pass "token-benchmark.yml's 'Generate Dashboard Files' step statically pins --badge-current to the shipped-default guard-off arm ($EXPECTED_BADGE_CURRENT)"
+else
+    fail "token-benchmark.yml's --badge-current wiring regressed: $REAL_RESULT (expected $EXPECTED_BADGE_CURRENT)"
+fi
+
+# NEGATIVE 1: re-pointing the value at the old guard-ON arm (the exact #303
+# regression) must be caught.
+WRONG_VALUE_WF="$TMPDIR/wrong-value.yml"
+sed -E "s/(--badge-current )${EXPECTED_BADGE_CURRENT}/\\1post-control.jsonl/" "$WORKFLOW" > "$WRONG_VALUE_WF"
+WRONG_VALUE_RESULT="$(check_badge_current_arm "$WRONG_VALUE_WF")"
+if [ "$WRONG_VALUE_RESULT" = "WRONG_VALUE:post-control.jsonl" ]; then
+    pass "negative test: re-pointing --badge-current at post-control.jsonl (guard-on arm) is caught"
+else
+    fail "negative test FAILED to catch --badge-current re-pointed at the guard-on arm (got: $WRONG_VALUE_RESULT)"
+fi
+
+# NEGATIVE 2: dropping the flag entirely (falling back to --path, i.e. the
+# ORIGINAL #303 bug shape) must also be caught.
+MISSING_FLAG_WF="$TMPDIR/missing-flag.yml"
+grep -v -- '--badge-current' "$WORKFLOW" > "$MISSING_FLAG_WF"
+MISSING_FLAG_RESULT="$(check_badge_current_arm "$MISSING_FLAG_WF")"
+if [ "$MISSING_FLAG_RESULT" = "MISSING_FLAG" ]; then
+    pass "negative test: dropping --badge-current entirely (falls back to --path's guard-on arm) is caught"
+else
+    fail "negative test FAILED to catch a dropped --badge-current flag (got: $MISSING_FLAG_RESULT)"
+fi
+
 echo "---"
 if [ "$FAILS" -eq 0 ]; then
     echo "All shipped-default-arm checks passed."

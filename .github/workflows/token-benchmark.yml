@@ -111,8 +111,13 @@ jobs:
           fi
           # report.txt is written via redirection before checking the
           # script's exit status, so a failing (untrustworthy-data) report
-          # still gets captured in full below and uploaded as an artifact by
-          # the unconditional step above -- only the job itself goes red.
+          # still gets copied into $GITHUB_STEP_SUMMARY below before this
+          # step exits non-zero -- only the job itself goes red. NOTE:
+          # report.txt itself is NOT part of the "Upload Raw Benchmark Data"
+          # artifact above (that step only captures the raw *.jsonl/
+          # task_names.txt/manifest.json inputs, uploaded unconditionally
+          # BEFORE this step runs) -- the job summary is the only place the
+          # rendered report text is preserved.
           set +e
           python3 scripts/benchmark_report.py --task-names-file task_names.txt --dir "$PWD" "${ITER_ARGS[@]}" > report.txt
           REPORT_EXIT=$?
