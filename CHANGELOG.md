@@ -2,9 +2,94 @@
 
 All notable changes to mARC are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and starting from release `26.9.8`,
-this project adopts [Calendar Versioning](https://calver.org/) (`YY.M.D`).
+this project adopts [Calendar Versioning](https://calver.org/) (`YY.M.D`), with an
+optional fourth component (`YY.M.D.MICRO`) to disambiguate a second release on a
+date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
+
+## [26.9.15.1] - 2026-09-15
+
+Stabilizes the token benchmark: the measurement path is reachable, the task set
+is documented and versioned, and the published badge is gated on a measured
+noise floor instead of an unvalidated delta.
+
+**This release publishes no savings figure, deliberately.** The first real
+three-arm measurement (run 34987534132, preserved under
+`docs/marc/benchmarks/`) does not support one — see `Known limitations`.
+
+### Added
+- **A documented, versioned benchmark task set (#275, PR #293).**
+  - Replaces the single hardcoded task with three tasks (`control`, `sweep`,
+    `neutral`) in `scripts/task_names.txt`, hashed into the run manifest so a
+    change of task set is visible as a break in the record rather than a silent
+    shift in what "the benchmark" means.
+  - `neutral` is a deliberate negative control: it reads a 142-line file against
+    a 350-line threshold, so the guard cannot fire on it in either arm. Any gap
+    between its two same-commit arms is therefore measurement noise, which is
+    what makes a noise floor measurable at all.
+  - Adds `scripts/benchmark_report.py`, reporting the **median** weighted tokens
+    per task rather than a sum: run 34961492007 showed a 2.5x spread across
+    three identical-configuration runs, where a sum lets one outlier dominate.
+- **The paid measurement, preserved in-repo (PR #293).**
+  - `docs/marc/benchmarks/run-34987534132/` holds the 12 raw JSONL files, the
+    manifest and the task set from the first real run. CI artifacts expire after
+    90 days; a measurement that cost real money to produce should outlive them.
+
+### Changed
+- **The benchmark's publish path is reachable for the first time (#291, PR #292).**
+  - The publish steps were gated on `github.event_name == 'release'`, but
+    `release.yml` creates releases with the auto-provisioned `GITHUB_TOKEN`, and
+    GitHub raises no workflow events from `GITHUB_TOKEN` actions — so the event
+    could never fire. Dispatch could fire but was gated out of publishing. The
+    badge was therefore unwritable by any route, which is how a fabricated 15.2%
+    came to sit on it unchallenged (#274, #279).
+  - Publishing now also runs on a `workflow_dispatch` opted into the real
+    measurement (`real_run=true`); a dispatch left at the default still takes the
+    non-publishing path.
+  - Fixes a second defect on the same path: on a `release` event `actions/checkout`
+    leaves the workspace in detached HEAD, where `git commit` succeeds but `git push`
+    fails, stranding the measurement on the runner.
+  - `scripts/test_benchmark_dispatch_reachable.sh` now parses both publish steps'
+    `if:` conditions out of the workflow YAML and evaluates them in lockstep with
+    the shell gate, failing loudly if the two ever diverge.
+- **The badge is scoped to one release and gated on the noise floor (#296, PR #297).**
+  - Relabelled to `Tokens Saved (Last Release)`. It answers what *this* release
+    changed, not a standing "mARC saves X%" property — `No Change` is the correct
+    and expected reading for a release that does not touch token consumption.
+  - Computed from the same median methodology as `benchmark_report.py`, which it
+    now imports rather than re-deriving. It previously summed — the methodology
+    PR #293 had rejected in writing, applied to the same data.
+  - A delta at or below the measured noise floor publishes `No Change`. A missing
+    floor publishes `No Data`, never an ungated number.
+  - The floor is a **same-commit** pairing of `neutral`'s two arms. An
+    inter-release pairing differs by both release and threshold, so it would
+    absorb ordinary release drift into the floor and silently inflate it as more
+    releases ship, suppressing real findings. Caught in review before it shipped.
+- **Versioning admits a same-day MICRO (`YY.M.D.MICRO`).**
+  - `26.9.15` was already published when this release was cut. `changelog-section.sh`
+    accepts the fourth component; `release_gate.py` builds its expected tag by
+    concatenation and needed no change.
+
+### Known limitations
+- **No savings figure is published, and the measurement is why (#294, closed).**
+  Where the read guard fires it *costs* 2.6x (`control`: 5,754 → 14,953 weighted
+  tokens, same commit, guard the only difference). Where it does not fire the
+  difference is indistinguishable from noise (`sweep`: −24.8%, below the floor).
+  The agent was observed routing around the guard with `grep`, which the guard's
+  interception regex does not match — so on `sweep` it never fired in either arm.
+  None of this describes production, where the guard ships opt-in and disabled.
+- **The noise floor is 33.7%, and it is one median-vs-median pair (#298).** It
+  carries no dispersion measure, so a delta near it cannot be called significant.
+  Against this run's data the badge reads −68.9% with the guard on and +35.0%
+  with it off: the choice of arm inverts the sign, and the +35.0% clears the
+  floor by 1.3 points. Neither number is publishable, which is why the badge
+  ships `No Data`.
+- **The paid run silently lost 3 of 15 `sweep` measurements (#295).** All three
+  exited 0 with complete answers — billed, worked, telemetry dropped. All three
+  were on the same task, so this is systematic bias, not random attrition.
+- **Savings history across releases does not exist yet (#296, #275).** Each run's
+  manifest records its own numbers; nothing yet reads them back as a series.
 
 ## [26.9.15] - 2026-09-15
 
@@ -1333,6 +1418,8 @@ brand layer.
   own `harnesses/<harness>/` sibling. Documented in `docs/ARCHITECTURE.md`.
 
 [Unreleased]: https://github.com/NexaDuo/mARC/compare/v26.9.8...HEAD
+[26.9.15.1]: https://github.com/NexaDuo/mARC/releases/tag/v26.9.15.1
+[26.9.15]: https://github.com/NexaDuo/mARC/releases/tag/v26.9.15
 [26.9.8]: https://github.com/NexaDuo/mARC/releases/tag/v26.9.8
 [0.28.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.28.0
 [0.27.0]: https://github.com/NexaDuo/mARC/releases/tag/v0.27.0
