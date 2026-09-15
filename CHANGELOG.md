@@ -74,10 +74,16 @@ three-arm measurement (run 34987534132, preserved under
 ### Known limitations
 - **No savings figure is published, and the measurement is why (#294, closed).**
   Where the read guard fires it *costs* 2.6x (`control`: 5,754 → 14,953 weighted
-  tokens, same commit, guard the only difference). Where it does not fire the
-  difference is indistinguishable from noise (`sweep`: −24.8%, below the floor).
-  The agent was observed routing around the guard with `grep`, which the guard's
-  interception regex does not match — so on `sweep` it never fired in either arm.
+  tokens, same commit, guard the only difference). On `sweep` the same pairing
+  shows an apparent **+24.8% saving, which is below the 33.7% noise floor** and
+  therefore indistinguishable from no effect — it is not a second result, it is
+  the absence of one.
+  The likeliest mechanism is that the guard never fired on `sweep` in either arm:
+  its interception regex covers `cat`/`less`/`more`/`head`/`tail` and does not
+  match `grep`, which is a natural way to survey many files. That is an argument
+  from the guard's source, and the preserved telemetry records token counts, not
+  the commands the agent chose — so treat it as the leading explanation, not as
+  something this release's artifacts let a reader verify.
   None of this describes production, where the guard ships opt-in and disabled.
 - **The noise floor is 33.7%, and it is one median-vs-median pair (#298).** It
   carries no dispersion measure, so a delta near it cannot be called significant.
