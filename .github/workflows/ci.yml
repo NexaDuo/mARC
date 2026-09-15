@@ -472,6 +472,20 @@ jobs:
           shellcheck scripts/test_telemetry_badge_dashboard_same_run.sh
           bash scripts/test_telemetry_badge_dashboard_same_run.sh
 
+      # 6a6. Badge noise-floor gate (issue #296): a per-release delta
+      #      smaller than the noise measured on the `neutral` task (the
+      #      task the read-guard structurally cannot fire on) must never
+      #      publish as a savings figure — paid run 34987534132 measured
+      #      that noise at 33.7%. Asserts, offline with synthetic JSONL
+      #      fixtures, all three badge states: within-noise -> "No Change",
+      #      missing/empty neutral data -> honest "No Data" (never an
+      #      ungated number), and (covered by the same-run self-test above)
+      #      a delta that clears the floor -> a real percentage.
+      - name: telemetry badge — noise-floor gate self-test
+        run: |
+          shellcheck scripts/test_telemetry_badge_noise_floor.sh
+          bash scripts/test_telemetry_badge_noise_floor.sh
+
       # 6b. Outdated-version hooks: shellcheck-clean + >=7-day PostToolUse
       #     re-check gate (origin #52). outdated-check.sh (SessionStart) and
       #     outdated-recheck.sh (PostToolUse) share hooks/lib/version-check.sh

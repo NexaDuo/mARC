@@ -17,10 +17,16 @@ on:
   # arms x 5 iterations = 45 live `claude` invocations if arm A (the
   # previous release) must be re-run, or 30 if its baseline is cached (see
   # scripts/run_token_benchmark.sh's manifest/task-hash reuse logic).
-  # A dispatched run NEVER commits/pushes docs or publishes the badge (see
-  # the `if: github.event_name == 'release'` gates below) — only a
-  # `release` event may publish. It only reports to the job summary and
-  # uploads the raw measurement as a workflow artifact.
+  # Issue #296: publishing was gated to `if: github.event_name == 'release'`
+  # alone, and since `release` can never fire, the publish path was
+  # unreachable by ANY route (not just the real-measurement path above) — a
+  # second layer of the same #291 defect. Fix: a dispatched run publishes
+  # docs/the badge when (and only when) it took the real path
+  # (`real_run=true`); see the `if:` conditions on "Generate Dashboard
+  # Files" / "Commit Dashboard and Benchmarks" below. A dispatched run left
+  # at the default `real_run=false` (the stub path) still publishes
+  # nothing — it only reports to the job summary and uploads the raw
+  # measurement as a workflow artifact, same as before.
   workflow_dispatch:
     inputs:
       real_run:
@@ -99,10 +105,10 @@ jobs:
           cat report.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      # Regenerated on every release from the SAME baseline-control.jsonl/
-      # post-control.jsonl this job already produced above (origin: #285):
-      # --baseline feeds the
-      # "Tokens Saved" badge, --path feeds the telemetry.md trend chart, and
+      # Regenerated on every PUBLISHING run (see the `if:` below) from the
+      # SAME baseline-control.jsonl/post-control.jsonl this job already
+      # produced above (origin: #285): --baseline feeds the "Tokens Saved"
+      # badge, --path feeds the telemetry.md trend chart, and
       # generate_badge() inside generate_telemetry_dashboard.py now runs
       # unconditionally in the same invocation, so the badge and the
       # dashboard can never diverge (one script run, one data source, one
@@ -115,10 +121,24 @@ jobs:
       # task alone (the original, verbatim board.py task this badge always
       # represented pre-#275) — same semantics as before, now explicitly one
       # task among several rather than implicitly the only one.
+      # Issue #296: also feed the "neutral" task's baseline/post pair.
+      # `neutral` is the task the guard structurally cannot fire on in
+      # either arm B or C, so its own baseline-vs-post gap is pure
+      # measurement noise, not a guard effect — generate_badge() uses it as
+      # the noise floor the reported control-task delta must clear before
+      # the badge is allowed to show a number instead of "No Change".
+      # Issue #291/#296: publishing (this step and "Commit Dashboard and
+      # Benchmarks" below) now runs on a `release` event OR a
+      # `workflow_dispatch` run that opted into the real measurement
+      # (`real_run=true`) — see the trigger comment at the top of this file.
+      # A dispatched run left at the default `real_run=false` never reaches
+      # here (job summary + artifact only, same as always).
       - name: Generate Dashboard Files
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.real_run == 'true')
         run: |
-          python3 scripts/generate_telemetry_dashboard.py --path post-control.jsonl --baseline baseline-control.jsonl
+          python3 scripts/generate_telemetry_dashboard.py \
+            --path post-control.jsonl --baseline baseline-control.jsonl \
+            --neutral-path post-neutral.jsonl --neutral-baseline baseline-neutral.jsonl
 
       # Issue #291 (second defect): on a `release` event actions/checkout
       # checks out the tag, leaving the workspace in detached HEAD. `git
@@ -129,10 +149,11 @@ jobs:
       # `main` branch by ref-spec (`HEAD:refs/heads/main`) instead of
       # relying on being "on" a branch locally. This never puts the runner
       # itself on a branch, so it works whether the checkout is detached
-      # (release) or already on a branch (any future trigger that reaches
-      # this step).
+      # (release) or already on a branch (a `workflow_dispatch` real run
+      # checks out `main` un-detached — the ref-spec push works there too,
+      # unchanged).
       - name: Commit Dashboard and Benchmarks
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.real_run == 'true')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

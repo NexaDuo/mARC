@@ -1,0 +1,8 @@
+{
+  "model": "claude-sonnet-5",
+  "tasks": [{"name": "control", "prompt": "read core/scripts/board.py and output a summary"}, {"name": "sweep", "prompt": "List every top-level (module-level) function definition across all non-test .py files in core/scripts/ (skip any file whose name starts with test_). Format each as '<filename>: <function_name>(...)'. Do not include methods defined inside classes, or functions nested inside other functions."}, {"name": "neutral", "prompt": "read AGENTS.md and summarize its \"Operating principles\" section in 3 bullet points"}],
+  "iterations": 5,
+  "task_hash": "2e969cfc",
+  "tag": "main",
+  "claude_version": "2.1.272 (Claude Code)"
+}
