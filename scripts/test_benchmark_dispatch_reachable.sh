@@ -1,25 +1,33 @@
 #!/bin/bash
-# Regression test for issue #291.
+# Regression test for issues #291 and #304.
 #
-# The real three-arm measurement in run_token_benchmark.sh used to be
+# #291: the real three-arm measurement in run_token_benchmark.sh used to be
 # reachable ONLY via `[ "$EVENT_NAME" != "release" ]`, i.e. only on a
 # `release` event. That event can never fire in this repo: releases are
 # published by release.yml using GITHUB_TOKEN, and GitHub does not raise
 # workflow events from GITHUB_TOKEN actions (a documented anti-recursion
 # safeguard). So the real path was reachable in source but unreachable in
-# practice — the fourth/fifth layer of the same class of bug (#285, #287
-# x2, this one).
+# practice.
+#
+# #304: the owner decided a paid measurement IS wanted, once per
+# minor/major release, never for a patch. Since `release` can never fire,
+# the trigger moved to the tag PUSH itself (the same trigger release.yml
+# uses to publish), and is_real_run() now also consults the tag shape:
+# a 3-component CalVer tag (vYY.M.D) is a release; a 4-component tag
+# (vYY.M.D.MICRO) is a patch of one (CHANGELOG.md's own versioning note).
 #
 # This test is deliberately NOT pinned to "release is broken" (that
-# instance). It asserts the more durable property the issue asks for: the
-# real-run path has SOME reachable trigger that does not require cutting a
-# release, and a dispatched run that does not explicitly opt in still takes
-# the free stub path (so a bare "add a trigger" fix, which would silently
-# stub every dispatched run, still fails this test).
+# instance). It asserts the durable properties the issues ask for: the
+# real-run path has a reachable trigger that does not require the
+# never-firing `release` event; a minor/major tag push takes the real path;
+# a patch tag push does not; a dispatched run that does not explicitly opt
+# in still takes the free stub path; and the workflow's publish steps can
+# never independently disagree with is_real_run() because they read its
+# own emitted step output rather than re-deriving the decision.
 #
-# Run this against the pre-fix script (`git show origin/main:scripts/run_token_benchmark.sh`)
-# and it is RED: `is_real_run` does not exist there at all. Post-fix it is
-# GREEN. See the PR body for the actual red/green transcript.
+# Run this against the pre-#304 script (`git show origin/main:scripts/run_token_benchmark.sh`)
+# and the tag-shape / release-event-removed assertions below go RED. See the
+# PR body for the actual red/green transcript.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,9 +39,11 @@ pass() { echo "ok   - $1"; }
 fail() { echo "FAIL - $1"; FAILS=$((FAILS + 1)); }
 
 # -----------------------------------------------------------------------
-# Part 1: the workflow itself must declare a trigger that can run the real
-# path without a release (workflow_dispatch, with an explicit opt-in input
-# so a casual dispatch doesn't silently spend money).
+# Part 1: the workflow itself must declare triggers that can run the real
+# path from the normal tag ritual (a tag push), without depending on the
+# `release` event (which never fires, #291), and workflow_dispatch must
+# keep its explicit opt-in input so a casual dispatch doesn't silently
+# spend money.
 #
 # `@rev` review on PR #292: the original version of this check was
 # `grep -q "workflow_dispatch:"` etc. against the raw file text. `@rev`
@@ -41,40 +51,8 @@ fail() { echo "FAIL - $1"; FAILS=$((FAILS + 1)); }
 # `#`, so the substrings are still textually present) still passed — a
 # green check produced by dead YAML, on the exact path that has already
 # shipped four prior "looked wired, wasn't" defects. A backstop a
-# commented-out trigger walks through is worse than none.
-#
-# Fix (round 1): parse the workflow as structured YAML and assert against
-# the parsed tree (a `workflow_dispatch:` key literally does not exist in
-# the parsed document if it's commented out — there is no text-matching
-# hole left).
-#
-# Fix (round 2, `@rev` review): round 1 kept a "comment-aware" raw-text
-# fallback for when PyYAML is unavailable, reasoning its availability on
-# the CI runner wasn't guaranteed. `@rev` then broke THAT fallback with a
-# more surgical mutation: remove the actual `REAL_RUN_INPUT` wiring from
-# the step's `env:` block (the real "declared but never reaches the
-# script" regression this whole issue is about), while leaving the literal
-# string `REAL_RUN_INPUT` present as a trailing comment on an unrelated
-# line. Valid YAML. The PyYAML path (which resolves the wiring through
-# actual step/env structure) correctly failed; the bare "does this token
-# appear anywhere in the live text" fallback check did not — it wasn't
-# scoped to step structure the way the other two fallback checks were.
-#
-# Decision: DROP the fallback and require PyYAML, failing loudly (not
-# silently skipping) if it's absent, rather than patching the fallback to
-# be structurally equivalent to the primary path. Two structurally
-# different parsers of the same YAML, one of which is weaker in ways
-# nobody tracks, is exactly the "looked wired, wasn't" shape this issue
-# exists to close — a green result would no longer tell you which check
-# actually ran. `@rev` also established the fallback was not dead code
-# (nothing in this repo does a bare `import yaml` or pins PyYAML), so
-# "keep it as a defensive fallback" was a real, not theoretical, risk.
-# Verified before making this call: this repo's Tier 1 CI job runs on
-# `ubuntu-latest` with NO `actions/setup-python` step (bare hosted-runner
-# python3) and installs no pip packages anywhere in ci.yml today, so
-# PyYAML's presence cannot be assumed from the existing setup — ci.yml is
-# updated in this same change to `pip install` it explicitly before this
-# test runs, so the strong path is guaranteed rather than hoped for.
+# commented-out trigger walks through is worse than none. Fix: parse the
+# workflow as structured YAML and assert against the parsed tree.
 # -----------------------------------------------------------------------
 
 if [ ! -f "$WORKFLOW" ]; then
@@ -102,6 +80,18 @@ doc = yaml.safe_load(text)
 # doesn't itself become a silent false-negative.
 triggers = doc.get("on", doc.get(True))
 
+if isinstance(triggers, dict) and "release" in triggers:
+    check(False, "token-benchmark.yml still declares a 'release:' trigger -- issue #304 requires this arm be REMOVED (it can never fire, #291) rather than left disagreeing with the tag-push rule")
+else:
+    check(True, "token-benchmark.yml declares no 'release:' trigger (issue #304 -- removed, not left dangling)")
+
+push_trigger = triggers.get("push") if isinstance(triggers, dict) else None
+push_tags = push_trigger.get("tags") if isinstance(push_trigger, dict) else None
+if isinstance(push_tags, list) and any("v*" in str(t) for t in push_tags):
+    check(True, f"token-benchmark.yml's push trigger declares a tag pattern (parsed YAML): {push_tags}")
+else:
+    check(False, "token-benchmark.yml's push trigger has no tag pattern -- the real path has no reachable trigger tied to an actual release tag (issue #304)")
+
 workflow_dispatch = None
 if isinstance(triggers, dict):
     workflow_dispatch = triggers.get("workflow_dispatch")
@@ -109,7 +99,7 @@ if isinstance(triggers, dict):
 if isinstance(workflow_dispatch, dict):
     check(True, "token-benchmark.yml declares a workflow_dispatch trigger (parsed YAML)")
 else:
-    check(False, "token-benchmark.yml has no live workflow_dispatch trigger under 'on:' -- the real path is still reachable only via 'release', which never fires (issue #291)")
+    check(False, "token-benchmark.yml has no live workflow_dispatch trigger under 'on:' -- the real path would only be reachable via a tag push (issue #291/#304)")
     workflow_dispatch = {}
 
 inputs = workflow_dispatch.get("inputs", {}) if isinstance(workflow_dispatch, dict) else {}
@@ -146,6 +136,12 @@ if wired:
 else:
     check(False, "no step passes the real_run input to run_token_benchmark.sh as REAL_RUN_INPUT -- the input would be declared but never reach the script")
 
+run_benchmark_step = next((s for s in steps if isinstance(s, dict) and s.get("name") == "Run Token Benchmark"), None)
+if run_benchmark_step is not None and run_benchmark_step.get("id") == "run_benchmark":
+    check(True, "'Run Token Benchmark' step has id: run_benchmark (issue #304 -- publish steps key off its output)")
+else:
+    check(False, "'Run Token Benchmark' step is missing id: run_benchmark -- publish steps below cannot reference its output")
+
 upload_idx = next((i for i, s in enumerate(steps) if "actions/upload-artifact" in step_uses(s)), None)
 if upload_idx is not None:
     upload_step = steps[upload_idx]
@@ -175,7 +171,10 @@ PYEOF
 fi
 
 # -----------------------------------------------------------------------
-# Part 2: the script's real-vs-stub decision, exercised directly.
+# Part 2: the script's real-vs-stub decision, exercised directly, across
+# the full matrix issue #304's acceptance criteria requires: a minor/major
+# tag, a patch tag, workflow_dispatch with real_run=true, and
+# workflow_dispatch at the default.
 # -----------------------------------------------------------------------
 
 if [ ! -f "$TARGET" ]; then
@@ -200,72 +199,90 @@ if ! declare -F is_real_run > /dev/null; then
     exit 1
 fi
 
-MATRIX_FILE="$(mktemp)"
-trap 'rm -f "$MATRIX_FILE"' EXIT
+if ! declare -F emit_real_run_output > /dev/null; then
+    fail "emit_real_run_output() is not defined in $TARGET -- the workflow's publish steps have nothing single-sourced to key off of (issue #304)"
+    echo
+    echo "$FAILS check(s) FAILED."
+    exit 1
+fi
+
+OUTPUT_FILE="$(mktemp)"
+trap 'rm -f "$OUTPUT_FILE"' EXIT
 
 check_real_run() {
-    local desc="$1" expected="$2" event="$3" real_run_input="${4:-}"
-    local got
-    if EVENT_NAME="$event" REAL_RUN_INPUT="$real_run_input" is_real_run; then
+    local desc="$1" expected="$2" event="$3" ref_type="${4:-branch}" ref_name="${5:-main}" real_run_input="${6:-}"
+    local got got_output
+    if EVENT_NAME="$event" REF_TYPE="$ref_type" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" is_real_run; then
         got="true"
     else
         got="false"
     fi
-    printf '%s\t%s\t%s\n' "$event" "$real_run_input" "$got" >> "$MATRIX_FILE"
     if [ "$got" = "$expected" ]; then
         pass "$desc (got: $got)"
     else
         fail "$desc -- expected $expected, got $got"
     fi
+
+    # emit_real_run_output() must agree with is_real_run() for the exact
+    # same inputs (issue #304 single-source-of-truth for the workflow's
+    # publish gating).
+    : > "$OUTPUT_FILE"
+    EVENT_NAME="$event" REF_TYPE="$ref_type" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" \
+        GITHUB_OUTPUT="$OUTPUT_FILE" emit_real_run_output
+    got_output="$(grep -o 'real_run=.*' "$OUTPUT_FILE" | cut -d= -f2)"
+    if [ "$got_output" = "$expected" ]; then
+        pass "$desc -- emit_real_run_output() agrees (real_run=$got_output)"
+    else
+        fail "$desc -- emit_real_run_output() disagrees with is_real_run(): wrote real_run=$got_output, expected $expected"
+    fi
 }
 
-check_real_run "push event stays on the stub path" false "push" ""
-check_real_run "pull_request event stays on the stub path" false "pull_request" ""
-check_real_run "release event takes the real path" true "release" ""
-check_real_run "workflow_dispatch with real_run unset stays on the stub path (safe default)" false "workflow_dispatch" ""
-check_real_run "workflow_dispatch with real_run=false stays on the stub path" false "workflow_dispatch" "false"
-check_real_run "workflow_dispatch with real_run=true takes the real path -- THE reachable trigger this issue requires" true "workflow_dispatch" "true"
+# push to a branch (the normal push-to-main CI run) -- stub, unchanged.
+check_real_run "push to main (branch) stays on the stub path" false "push" "branch" "main" ""
+check_real_run "pull_request event stays on the stub path" false "pull_request" "branch" "main" ""
+
+# push of a TAG -- issue #304's new mechanism. Tag shapes below are drawn
+# straight from `git tag --sort=-creatordate` (v26.9.15.1, v26.9.15,
+# v26.9.8, v0.28.0, ...) and CHANGELOG.md's versioning note: a 3-component
+# CalVer tag is a release, a 4th MICRO component makes it a patch.
+check_real_run "a 3-component release tag (v26.9.15) takes the real path -- THE reachable trigger issue #304 requires" true "push" "tag" "v26.9.15" ""
+check_real_run "a 3-component release tag (v26.9.8) takes the real path" true "push" "tag" "v26.9.8" ""
+check_real_run "a legacy 3-component release tag (v0.28.0) takes the real path" true "push" "tag" "v0.28.0" ""
+check_real_run "a 4-component PATCH tag (v26.9.15.1) stays on the stub path -- never billed (issue #304)" false "push" "tag" "v26.9.15.1" ""
+
+# `release` must no longer be an unconditional real-run arm (removed, not
+# left disagreeing with the tag-push rule -- issue #304's explicit AC).
+check_real_run "a bare 'release' event (if it ever fired) is NOT treated as real -- the arm was removed, not left inconsistent (issue #304)" false "release" "branch" "main" ""
+
+check_real_run "workflow_dispatch with real_run unset stays on the stub path (safe default)" false "workflow_dispatch" "branch" "main" ""
+check_real_run "workflow_dispatch with real_run=false stays on the stub path" false "workflow_dispatch" "branch" "main" "false"
+check_real_run "workflow_dispatch with real_run=true takes the real path -- the manual route stays available, unchanged" true "workflow_dispatch" "branch" "main" "true"
 
 # -----------------------------------------------------------------------
 # Part 3: lockstep check between token-benchmark.yml's publish `if:`
-# conditions and is_real_run() (issue #296 review, finding 4).
+# conditions and "Run Token Benchmark"'s step output (issue #296 review,
+# finding 4; re-verified under issue #304's new mechanism).
 #
-# The workflow expresses "is this a real-measurement run" a SECOND time, in
-# GitHub Actions expression syntax on the "Generate Dashboard Files" /
-# "Commit Dashboard and Benchmarks" steps' `if:` -- independently of
-# is_real_run() in run_token_benchmark.sh, with nothing keeping the two in
-# sync. This repo has shipped an inert drift guard once before (#281); a
-# silent divergence here has two failure directions, both bad: a dispatched
-# real run that stops publishing (a paid measurement stranded again, the
-# exact #291 failure), or a stub run that starts publishing (fabricated
-# data reaching the public badge again, the #274 failure).
-#
-# This parses BOTH publish steps' `if:` strings as a restricted boolean
-# grammar (`&&` / `||` / parens over `github.event_name == 'X'` and
-# `github.event.inputs.<name> == 'Y'` comparisons -- the only shape these
-# conditions use) and evaluates them against the EXACT SAME
-# (event, real_run_input) matrix the check_real_run() calls above just ran
-# through is_real_run() directly, reusing their actual results (never a
-# second hardcoded "expected" table, which would just be re-asserting this
-# script's own opinion against itself). A real divergence -- either publish
-# step disagreeing with is_real_run(), or the two publish steps disagreeing
-# with each other -- fails loudly. If the grammar ever can't parse a step's
-# `if:` (someone rewrites it in a shape this parser doesn't understand),
-# this ALSO fails loudly rather than skipping the check silently -- a
-# lockstep test that can go quiet on its own subject would be worse than
-# none.
+# Both publish steps now read the exact same
+# `steps.run_benchmark.outputs.real_run` value -- there is no second,
+# independently-maintained expression of "is this a real run" left in the
+# workflow to drift from is_real_run(). This asserts that structurally:
+# both publish steps exist, declare the IDENTICAL if: condition, and that
+# condition is exactly `steps.run_benchmark.outputs.real_run == 'true'`
+# (the id checked against Part 1's `run_benchmark_step` assertion above).
+# A different shape here (e.g. someone reintroducing a hand-written
+# `github.event_name == 'release'` clause) fails loudly.
 # -----------------------------------------------------------------------
 
 echo
-echo "--- lockstep check: workflow publish if: vs is_real_run() (parsed YAML) ---"
+echo "--- lockstep check: workflow publish if: vs run_benchmark step output (parsed YAML) ---"
 
-if ! python3 - "$WORKFLOW" "$MATRIX_FILE" <<'PYEOF'
-import re
+if ! python3 - "$WORKFLOW" <<'PYEOF'
 import sys
 
 import yaml
 
-workflow_path, matrix_path = sys.argv[1], sys.argv[2]
+workflow_path = sys.argv[1]
 
 FAILS = 0
 
@@ -277,103 +294,6 @@ def check(ok, msg):
         FAILS += 1
 
 
-# --- restricted boolean-expression parser -----------------------------
-# Grammar: expr := and_term ('||' and_term)*
-#          and_term := atom ('&&' atom)*
-#          atom := '(' expr ')' | IDENT '==' STRING
-class ParseError(Exception):
-    pass
-
-
-TOKEN_RE = re.compile(r"\s*(\|\||&&|==|\(|\)|'[^']*'|[A-Za-z0-9_.]+)")
-
-
-def tokenize(text):
-    pos = 0
-    tokens = []
-    while pos < len(text):
-        m = TOKEN_RE.match(text, pos)
-        if not m:
-            if text[pos:].strip() == "":
-                break
-            raise ParseError(f"unrecognized token at: {text[pos:]!r}")
-        tokens.append(m.group(1))
-        pos = m.end()
-    return tokens
-
-
-class Parser:
-    def __init__(self, tokens):
-        self.tokens = tokens
-        self.i = 0
-
-    def peek(self):
-        return self.tokens[self.i] if self.i < len(self.tokens) else None
-
-    def advance(self):
-        tok = self.peek()
-        self.i += 1
-        return tok
-
-    def parse_expr(self):
-        node = self.parse_and()
-        while self.peek() == "||":
-            self.advance()
-            node = ("or", node, self.parse_and())
-        return node
-
-    def parse_and(self):
-        node = self.parse_atom()
-        while self.peek() == "&&":
-            self.advance()
-            node = ("and", node, self.parse_atom())
-        return node
-
-    def parse_atom(self):
-        tok = self.peek()
-        if tok == "(":
-            self.advance()
-            node = self.parse_expr()
-            if self.advance() != ")":
-                raise ParseError("expected closing ')'")
-            return node
-        ident = self.advance()
-        if ident is None or not re.match(r"^[A-Za-z0-9_.]+$", ident):
-            raise ParseError(f"expected identifier, got {ident!r}")
-        if self.advance() != "==":
-            raise ParseError(f"expected '==' after {ident!r}")
-        lit = self.advance()
-        if lit is None or not (lit.startswith("'") and lit.endswith("'")):
-            raise ParseError(f"expected string literal, got {lit!r}")
-        return ("eq", ident, lit[1:-1])
-
-
-def parse_condition(text):
-    tokens = tokenize(text)
-    parser = Parser(tokens)
-    node = parser.parse_expr()
-    if parser.i != len(parser.tokens):
-        raise ParseError(f"trailing tokens: {parser.tokens[parser.i:]}")
-    return node
-
-
-def eval_node(node, event_name, real_run_input):
-    kind = node[0]
-    if kind == "or":
-        return eval_node(node[1], event_name, real_run_input) or eval_node(node[2], event_name, real_run_input)
-    if kind == "and":
-        return eval_node(node[1], event_name, real_run_input) and eval_node(node[2], event_name, real_run_input)
-    if kind == "eq":
-        ident, value = node[1], node[2]
-        if ident == "github.event_name":
-            return event_name == value
-        if ident == "github.event.inputs.real_run":
-            return real_run_input == value
-        raise ParseError(f"unrecognized identifier in publish if: condition: {ident!r}")
-    raise ParseError(f"unrecognized node: {node!r}")
-
-
-# --- extract the two publish steps' if: from the parsed workflow -------
 with open(workflow_path) as f:
     doc = yaml.safe_load(f)
 
@@ -390,43 +310,20 @@ if set(publish_steps) != set(PUBLISH_STEP_NAMES):
     check(False, f"could not find both publish steps in {workflow_path} (found: {sorted(publish_steps)})")
     sys.exit(1)
 
-conditions = {name: str(cond) for name, cond in publish_steps.items()}
+EXPECTED = "steps.run_benchmark.outputs.real_run == 'true'"
+conditions = {name: str(cond).strip() for name, cond in publish_steps.items()}
 distinct = set(conditions.values())
+
 if len(distinct) == 1:
     check(True, "'Generate Dashboard Files' and 'Commit Dashboard and Benchmarks' publish under the IDENTICAL if: condition")
 else:
     check(False, f"publish steps have DIFFERENT if: conditions -- they can silently disagree about whether to publish: {conditions}")
 
-parsed = {}
 for name, cond in conditions.items():
-    try:
-        parsed[name] = parse_condition(cond)
-    except ParseError as exc:
-        check(False, f"could not parse '{name}' step's if: condition ({cond!r}) with the restricted boolean grammar: {exc} -- rewrite the condition to the 'github.event_name == ...' / 'github.event.inputs.NAME == ...' shape this lockstep check understands, or extend the parser (never skip the check)")
-
-if len(parsed) != len(PUBLISH_STEP_NAMES):
-    sys.exit(1 if FAILS else 0)
-
-with open(matrix_path) as f:
-    rows = [line.rstrip("\n").split("\t") for line in f if line.strip()]
-
-mismatches = 0
-for event_name, real_run_input, is_real_run_result in rows:
-    expected = is_real_run_result == "true"
-    for name, node in parsed.items():
-        try:
-            got = eval_node(node, event_name, real_run_input)
-        except ParseError as exc:
-            check(False, f"'{name}' if: condition references something this parser doesn't recognize: {exc}")
-            mismatches += 1
-            continue
-        if got != expected:
-            check(False, f"'{name}' if: condition disagrees with is_real_run() for event={event_name!r} real_run_input={real_run_input!r}: "
-                          f"if: says {got}, is_real_run() says {expected}")
-            mismatches += 1
-
-if mismatches == 0 and FAILS == 0:
-    check(True, f"both publish if: conditions agree with is_real_run() across all {len(rows)} matrix cases")
+    if cond == EXPECTED:
+        check(True, f"'{name}' if: condition reads the run_benchmark step output, not a re-derived expression: {cond!r}")
+    else:
+        check(False, f"'{name}' if: condition is {cond!r}, expected exactly {EXPECTED!r} -- a hand-written re-derivation here can silently drift from is_real_run() (issue #296/#304)")
 
 sys.exit(1 if FAILS else 0)
 PYEOF

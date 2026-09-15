@@ -3,30 +3,53 @@ name: Token Consumption Benchmark
 on:
   push:
     branches: [main]
+    # Issue #304: the owner decided a paid measurement per release IS
+    # wanted, for a minor/major release only, never a patch. `release:
+    # types: [published]` (removed below) can never fire in this repo --
+    # release.yml publishes with the auto-provisioned GITHUB_TOKEN, and
+    # GitHub does not raise workflow events from GITHUB_TOKEN actions
+    # (issue #291) -- so the paid run had no reachable trigger tied to an
+    # actual release. Fix: key off the TAG PUSH ITSELF, the exact same
+    # trigger release.yml already uses (`on: push: tags: v*.*.*`). That push
+    # is raised by whoever ran `git push --tags` (a human/CI identity's own
+    # token), not GITHUB_TOKEN, so it fires normally -- verified by
+    # inspecting release.yml's own working `on: push: tags:` trigger and by
+    # GitHub's documented GITHUB_TOKEN anti-recursion behavior (#291); NOT
+    # verified by spending money (never do that to test this).
+    #
+    # scripts/run_token_benchmark.sh's is_real_run() then decides, from
+    # GITHUB_REF_TYPE/GITHUB_REF_NAME, whether this specific tag is a real
+    # (minor/major, 3-component vYY.M.D) release or a patch (4-component
+    # vYY.M.D.MICRO, per CHANGELOG.md's versioning note) -- only the former
+    # takes the paid path. A patch tag still runs this workflow (cheap: the
+    # free stub/report path, same as a push to main) but never the paid one.
+    tags:
+      - "v*.*.*"
   pull_request:
     types: [opened, synchronize, reopened]
-  release:
-    types: [published]
-  # Issue #291: `release` can never fire in this repo (releases are
-  # published by release.yml using GITHUB_TOKEN, and GitHub does not raise
-  # workflow events from GITHUB_TOKEN actions), so the real three-arm
-  # measurement was permanently unreachable. workflow_dispatch makes it
-  # runnable on demand instead. `real_run` defaults to false (the free
+  # Issue #291: workflow_dispatch makes the real measurement runnable on
+  # demand, independent of any tag. `real_run` defaults to false (the free
   # stub/report path) so a casual dispatch never spends money; it must be
   # explicitly set to run the real measurement — issue #275: 3 tasks x 3
   # arms x 5 iterations = 45 live `claude` invocations if arm A (the
   # previous release) must be re-run, or 30 if its baseline is cached (see
-  # scripts/run_token_benchmark.sh's manifest/task-hash reuse logic).
+  # scripts/run_token_benchmark.sh's manifest/task-hash reuse logic). A
+  # minor/major release tag push (above) costs the SAME 30-45 invocations,
+  # automatically, with no prompt -- that is the cost an operator incurs by
+  # cutting a minor/major release; a patch tag costs nothing.
   # Issue #296: publishing was gated to `if: github.event_name == 'release'`
   # alone, and since `release` can never fire, the publish path was
   # unreachable by ANY route (not just the real-measurement path above) — a
-  # second layer of the same #291 defect. Fix: a dispatched run publishes
-  # docs/the badge when (and only when) it took the real path
-  # (`real_run=true`); see the `if:` conditions on "Generate Dashboard
-  # Files" / "Commit Dashboard and Benchmarks" below. A dispatched run left
-  # at the default `real_run=false` (the stub path) still publishes
-  # nothing — it only reports to the job summary and uploads the raw
-  # measurement as a workflow artifact, same as before.
+  # second layer of the same #291 defect. Fix (issue #304 supersedes the
+  # mechanism, keeping the intent): the "Run Token Benchmark" step below
+  # exports whether it took the real path as a step output
+  # (`steps.run_benchmark.outputs.real_run`), computed by the SAME
+  # is_real_run() the script uses for everything else -- see the `if:`
+  # conditions on "Generate Dashboard Files" / "Commit Dashboard and
+  # Benchmarks" below. A run left on the stub path (patch tag, push to main,
+  # PR, or a workflow_dispatch left at its default `real_run=false`) still
+  # publishes nothing — it only reports to the job summary and uploads the
+  # raw measurement as a workflow artifact, same as before.
   workflow_dispatch:
     inputs:
       real_run:
@@ -58,6 +81,7 @@ jobs:
           python-version: '3.10'
 
       - name: Run Token Benchmark
+        id: run_benchmark
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -170,34 +194,41 @@ jobs:
       # suppressing real findings (review on PR #297 caught this — the
       # first version of this step used the wrong pairing). See
       # generate_badge()'s docstring in generate_telemetry_dashboard.py.
-      # Issue #291/#296: publishing (this step and "Commit Dashboard and
-      # Benchmarks" below) now runs on a `release` event OR a
-      # `workflow_dispatch` run that opted into the real measurement
-      # (`real_run=true`) — see the trigger comment at the top of this file.
-      # A dispatched run left at the default `real_run=false` never reaches
-      # here (job summary + artifact only, same as always).
+      # Issue #291/#296/#304: publishing (this step and "Commit Dashboard and
+      # Benchmarks" below) runs exactly when "Run Token Benchmark" took the
+      # real (paid) path — a minor/major release-tag push, or a
+      # `workflow_dispatch` run that opted in (`real_run=true`) — see the
+      # trigger comment at the top of this file. Both steps read the SAME
+      # `steps.run_benchmark.outputs.real_run` output computed once by
+      # is_real_run() in scripts/run_token_benchmark.sh, rather than
+      # re-deriving the decision here in a second, independently-maintained
+      # expression — the class of bug #296's review caught (two hand-written
+      # conditions of the same fact silently drifting apart). A patch-tag
+      # push, a push to main, a PR, or a dispatch left at the default
+      # `real_run=false` never reaches here (job summary + artifact only,
+      # same as always).
       - name: Generate Dashboard Files
-        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.real_run == 'true')
+        if: steps.run_benchmark.outputs.real_run == 'true'
         run: |
           python3 scripts/generate_telemetry_dashboard.py \
             --path post-control.jsonl --baseline baseline-control.jsonl \
             --badge-current toggle_baseline-control.jsonl \
             --neutral-no-guard toggle_baseline-neutral.jsonl --neutral-guarded toggle_post-neutral.jsonl
 
-      # Issue #291 (second defect): on a `release` event actions/checkout
-      # checks out the tag, leaving the workspace in detached HEAD. `git
-      # commit` succeeds there (it did, in run 34925472394), but a plain
-      # `git push` then fails with "fatal: You are not currently on a
-      # branch." — nothing published, the measurement stranded on the
-      # runner. Fix: push the detached commit directly onto the remote
-      # `main` branch by ref-spec (`HEAD:refs/heads/main`) instead of
-      # relying on being "on" a branch locally. This never puts the runner
-      # itself on a branch, so it works whether the checkout is detached
-      # (release) or already on a branch (a `workflow_dispatch` real run
-      # checks out `main` un-detached — the ref-spec push works there too,
-      # unchanged).
+      # Issue #291 (second defect): on a tag push (or the old, now-removed
+      # `release` event) actions/checkout checks out the tag, leaving the
+      # workspace in detached HEAD. `git commit` succeeds there (it did, in
+      # run 34925472394), but a plain `git push` then fails with "fatal: You
+      # are not currently on a branch." — nothing published, the measurement
+      # stranded on the runner. Fix: push the detached commit directly onto
+      # the remote `main` branch by ref-spec (`HEAD:refs/heads/main`)
+      # instead of relying on being "on" a branch locally. This never puts
+      # the runner itself on a branch, so it works whether the checkout is
+      # detached (a release-tag push) or already on a branch (a
+      # `workflow_dispatch` real run checks out `main` un-detached — the
+      # ref-spec push works there too, unchanged).
       - name: Commit Dashboard and Benchmarks
-        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.real_run == 'true')
+        if: steps.run_benchmark.outputs.real_run == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
