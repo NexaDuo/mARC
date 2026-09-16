@@ -456,6 +456,21 @@ jobs:
           shellcheck scripts/test_benchmark_report_sample_counts.sh
           bash scripts/test_benchmark_report_sample_counts.sh
 
+      # 6a1e. Issue #308: the noise floor must be a dispersion estimator
+      #       (MAD), not a gap between two medians, and must pool the
+      #       `neutral` same-commit observations by DISTINCT arm, never by
+      #       file count -- run_token_benchmark.sh:560 deliberately reuses
+      #       post-<task>.jsonl as toggle_post-<task>.jsonl (byte-identical
+      #       for every task in the archive), so naive file-count pooling
+      #       double-counts 5 observations as 10. Cross-checks the old
+      #       estimator still reproduces the shipped 33.7169% exactly, pins
+      #       the new MAD-derived floor to a documented range, and asserts
+      #       the double-counting trap is caught. Free, offline, no network.
+      - name: benchmark_report.py — MAD noise-floor + double-counting self-test
+        run: |
+          shellcheck scripts/test_benchmark_report_mad_floor.sh
+          bash scripts/test_benchmark_report_mad_floor.sh
+
       # 6a6b. Issue #303: the "Tokens Saved (Last Release)" badge must diff
       #       the previous release against the SHIPPED DEFAULT arm (guard
       #       off), never the guard-ON arm B -- the guard ships opt-in and
