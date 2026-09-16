@@ -8,6 +8,58 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.9.16] - 2026-09-15
+
+Closes the two loose ends left by `26.9.15.1`: the benchmark instrument now
+tells a genuine loss apart from a failed invocation and feeds its badge from
+the arm users actually ship with, and the paid measurement now has a real,
+release-shaped trigger.
+
+### Changed
+- **Honest loss accounting in the token benchmark; badge fed the shipped-default arm (#295, #303, PR #305).**
+  - A `claude` invocation that exits 0 but leaves no telemetry file behind was
+    previously reported as "failed with code 0" and dropped, indistinguishable
+    from a genuine invocation failure. `run_claude_safely()` now counts the two
+    cases separately and adds a bounded wait/retry for the telemetry file as a
+    mitigation for the suspected flush/timeout race.
+  - `benchmark_report.py` surfaces each `(task, arm)` cell's sample count as
+    `n=X/Y` against `--iterations`, and exits non-zero when a cell is at or
+    below the 3/5 untrustworthy threshold instead of silently reporting a
+    median over a reduced n.
+  - The `Tokens Saved (Last Release)` badge fed `post-control.jsonl` (arm B,
+    guard=350), a configuration nobody ships — the read guard is opt-in and
+    disabled by default. `generate_telemetry_dashboard.py` now takes an
+    explicit `--badge-current`, and the workflow points it at the same-commit
+    guard-off arm (`toggle_baseline-control.jsonl`) instead, matching what a
+    user on the shipped default experiences. The arm choice had been
+    inverting the sign of the published number. The noise-floor gate (#296)
+    is untouched.
+- **The paid measurement now fires from a minor/major release tag push, never a patch (#304, PR #306).**
+  - The `release: types: [published]` trigger is removed: `release.yml`
+    publishes with `GITHUB_TOKEN`, and GitHub raises no workflow events from
+    `GITHUB_TOKEN` actions (#291), so that trigger could never fire. The
+    benchmark now keys off the tag push itself — the same `push: tags:
+    v*.*.*` trigger `release.yml` already uses.
+  - That Actions glob also matches 4-component patch tags; what actually
+    keeps a patch on the free path is `is_real_run()`'s `is_release_tag()`
+    gate distinguishing a minor/major tag (`vYY.M.D`, 3 components) from a
+    patch (`vYY.M.D.MICRO`, 4 components), not the trigger.
+  - `PREV_TAG` now resolves via `resolve_prev_release_tag()`, walking back
+    past any patch-shaped ancestor tag to the preceding release tag, because
+    a patch never takes the real path and never writes `manifest.json` — a
+    bare nearest-tag lookup would key on the patch, miss the cache
+    unconditionally, and re-run the paid baseline arm on the very next
+    release.
+  - Both publish steps now read a single step output computed once by
+    `is_real_run()` instead of re-deriving the decision in workflow
+    expression syntax a second time.
+
+### Known limitations
+- Carried forward from `26.9.15.1`: **this release still publishes no savings
+  figure.** The badge ships `No Data`. The measured noise floor is 33.7% and
+  is still a single median-vs-median pair with no dispersion measure (#298,
+  open).
+
 ## [26.9.15.1] - 2026-09-15
 
 Stabilizes the token benchmark: the measurement path is reachable, the task set
@@ -1424,6 +1476,7 @@ brand layer.
   own `harnesses/<harness>/` sibling. Documented in `docs/ARCHITECTURE.md`.
 
 [Unreleased]: https://github.com/NexaDuo/mARC/compare/v26.9.8...HEAD
+[26.9.16]: https://github.com/NexaDuo/mARC/releases/tag/v26.9.16
 [26.9.15.1]: https://github.com/NexaDuo/mARC/releases/tag/v26.9.15.1
 [26.9.15]: https://github.com/NexaDuo/mARC/releases/tag/v26.9.15
 [26.9.8]: https://github.com/NexaDuo/mARC/releases/tag/v26.9.8
