@@ -10,6 +10,22 @@ GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
 # is_real_run() below.
 REAL_RUN_INPUT="${REAL_RUN_INPUT:-false}"
 
+# LOCAL_RUN (issue #314): opt-in flag for running this script BY HAND on a
+# developer's own machine instead of a disposable CI runner (see docs/marc/
+# benchmarks/README.md). The script was originally written assuming a
+# throwaway runner -- `npm i -g` upgrading the global CLI, marketplace add/
+# remove mutating the real Claude Code config, and a `../arm-a` worktree
+# sibling to the checkout are all fine there and all unsafe on a machine the
+# operator is actively using. LOCAL_RUN=true gates every one of those steps
+# onto a safe equivalent; every other code path (including the free stub
+# path and the CI real-run path) is completely unchanged by this flag.
+LOCAL_RUN="${LOCAL_RUN:-false}"
+
+# ARM_A_DIR: where the arm-A worktree is checked out. Defaults to the
+# historical CI location; LOCAL_RUN mode overrides this to a disposable
+# scratch directory in setup_local_run_isolation() below (issue #314 item 3).
+ARM_A_DIR="${ARM_A_DIR:-../arm-a}"
+
 MODEL="claude-sonnet-5"
 
 # --- Task set (issue #275) ---------------------------------------------------
@@ -341,6 +357,108 @@ resolve_cached_baseline_tag() {
     return 0
 }
 
+# setup_local_run_isolation: LOCAL_RUN=true's isolation step (issue #314,
+# items 2 and 3). Verified empirically (issue #314): `claude plugin
+# marketplace list --json` returns the host's real registrations
+# (`['claude-plugins-official', 'nexaduo']`) by default, and an EMPTY list
+# under a throwaway CLAUDE_CONFIG_DIR -- so pointing CLAUDE_CONFIG_DIR at a
+# scratch directory keeps every marketplace/plugin mutation this script
+# makes (ensure_marketplace_added, `claude plugin install marc@nexaduo`) off
+# the developer's real Claude Code config. The arm-A worktree also moves off
+# the repo's own parent directory (../arm-a) into the same scratch root, so
+# a local run never creates a sibling directory next to the checkout either.
+#
+# The isolated config dir is intentionally NOT auto-deleted on exit -- the
+# operator may want to inspect it (e.g. to confirm what actually got
+# installed) -- so its path is printed instead. The arm-A git worktree
+# REGISTRATION is cleaned up via a trap scoped to exactly $ARM_A_DIR, so a
+# local run never leaves the main checkout's `git worktree list` pointing at
+# a now-orphaned scratch path, and never touches anything outside it.
+setup_local_run_isolation() {
+    LOCAL_RUN_SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/marc-local-run.XXXXXX")"
+    CLAUDE_CONFIG_DIR="$LOCAL_RUN_SCRATCH_DIR/claude-config"
+    mkdir -p "$CLAUDE_CONFIG_DIR"
+    export CLAUDE_CONFIG_DIR
+    ARM_A_DIR="$LOCAL_RUN_SCRATCH_DIR/arm-a"
+    echo "Local run mode (LOCAL_RUN=true): isolating this run at $LOCAL_RUN_SCRATCH_DIR" >&2
+    echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR (never the host's real Claude Code config -- inspect or delete this directory yourself when done)" >&2
+    echo "  arm-A worktree will be checked out at $ARM_A_DIR (not ../arm-a)" >&2
+    trap 'git worktree remove --force "$ARM_A_DIR" 2>/dev/null || true; git worktree prune 2>/dev/null || true' EXIT
+}
+
+# add_arm_a_worktree: `git worktree add` for arm A, with a local-mode-aware
+# safety difference. In CI (LOCAL_RUN=false, the historical default) the
+# blind `|| true` is left exactly as-is -- out of scope for issue #314,
+# which is about local runs, and CI's runner is disposable so a leftover
+# worktree from a previous invocation essentially never happens there.
+#
+# In LOCAL_RUN=true mode a developer machine is NOT disposable: a crashed or
+# interrupted previous local run can leave a stale worktree at $dir, and the
+# blind `|| true` would silently mask that `git worktree add` failure -- the
+# very next line (`pushd "$dir"`) would still succeed against whatever old
+# checkout is already sitting there, so the run would silently measure arm A
+# against the WRONG code with no error printed at all. Local mode therefore
+# explicitly detects and clears a pre-existing worktree at $dir first, and
+# then does NOT swallow a genuine `git worktree add` failure once that's
+# done -- a real failure (bad tag, permissions, disk) still aborts loudly.
+add_arm_a_worktree() {
+    local dir="$1" tag="$2"
+    if [ "$LOCAL_RUN" = "true" ]; then
+        if [ -d "$dir" ]; then
+            echo "Local mode: stale arm-a worktree found at $dir (leftover from a previous run). Removing it before checking out $tag fresh." >&2
+            git worktree remove --force "$dir" 2>/dev/null || rm -rf "$dir"
+            git worktree prune 2>/dev/null || true
+        fi
+        git worktree add "$dir" "$tag"
+    else
+        git worktree add "$dir" "$tag" || true
+    fi
+}
+
+# run_local_preflight: item 4 of issue #314, the HIGHEST-VALUE part of local
+# mode. Measurements are written by the plugin's Stop hook via
+# $MARC_STATE_DIR (see core/scripts/token_telemetry.py's state_dir()) --
+# run_claude_safely already sets that env var explicitly per invocation, so
+# the WRITE LOCATION itself is unaffected by CLAUDE_CONFIG_DIR isolation.
+# What is genuinely uncertain under isolation is whether the Stop hook fires
+# AT ALL: it only runs if the CLI resolves CLAUDE_PLUGIN_ROOT to the plugin
+# installed via `claude plugin install marc@nexaduo` -- and under
+# CLAUDE_CONFIG_DIR isolation that install lives in a throwaway config root
+# the CLI has never used before. Rather than assume that resolves correctly,
+# this makes exactly ONE real, billed `claude -p` invocation and asserts a
+# telemetry row was actually written before committing to the ~44 remaining
+# paid invocations of a full run (run 35046956691 burned ~19 billed
+# invocations for the related reason of spending before verifying).
+run_local_preflight() {
+    local state_dir="$1"
+    local target_file="$2"
+    echo "--- LOCAL PREFLIGHT: one real (billed) invocation to confirm telemetry survives CLAUDE_CONFIG_DIR isolation before spending on the rest of the run ---"
+    rm -f "$target_file"
+    run_claude_safely "Reply with just the word OK." "$target_file" "$state_dir" 1 "local-preflight"
+    if [ -s "$target_file" ]; then
+        echo "Local preflight OK: telemetry recorded ($(wc -l < "$target_file" | tr -d ' ') row(s)) at $state_dir. Proceeding with the full measurement."
+        return 0
+    fi
+    echo "Error: LOCAL PREFLIGHT FAILED. The one real (billed) invocation completed but no telemetry row was written under CLAUDE_CONFIG_DIR isolation (CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-unset}). This means the plugin's Stop hook telemetry does not survive config isolation on this machine -- proceeding would spend on the ~44 remaining paid invocations for ZERO samples, the exact failure mode issue #314 exists to prevent. ABORTING before further spend." >&2
+    return 1
+}
+
+# install_claude_cli_if_needed: issue #314 item 1. LOCAL_RUN=true skips the
+# global `npm i -g @anthropic-ai/claude-code` install entirely -- on a
+# developer machine that command upgrades the CLI the operator's own active
+# sessions may be running, possibly mid-session. The CI path (LOCAL_RUN
+# unset/false, the historical default) is completely unchanged: it still
+# installs before resolve_claude_version() is called, preserving the issue
+# #281 item 3 ordering fix (version capture must happen AFTER install so it
+# never falls back to hashing a placeholder).
+install_claude_cli_if_needed() {
+    if [ "$LOCAL_RUN" = "true" ]; then
+        echo "Local run mode: skipping 'npm i -g @anthropic-ai/claude-code' (would upgrade the host's global CLI, possibly mid-session). Using whatever 'claude' is already on PATH."
+        return 0
+    fi
+    npm i -g @anthropic-ai/claude-code
+}
+
 is_real_run() {
     # Issue #309: the ONLY reachable path to the paid measurement. Fail
     # CLOSED on anything else -- no tag shape, no branch, no event other
@@ -487,6 +605,10 @@ JSON
         exit 0
     fi
 
+    if [ "$LOCAL_RUN" = "true" ]; then
+        setup_local_run_isolation
+    fi
+
     git fetch --tags --force
     PREV_TAG=$(resolve_prev_release_tag "$CURRENT_REF")
 
@@ -505,10 +627,20 @@ JSON
     # captured `claude --version` at the top of the file, before this install
     # step ever ran, so on a clean runner it always hashed the constant
     # "unknown" and the drift guard never fired.
-    npm i -g @anthropic-ai/claude-code
+    install_claude_cli_if_needed
 
     CLAUDE_VERSION=$(resolve_claude_version) || exit 1
     TASK_HASH=$(compute_task_hash "$CLAUDE_VERSION" "$MODEL" "$(task_set_blob)" "$ITERATIONS")
+
+    if [ "$LOCAL_RUN" = "true" ]; then
+        ensure_marketplace_added "./"
+        claude plugin install marc@nexaduo
+        mkdir -p .agents
+        printf '[telemetry]\nenabled = true\n' > .agents/team.toml
+        if ! run_local_preflight "$HOME/.claude/marc-state-preflight" "$GITHUB_WORKSPACE/preflight.jsonl"; then
+            exit 1
+        fi
+    fi
 
     RERUN_A=true
 
@@ -534,8 +666,8 @@ JSON
 
     if [ "$RERUN_A" = true ]; then
         echo "--- RUNNING ARM A ($PREV_TAG) ---"
-        git worktree add ../arm-a "$PREV_TAG" || true
-        pushd ../arm-a
+        add_arm_a_worktree "$ARM_A_DIR" "$PREV_TAG"
+        pushd "$ARM_A_DIR"
 
         ensure_marketplace_added "./"
         claude plugin install marc@nexaduo
