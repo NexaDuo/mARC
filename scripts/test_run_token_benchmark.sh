@@ -328,7 +328,7 @@ fi
 # nearest RELEASE-SHAPED ancestor tag instead, skipping patch tags. This is
 # a question about TAG SHAPE ONLY -- resolve_prev_release_tag() does NOT
 # consult manifest presence at all; see Part 5 below for the separate
-# manifest-presence walk (resolve_cached_baseline_tag()). This builds a
+# manifest-presence CHECK (resolve_cached_baseline_tag()). This builds a
 # small, real git repo with a fabricated tag history and exercises
 # resolve_prev_release_tag() against it directly (a `cd`, not a mock -- the
 # function shells out to real `git describe`).
@@ -438,8 +438,8 @@ fi
 # release N+2 (current, under test). The COMPARISON TARGET (this function)
 # must be N+1 -- it is the actual previous release, and is what gets
 # checked out for arm A -- even though it has no cached data. See Part 5
-# below for resolve_cached_baseline_tag(), which is the function that must
-# skip N+1 (no manifest) and land on N instead.
+# below for resolve_cached_baseline_tag(), which checks directly for N+1's
+# own manifest and reports a MISS there (never substitutes N's).
 # -----------------------------------------------------------------------
 UNMEASURED_RELEASE_REPO="$WORK/unmeasured-release-repo"
 mkdir -p "$UNMEASURED_RELEASE_REPO"
@@ -471,36 +471,44 @@ else
 fi
 
 # -----------------------------------------------------------------------
-# Part 5: resolve_cached_baseline_tag() -- the CACHE SOURCE, manifest
-# presence only (issue #309 introduced this walk; issue #313 split it out
-# of resolve_prev_release_tag() into its own function so the comparison
-# target and the cache lookup can never be reconflated).
+# Part 5: resolve_cached_baseline_tag() -- the CACHE SOURCE, a DIRECT check
+# at the comparison target only, never an ancestor walk (issue #313 BLOCK,
+# `@rev` review of PR #313, verified by execution).
 #
-# Reuses UNMEASURED_RELEASE_REPO from 4d: release N (v26.9.10, HAS a
-# manifest) -> release N+1 (v26.9.13, release-shaped, NO manifest) ->
-# release N+2 (v26.9.16, current). Resolution from N+2 must land on N, not
-# N+1 -- landing on N+1 would make main()'s `[ -f "$MANIFEST_PATH" ]` check
-# miss and re-run arm A from scratch (~15 extra PAID `claude` invocations)
-# even though a perfectly good baseline sits one tag further back. This is
-# exactly #312's original finding; it must not regress.
+# It now takes resolve_prev_release_tag()'s OUTPUT as its argument -- the
+# comparison target itself -- not $CURRENT_REF, and has nothing left to
+# walk. #309/#312's original ancestor walk (reuse an OLDER tag's baseline
+# when the comparison target itself has none) is FORBIDDEN behavior now:
+# arm A measures THIS REPO'S OWN PLUGIN CODE at the checked-out tag, and
+# main() only checks out $PREV_TAG on a cache MISS -- a cache HIT from an
+# older ancestor would silently substitute a different tag's repo code
+# while the run still labels itself against $PREV_TAG. TASK_HASH does not
+# cover repo code, so nothing would catch the drift.
 # -----------------------------------------------------------------------
-got_skip_unmeasured="$(cd "$UNMEASURED_RELEASE_REPO" && resolve_cached_baseline_tag "v26.9.16" 2>/dev/null)"
-if [ "$got_skip_unmeasured" = "v26.9.10" ]; then
-    pass "resolve_cached_baseline_tag() skips a release-shaped ancestor tag with NO manifest (v26.9.13) and lands on the nearest one that was actually measured (v26.9.10) -- issue #309/#312"
+
+# 5a. Reuses UNMEASURED_RELEASE_REPO from 4d: release N (v26.9.10, HAS a
+# manifest) -> release N+1 (v26.9.13, release-shaped, NO manifest) ->
+# release N+2 (v26.9.16, current). resolve_prev_release_tag() resolves the
+# comparison target to v26.9.13 (asserted in 4d above). Checking the cache
+# AT v26.9.13 (not walking past it to v26.9.10) MUST be a MISS (empty),
+# even though an older ancestor (v26.9.10) does have a manifest -- reusing
+# it would measure v26.9.10's repo code for a v26.9.13 comparison.
+got_cache_miss_at_target="$(cd "$UNMEASURED_RELEASE_REPO" && resolve_cached_baseline_tag "v26.9.13" 2>/dev/null)"
+if [ -z "$got_cache_miss_at_target" ]; then
+    pass "resolve_cached_baseline_tag() is a cache MISS when the comparison target (v26.9.13) has no manifest of its own, even though an older ancestor (v26.9.10) does -- issue #313 BLOCK fix"
 else
-    fail "resolve_cached_baseline_tag() from v26.9.16 with an unmeasured release-shaped tag in between -- expected 'v26.9.10', got '$got_skip_unmeasured'"
+    fail "resolve_cached_baseline_tag('v26.9.13') -- expected empty (cache miss, no ancestor substitution), got '$got_cache_miss_at_target'"
 fi
 
 # 5b. Same GIT_REPO as Part 4 (v0.28.0 manifest -> v26.9.15 manifest ->
-# v26.9.15.1 patch -> v26.9.16 HEAD): the cache walk must land on the same
-# tag as the comparison target here, since v26.9.15 both is release-shaped
-# AND has a manifest -- a sanity check that the two functions agree in the
-# ordinary (measured-immediate-predecessor) case.
-got_cache_ordinary="$(cd "$GIT_REPO" && resolve_cached_baseline_tag "v26.9.16" 2>/dev/null)"
-if [ "$got_cache_ordinary" = "v26.9.15" ]; then
-    pass "resolve_cached_baseline_tag() agrees with resolve_prev_release_tag() (v26.9.15) in the ordinary measured-predecessor case"
+# v26.9.15.1 patch -> v26.9.16 HEAD): resolve_prev_release_tag() resolves
+# the comparison target to v26.9.15 (asserted in 4a above), which itself
+# HAS a manifest -- checking the cache directly at that tag must be a HIT.
+got_cache_hit_at_target="$(cd "$GIT_REPO" && resolve_cached_baseline_tag "v26.9.15" 2>/dev/null)"
+if [ "$got_cache_hit_at_target" = "v26.9.15" ]; then
+    pass "resolve_cached_baseline_tag() is a cache HIT when the comparison target itself has a manifest (v26.9.15)"
 else
-    fail "resolve_cached_baseline_tag() from v26.9.16 -- expected 'v26.9.15', got '$got_cache_ordinary'"
+    fail "resolve_cached_baseline_tag('v26.9.15') -- expected 'v26.9.15', got '$got_cache_hit_at_target'"
 fi
 
 # -----------------------------------------------------------------------
@@ -543,7 +551,7 @@ else
     fail "BOOTSTRAP CASE: resolve_prev_release_tag() -- expected 'v26.9.13', got '$bootstrap_comparison' (empty here is exactly the #313 regression: benchmark unrunnable)"
 fi
 
-bootstrap_cache="$(cd "$BOOTSTRAP_REPO" && resolve_cached_baseline_tag "v26.9.16" 2>/dev/null)"
+bootstrap_cache="$(cd "$BOOTSTRAP_REPO" && resolve_cached_baseline_tag "$bootstrap_comparison" 2>/dev/null)"
 if [ -z "$bootstrap_cache" ]; then
     pass "BOOTSTRAP CASE: resolve_cached_baseline_tag() returns empty (no cached baseline exists) without being treated as fatal -- issue #313"
 else
