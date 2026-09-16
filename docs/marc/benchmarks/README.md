@@ -57,18 +57,28 @@ of a disposable CI runner:
   auto-deleted.
 - Checks out the arm-A (previous release) worktree in that same scratch
   location instead of `../arm-a`, so it never creates a sibling directory
-  next to your checkout. A stale worktree left by a previous interrupted
-  local run is detected and cleared before the next one starts, rather than
-  silently masked.
+  next to your checkout. That location is a fresh `mktemp -d` path made new
+  for every run (it can never collide with a leftover from an earlier one);
+  the worktree registration is removed via an `EXIT` trap
+  (`git worktree remove --force`, then `git worktree prune`) when the script
+  exits.
 - Before spending on the full 30-45 invocations, makes exactly ONE real
   invocation and verifies a telemetry row was actually written under the
-  isolated config. If it wasn't, the run aborts immediately with an
-  explanation instead of burning the rest of the budget for zero samples
-  (this is exactly what happened in run 35046956691).
+  isolated config. If it wasn't, the run aborts immediately instead of
+  burning the rest of the budget for zero samples — this guards against the
+  Stop hook silently failing to fire under `CLAUDE_CONFIG_DIR` isolation, a
+  different failure from run 35046956691 (which burned ~19 billed
+  invocations against an exhausted `ANTHROPIC_API_KEY` credit balance, not a
+  telemetry gap).
 
-Run it from a checkout with `ANTHROPIC_API_KEY`/`GEMINI_API_KEY` set and
-`git fetch --tags` already done, ideally right after tagging a release so
-the walk in `resolve_prev_release_tag()` finds the right baseline.
+Do **not** set `ANTHROPIC_API_KEY`: the script never reads it (it's a CI-only
+secret `token-benchmark.yml` injects to force API-key billing on a
+disposable runner). Locally, with no key present, `claude` bills your own
+Claude Code subscription — the ~30-45 invocations a full run makes are
+enough to consume your 5-hour usage window. `GEMINI_API_KEY` isn't read
+anywhere in this script either; skip it. Run with `git fetch --tags` already
+done, ideally right after tagging a release so the walk in
+`resolve_prev_release_tag()` finds the right baseline.
 
 ### CI-only invocation (do not run this locally)
 
