@@ -203,37 +203,38 @@ sys.exit(1)
 # events from `GITHUB_TOKEN` actions (documented anti-recursion safeguard).
 # The real path was therefore permanently unreachable via `release`.
 #
-# Issue #304: the owner decided a paid measurement per release IS wanted --
-# but only for a minor/major release, never a patch (a patch that touches no
-# code, e.g. v26.9.15.1, cannot move token consumption; billing it is pure
-# noise against a floor already measured at 33.7%, docs/marc/benchmarks/
-# run-34987534132/). Since `release` can never fire from the normal tag
-# ritual, this keys off the TAG PUSH ITSELF instead: token-benchmark.yml now
-# triggers on `push: tags: v*.*.*`, the exact same trigger release.yml
-# already uses to publish -- that push is raised by the human/CI-identity
-# that ran `git push --tags`, not by GITHUB_TOKEN, so (unlike `release`) it
-# actually fires. See CHANGELOG.md's versioning note: this repo tags CalVer
-# `vYY.M.D`, with an optional fourth MICRO component ONLY to disambiguate a
-# second release on an already-taken date -- i.e. a 3-component tag
-# (v26.9.15) is a release, a 4-component tag (v26.9.15.1) is a patch of one.
-# That is the exact, confirmed rule (not inferred from component count in
-# the abstract) -- verified against `git tag --sort=-creatordate` and
-# CHANGELOG.md's "Calendar Versioning ... with an optional fourth component
-# (YY.M.D.MICRO) to disambiguate a second release on a date whose YY.M.D is
-# already taken" note, both checked before writing this regex.
+# Issue #304 then keyed the paid path off the TAG PUSH ITSELF (the same
+# trigger release.yml uses), demoting the real/patch tag SHAPE (see
+# is_release_tag()/is_patch_tag() below) to the deciding axis: a 3-component
+# tag paid, a 4-component (MICRO) tag stayed free.
 #
-# The `release`-event arm is REMOVED (not left disagreeing with this rule):
-# it could never fire anyway, and leaving it in place as an unconditional
-# paid path would silently diverge from the tag-based rule below the moment
-# `release` ever did fire (e.g. a hand-published release via the web UI or
-# `gh release create` under a human's own token) -- the exact "money trap"
-# #302 flagged.
+# Issue #309: under CalVer, tag SHAPE is not something the operator chooses --
+# it's decided by whether today's date is already taken as a tag. On
+# 2026-09-15, both v26.9.15 and v26.9.15.1 already existed, so ANY release
+# cut that day was forced to be 4-component (v26.9.15.2) and therefore forced
+# onto the free path, with no way to opt in short of waiting for the calendar
+# or fabricating a date (see #307, closed unmerged, opened purely to obtain a
+# paid run). Billing must not hang on a fact the operator can't control.
+#
+# Fix: the billing axis becomes an explicit opt-in declaration that names the
+# EXACT tag it authorizes (read_optin_tag()/optin_authorizes() below) --
+# read from OPTIN_FILE, e.g. docs/marc/benchmarks/OPTIN, a tracked,
+# reviewable, single-line file. Tag shape is demoted from "the decision" to a
+# VETO: is_patch_tag() can still force the free path (preserving #304's
+# safety property -- a patch can never spend money, opt-in or not), but tag
+# shape can no longer CAUSE spend by itself. A stale opt-in (left over from a
+# prior release, naming a tag that already shipped) cannot cause spend
+# either -- the next tag simply won't match it, so the declaration
+# self-expires by design. This is deliberately a per-tag STRING, not a
+# boolean flag, for exactly that reason.
 #
 # A `workflow_dispatch` run with its `real_run` input explicitly set to
-# "true" is ALSO a real run, unchanged. Every other case (push to a branch,
-# pull_request, a patch-tag push, a workflow_dispatch left at its default
-# `real_run=false`) stays on the free stub path -- see
-# scripts/test_benchmark_dispatch_reachable.sh, which pins the full matrix.
+# "true" is ALSO a real run, unchanged -- an explicit human opt-in that
+# doesn't need the tag machinery at all. Every other case (push to a branch,
+# pull_request, a patch-tag push, a release-shaped tag with no/mismatched
+# opt-in, a workflow_dispatch left at its default `real_run=false`) stays on
+# the free stub path -- see scripts/test_benchmark_dispatch_reachable.sh,
+# which pins the full matrix.
 is_release_tag() {
     # Exactly 3 numeric dot-separated components: vYY.M.D. A real
     # minor/major release per this repo's CalVer scheme. Takes an optional
@@ -311,9 +312,67 @@ resolve_prev_release_tag() {
     done
 }
 
+# OPTIN_FILE: path to the opt-in declaration (issue #309). Overridable via
+# the environment so the companion test can point it at a temp fixture
+# without touching the real repo file. Not exported anywhere in
+# token-benchmark.yml -- it always resolves to the tracked path below.
+OPTIN_FILE="${OPTIN_FILE:-$GITHUB_WORKSPACE/docs/marc/benchmarks/OPTIN}"
+
+# read_optin_tag: read $file (default $OPTIN_FILE), trimmed of surrounding
+# whitespace (including a trailing newline -- `git`/most editors add one on
+# save, and that must not turn a correct opt-in into a non-match). Returns
+# non-zero (with no output) if the file doesn't exist -- absence is the
+# normal, safe state (no opt-in declared), not an error.
+#
+# Deliberately just a trim, never a regex/glob match against the tag: the
+# comparison this feeds (optin_authorizes(), below) must be anchored exact-
+# string equality, so a file containing "v26.9.1" (a prefix of "v26.9.16")
+# or "v26.9.16-rc" (a superstring) does NOT authorize "v26.9.16" -- #309's
+# AC. Trimming is about tolerating incidental whitespace, not about being
+# lenient on the tag text itself.
+read_optin_tag() {
+    local file="${1:-$OPTIN_FILE}"
+    [ -f "$file" ] || return 1
+    local content
+    content="$(cat "$file")" || return 1
+    # Command substitution above already stripped any trailing newline(s).
+    # Trim remaining leading/trailing whitespace (spaces, tabs, stray CR)
+    # with a pure-bash idiom so this has no dependency on GNU-vs-BSD sed/tr
+    # flag differences.
+    content="${content#"${content%%[![:space:]]*}"}"
+    content="${content%"${content##*[![:space:]]}"}"
+    printf '%s' "$content"
+}
+
+# optin_authorizes: does the opt-in declaration at $file (default
+# $OPTIN_FILE) name EXACTLY $ref (default $CURRENT_REF)? Anchored, full-
+# string comparison -- no prefix/substring match. A missing file, an empty
+# file, or a file naming any other tag (including a stale prior release's
+# tag, or a prefix/superstring of $ref) all return non-zero, i.e. "does not
+# authorize" -- the safe default in every case.
+# shellcheck disable=SC2120 # called with explicit args by the companion test
+optin_authorizes() {
+    local ref="${1:-$CURRENT_REF}"
+    local file="${2:-$OPTIN_FILE}"
+    local declared
+    declared="$(read_optin_tag "$file")" || return 1
+    [ -n "$declared" ] || return 1
+    [ "$declared" = "$ref" ]
+}
+
 is_real_run() {
-    if [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ] && is_release_tag; then
-        return 0
+    if [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+        # is_patch_tag() is a HARD VETO (issue #304's safety property,
+        # preserved by #309): a patch-shaped tag never pays, opt-in or not.
+        if is_patch_tag; then
+            return 1
+        fi
+        # Tag shape no longer CAUSES spend -- only an opt-in declaration
+        # naming this exact tag does (issue #309).
+        if optin_authorizes; then
+            return 0
+        fi
+        return 1
     fi
     if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REAL_RUN_INPUT" = "true" ]; then
         return 0

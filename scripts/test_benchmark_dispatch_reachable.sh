@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regression test for issues #291 and #304.
+# Regression test for issues #291, #304, and #309.
 #
 # #291: the real three-arm measurement in run_token_benchmark.sh used to be
 # reachable ONLY via `[ "$EVENT_NAME" != "release" ]`, i.e. only on a
@@ -12,21 +12,33 @@
 # #304: the owner decided a paid measurement IS wanted, once per
 # minor/major release, never for a patch. Since `release` can never fire,
 # the trigger moved to the tag PUSH itself (the same trigger release.yml
-# uses to publish), and is_real_run() now also consults the tag shape:
-# a 3-component CalVer tag (vYY.M.D) is a release; a 4-component tag
-# (vYY.M.D.MICRO) is a patch of one (CHANGELOG.md's own versioning note).
+# uses to publish), and is_real_run() then keyed the decision on tag SHAPE:
+# a 3-component CalVer tag (vYY.M.D) paid; a 4-component tag (vYY.M.D.MICRO)
+# stayed free (CHANGELOG.md's own versioning note).
+#
+# #309: tag shape is not something the operator controls under CalVer -- the
+# calendar decides it (whether today's date is already taken as a tag). So
+# #304's mechanism could force a genuine release cut onto the free path with
+# no way to opt in. Fix: billing now hangs on an explicit, reviewable opt-in
+# declaration (OPTIN_FILE, e.g. docs/marc/benchmarks/OPTIN) naming the EXACT
+# tag it authorizes; tag shape is demoted from cause-of-spend to a VETO
+# (is_patch_tag() can still force free, but can never itself cause paid).
 #
 # This test is deliberately NOT pinned to "release is broken" (that
 # instance). It asserts the durable properties the issues ask for: the
 # real-run path has a reachable trigger that does not require the
-# never-firing `release` event; a minor/major tag push takes the real path;
-# a patch tag push does not; a dispatched run that does not explicitly opt
-# in still takes the free stub path; and the workflow's publish steps can
-# never independently disagree with is_real_run() because they read its
-# own emitted step output rather than re-deriving the decision.
+# never-firing `release` event; a release-shaped tag push with a matching
+# opt-in takes the real path and one with no/stale/mismatched opt-in does
+# not; a patch tag never pays even with a matching opt-in (the veto holds);
+# the opt-in comparison is anchored (no prefix/substring match) and
+# whitespace-tolerant; a dispatched run that does not explicitly opt in
+# still takes the free stub path; and the workflow's publish steps can never
+# independently disagree with is_real_run() because they read its own
+# emitted step output rather than re-deriving the decision.
 #
-# Run this against the pre-#304 script (`git show origin/main:scripts/run_token_benchmark.sh`)
-# and the tag-shape / release-event-removed assertions below go RED. See the
+# Run this against the pre-#309 script (`git show origin/main~1:scripts/run_token_benchmark.sh`)
+# and the opt-in assertions below go RED (every release-shaped tag paid
+# unconditionally on tag shape alone, with no opt-in file involved). See the
 # PR body for the actual red/green transcript.
 set -euo pipefail
 
@@ -206,13 +218,29 @@ if ! declare -F emit_real_run_output > /dev/null; then
     exit 1
 fi
 
+if ! declare -F optin_authorizes > /dev/null; then
+    fail "optin_authorizes() is not defined in $TARGET -- issue #309's opt-in declaration has no reachable, testable check"
+    echo
+    echo "$FAILS check(s) FAILED."
+    exit 1
+fi
+
 OUTPUT_FILE="$(mktemp)"
-trap 'rm -f "$OUTPUT_FILE"' EXIT
+OPTIN_DIR="$(mktemp -d)"
+trap 'rm -f "$OUTPUT_FILE"; rm -rf "$OPTIN_DIR"' EXIT
+
+# make_optin: write $OPTIN_DIR/$1 with content $2 (verbatim -- callers pass
+# whatever whitespace they want to exercise) and echo its path.
+make_optin() {
+    local content="$2" path="$OPTIN_DIR/$1"
+    printf '%s' "$content" > "$path"
+    printf '%s' "$path"
+}
 
 check_real_run() {
-    local desc="$1" expected="$2" event="$3" ref_type="${4:-branch}" ref_name="${5:-main}" real_run_input="${6:-}"
+    local desc="$1" expected="$2" event="$3" ref_type="${4:-branch}" ref_name="${5:-main}" real_run_input="${6:-}" optin_file="${7:-$OPTIN_DIR/__nonexistent__}"
     local got got_output
-    if EVENT_NAME="$event" REF_TYPE="$ref_type" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" is_real_run; then
+    if EVENT_NAME="$event" REF_TYPE="$ref_type" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" OPTIN_FILE="$optin_file" is_real_run; then
         got="true"
     else
         got="false"
@@ -225,9 +253,11 @@ check_real_run() {
 
     # emit_real_run_output() must agree with is_real_run() for the exact
     # same inputs (issue #304 single-source-of-truth for the workflow's
-    # publish gating).
+    # publish gating). It must ALSO write only the hardcoded literal, never
+    # the opt-in file's content or the tag (issue #309) -- checked below via
+    # the exact-match on "true"/"false".
     : > "$OUTPUT_FILE"
-    EVENT_NAME="$event" REF_TYPE="$ref_type" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" \
+    EVENT_NAME="$event" REF_TYPE="$ref_type" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" OPTIN_FILE="$optin_file" \
         GITHUB_OUTPUT="$OUTPUT_FILE" emit_real_run_output
     got_output="$(grep -o 'real_run=.*' "$OUTPUT_FILE" | cut -d= -f2)"
     if [ "$got_output" = "$expected" ]; then
@@ -241,14 +271,33 @@ check_real_run() {
 check_real_run "push to main (branch) stays on the stub path" false "push" "branch" "main" ""
 check_real_run "pull_request event stays on the stub path" false "pull_request" "branch" "main" ""
 
-# push of a TAG -- issue #304's new mechanism. Tag shapes below are drawn
+# push of a TAG -- issue #309's opt-in mechanism. Tag shapes below are drawn
 # straight from `git tag --sort=-creatordate` (v26.9.15.1, v26.9.15,
 # v26.9.8, v0.28.0, ...) and CHANGELOG.md's versioning note: a 3-component
 # CalVer tag is a release, a 4th MICRO component makes it a patch.
-check_real_run "a 3-component release tag (v26.9.15) takes the real path -- THE reachable trigger issue #304 requires" true "push" "tag" "v26.9.15" ""
-check_real_run "a 3-component release tag (v26.9.8) takes the real path" true "push" "tag" "v26.9.8" ""
-check_real_run "a legacy 3-component release tag (v0.28.0) takes the real path" true "push" "tag" "v0.28.0" ""
-check_real_run "a 4-component PATCH tag (v26.9.15.1) stays on the stub path -- never billed (issue #304)" false "push" "tag" "v26.9.15.1" ""
+
+MATCH_26_9_16="$(make_optin match_26_9_16 'v26.9.16')"
+STALE_26_9_15="$(make_optin stale_26_9_15 'v26.9.15')"
+WS_26_9_16="$(make_optin ws_26_9_16 $'  v26.9.16  \n\n')"
+PREFIX_26_9_1="$(make_optin prefix_26_9_1 'v26.9.1')"
+SUPER_26_9_16_RC="$(make_optin super_26_9_16_rc 'v26.9.16-rc')"
+
+check_real_run "release-shaped tag + matching opt-in takes the real path -- the reachable, operator-controlled trigger issue #309 requires" \
+    true "push" "tag" "v26.9.16" "" "$MATCH_26_9_16"
+check_real_run "release-shaped tag + NO opt-in file stays on the stub path -- the #304 regression: tag shape alone must no longer pay (issue #309)" \
+    false "push" "tag" "v26.9.16" "" "$OPTIN_DIR/__nonexistent__"
+check_real_run "release-shaped tag + opt-in naming a DIFFERENT (stale) tag stays on the stub path -- a stale declaration cannot spend (issue #309)" \
+    false "push" "tag" "v26.9.16" "" "$STALE_26_9_15"
+check_real_run "opt-in with leading/trailing whitespace and a trailing newline still matches its own tag" \
+    true "push" "tag" "v26.9.16" "" "$WS_26_9_16"
+check_real_run "opt-in that is a PREFIX of the tag (v26.9.1 vs v26.9.16) stays free -- comparison is anchored, not substring" \
+    false "push" "tag" "v26.9.16" "" "$PREFIX_26_9_1"
+check_real_run "opt-in that is a SUPERSTRING of the tag (v26.9.16-rc vs v26.9.16) stays free -- comparison is anchored, not substring" \
+    false "push" "tag" "v26.9.16" "" "$SUPER_26_9_16_RC"
+check_real_run "a 4-component PATCH tag (v26.9.15.1) stays free even WITH a matching opt-in -- the tag-shape veto still holds (issue #304, preserved by #309)" \
+    false "push" "tag" "v26.9.15.1" "" "$(make_optin match_patch 'v26.9.15.1')"
+check_real_run "a legacy 3-component release tag (v0.28.0) with a matching opt-in takes the real path" \
+    true "push" "tag" "v0.28.0" "" "$(make_optin match_v0_28_0 'v0.28.0')"
 
 # `release` must no longer be an unconditional real-run arm (removed, not
 # left disagreeing with the tag-push rule -- issue #304's explicit AC).
@@ -256,7 +305,11 @@ check_real_run "a bare 'release' event (if it ever fired) is NOT treated as real
 
 check_real_run "workflow_dispatch with real_run unset stays on the stub path (safe default)" false "workflow_dispatch" "branch" "main" ""
 check_real_run "workflow_dispatch with real_run=false stays on the stub path" false "workflow_dispatch" "branch" "main" "false"
-check_real_run "workflow_dispatch with real_run=true takes the real path -- the manual route stays available, unchanged" true "workflow_dispatch" "branch" "main" "true"
+check_real_run "workflow_dispatch with real_run=true takes the real path -- the manual route stays available, unchanged (issue #309 does not touch this)" true "workflow_dispatch" "branch" "main" "true"
+check_real_run "workflow_dispatch with real_run=true takes the real path even with an opt-in file present naming something else -- dispatch never consults the opt-in" \
+    true "workflow_dispatch" "branch" "main" "true" "$STALE_26_9_15"
+check_real_run "pull_request event stays free even with an opt-in file present matching its own ref (e.g. a fork PR editing it) -- only a 'push'+'tag' consults it" \
+    false "pull_request" "branch" "v26.9.16" "" "$MATCH_26_9_16"
 
 # -----------------------------------------------------------------------
 # Part 3: lockstep check between token-benchmark.yml's publish `if:`

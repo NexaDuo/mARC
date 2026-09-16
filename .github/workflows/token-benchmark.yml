@@ -17,12 +17,19 @@ on:
     # GitHub's documented GITHUB_TOKEN anti-recursion behavior (#291); NOT
     # verified by spending money (never do that to test this).
     #
-    # scripts/run_token_benchmark.sh's is_real_run() then decides, from
-    # GITHUB_REF_TYPE/GITHUB_REF_NAME, whether this specific tag is a real
-    # (minor/major, 3-component vYY.M.D) release or a patch (4-component
-    # vYY.M.D.MICRO, per CHANGELOG.md's versioning note) -- only the former
-    # takes the paid path. A patch tag still runs this workflow (cheap: the
-    # free stub/report path, same as a push to main) but never the paid one.
+    # Issue #309: under CalVer, whether a tag is 3- or 4-component is decided
+    # by the calendar (whether today's date is already taken), not by the
+    # operator -- so #304's original "3-component tag pays" rule could force
+    # a genuine release onto the free path with no way to opt in. Billing now
+    # hangs on an explicit, reviewable opt-in declaration
+    # (docs/marc/benchmarks/OPTIN, a tracked file naming the EXACT tag it
+    # authorizes) that scripts/run_token_benchmark.sh's is_real_run() reads
+    # via GITHUB_REF_NAME -- see that function for the full rule. Tag shape
+    # (GITHUB_REF_TYPE + the 3-vs-4-component regex) is demoted to a VETO: a
+    # patch tag (vYY.M.D.MICRO) still can never pay, opt-in or not, but tag
+    # shape alone can no longer CAUSE a paid run. A patch tag, or a
+    # release-shaped tag with no/stale/mismatched opt-in, still runs this
+    # workflow (cheap: the free stub/report path, same as a push to main).
     tags:
       - "v*.*.*"
   pull_request:
@@ -34,9 +41,11 @@ on:
   # arms x 5 iterations = 45 live `claude` invocations if arm A (the
   # previous release) must be re-run, or 30 if its baseline is cached (see
   # scripts/run_token_benchmark.sh's manifest/task-hash reuse logic). A
-  # minor/major release tag push (above) costs the SAME 30-45 invocations,
-  # automatically, with no prompt -- that is the cost an operator incurs by
-  # cutting a minor/major release; a patch tag costs nothing.
+  # minor/major release tag push costs that SAME 30-45 invocations only when
+  # its release PR included a matching docs/marc/benchmarks/OPTIN
+  # declaration (issue #309) -- that line is what a reviewer approves when
+  # approving the spend. A tag with no/stale opt-in, or any patch tag, costs
+  # nothing.
   # Issue #296: publishing was gated to `if: github.event_name == 'release'`
   # alone, and since `release` can never fire, the publish path was
   # unreachable by ANY route (not just the real-measurement path above) — a
