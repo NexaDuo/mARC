@@ -258,6 +258,127 @@ else
     fail "run_local_preflight() did not distinguish the stale-row case ($(cat "$WORK/4c.out"))"
 fi
 
+# -----------------------------------------------------------------------
+# Part 5 (field report): LOCAL_RUN_CONFIG_DIR lets the operator supply their
+# own already-logged-in config dir instead of a throwaway one. It must be
+# honored when it exists, hard-abort by name when it doesn't (or is a file),
+# leave the default mktemp behaviour untouched when unset, and -- the
+# regression that matters -- PREFLIGHT_STATE_DIR must stay under the fresh
+# per-run scratch root, never inside the supplied (persistent, reused)
+# config dir, in either mode.
+# -----------------------------------------------------------------------
+SUPPLIED_CONFIG_DIR="$WORK/operator-config"
+mkdir -p "$SUPPLIED_CONFIG_DIR"
+
+(
+    unset CLAUDE_CONFIG_DIR || true
+    LOCAL_RUN=true
+    LOCAL_RUN_CONFIG_DIR="$SUPPLIED_CONFIG_DIR"
+    export LOCAL_RUN LOCAL_RUN_CONFIG_DIR
+    setup_local_run_isolation
+    if [ "$CLAUDE_CONFIG_DIR" = "$SUPPLIED_CONFIG_DIR" ]; then
+        echo "PASS_SUPPLIED_DIR_HONORED"
+    else
+        echo "FAIL_SUPPLIED_DIR_NOT_HONORED=$CLAUDE_CONFIG_DIR"
+    fi
+    # shellcheck disable=SC2153 # PREFLIGHT_STATE_DIR is assigned by
+    # setup_local_run_isolation() above, not a typo of PREFLIGHT_STATE_HIT.
+    case "$PREFLIGHT_STATE_DIR" in
+        "$SUPPLIED_CONFIG_DIR"*)
+            echo "FAIL_PREFLIGHT_STATE_DIR_INSIDE_SUPPLIED_CONFIG"
+            ;;
+        "$LOCAL_RUN_SCRATCH_DIR"*)
+            echo "PASS_PREFLIGHT_STATE_DIR_UNDER_FRESH_ROOT"
+            ;;
+        *)
+            echo "FAIL_PREFLIGHT_STATE_DIR_UNEXPECTED=$PREFLIGHT_STATE_DIR"
+            ;;
+    esac
+) > "$WORK/part5a.out" 2>/dev/null
+
+if grep -q "^PASS_SUPPLIED_DIR_HONORED$" "$WORK/part5a.out"; then
+    pass "LOCAL_RUN_CONFIG_DIR is honored: CLAUDE_CONFIG_DIR is set to the supplied existing dir"
+else
+    fail "LOCAL_RUN_CONFIG_DIR was not honored ($(cat "$WORK/part5a.out"))"
+fi
+if grep -q "^PASS_PREFLIGHT_STATE_DIR_UNDER_FRESH_ROOT$" "$WORK/part5a.out"; then
+    pass "with LOCAL_RUN_CONFIG_DIR set, PREFLIGHT_STATE_DIR still lives under the fresh per-run scratch root, not inside the supplied config dir"
+else
+    fail "with LOCAL_RUN_CONFIG_DIR set, PREFLIGHT_STATE_DIR is not under the fresh scratch root as expected ($(cat "$WORK/part5a.out"))"
+fi
+
+MISSING_CONFIG_DIR="$WORK/does-not-exist-config"
+if (
+    unset CLAUDE_CONFIG_DIR || true
+    LOCAL_RUN=true
+    LOCAL_RUN_CONFIG_DIR="$MISSING_CONFIG_DIR"
+    export LOCAL_RUN LOCAL_RUN_CONFIG_DIR
+    setup_local_run_isolation
+) > "$WORK/part5b.out" 2>&1; then
+    fail "LOCAL_RUN_CONFIG_DIR pointing at a non-existent path did not abort"
+else
+    pass "LOCAL_RUN_CONFIG_DIR pointing at a non-existent path hard-aborts (non-zero)"
+fi
+if grep -q "$MISSING_CONFIG_DIR" "$WORK/part5b.out"; then
+    pass "the abort message names the missing LOCAL_RUN_CONFIG_DIR path"
+else
+    fail "the abort message did not name the missing path ($(cat "$WORK/part5b.out"))"
+fi
+
+FILE_NOT_DIR_CONFIG="$WORK/config-is-a-file"
+: > "$FILE_NOT_DIR_CONFIG"
+if (
+    unset CLAUDE_CONFIG_DIR || true
+    LOCAL_RUN=true
+    LOCAL_RUN_CONFIG_DIR="$FILE_NOT_DIR_CONFIG"
+    export LOCAL_RUN LOCAL_RUN_CONFIG_DIR
+    setup_local_run_isolation
+) > "$WORK/part5c.out" 2>&1; then
+    fail "LOCAL_RUN_CONFIG_DIR pointing at a file (not a directory) did not abort"
+else
+    pass "LOCAL_RUN_CONFIG_DIR pointing at a file (not a directory) hard-aborts (non-zero)"
+fi
+if grep -q "$FILE_NOT_DIR_CONFIG" "$WORK/part5c.out"; then
+    pass "the abort message names the file-not-directory LOCAL_RUN_CONFIG_DIR path"
+else
+    fail "the abort message did not name the file-not-directory path ($(cat "$WORK/part5c.out"))"
+fi
+
+(
+    unset CLAUDE_CONFIG_DIR || true
+    unset LOCAL_RUN_CONFIG_DIR || true
+    LOCAL_RUN=true
+    export LOCAL_RUN
+    setup_local_run_isolation
+    case "$CLAUDE_CONFIG_DIR" in
+        "$LOCAL_RUN_SCRATCH_DIR"*)
+            echo "PASS_DEFAULT_CONFIG_UNDER_SCRATCH"
+            ;;
+        *)
+            echo "FAIL_DEFAULT_CONFIG_NOT_UNDER_SCRATCH=$CLAUDE_CONFIG_DIR"
+            ;;
+    esac
+    case "$PREFLIGHT_STATE_DIR" in
+        "$LOCAL_RUN_SCRATCH_DIR"*)
+            echo "PASS_DEFAULT_PREFLIGHT_UNDER_SCRATCH"
+            ;;
+        *)
+            echo "FAIL_DEFAULT_PREFLIGHT_NOT_UNDER_SCRATCH=$PREFLIGHT_STATE_DIR"
+            ;;
+    esac
+) > "$WORK/part5d.out" 2>/dev/null
+
+if grep -q "^PASS_DEFAULT_CONFIG_UNDER_SCRATCH$" "$WORK/part5d.out"; then
+    pass "LOCAL_RUN_CONFIG_DIR unset: default fresh-mktemp CLAUDE_CONFIG_DIR behaviour is preserved"
+else
+    fail "LOCAL_RUN_CONFIG_DIR unset: default CLAUDE_CONFIG_DIR behaviour regressed ($(cat "$WORK/part5d.out"))"
+fi
+if grep -q "^PASS_DEFAULT_PREFLIGHT_UNDER_SCRATCH$" "$WORK/part5d.out"; then
+    pass "LOCAL_RUN_CONFIG_DIR unset: PREFLIGHT_STATE_DIR still lives under the fresh per-run scratch root"
+else
+    fail "LOCAL_RUN_CONFIG_DIR unset: PREFLIGHT_STATE_DIR regressed ($(cat "$WORK/part5d.out"))"
+fi
+
 echo
 if [ "$FAILS" -eq 0 ]; then
     echo "All checks passed."

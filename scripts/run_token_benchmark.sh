@@ -21,6 +21,17 @@ REAL_RUN_INPUT="${REAL_RUN_INPUT:-false}"
 # path and the CI real-run path) is completely unchanged by this flag.
 LOCAL_RUN="${LOCAL_RUN:-false}"
 
+# LOCAL_RUN_CONFIG_DIR (field report, first real local run): a fresh mktemp'd
+# CLAUDE_CONFIG_DIR isolates plugin/marketplace state but also isolates
+# authentication, so the CLI starts logged out and the billed preflight
+# invocation fails. Set this to a directory you created and logged into
+# yourself (`CLAUDE_CONFIG_DIR=<dir> claude` then `/login`) to reuse it as
+# CLAUDE_CONFIG_DIR instead of a throwaway one -- see
+# setup_local_run_isolation() below for the full rationale, including why
+# `.credentials.json` redirection is forbidden instead. Unset by default:
+# behaviour is then exactly the pre-existing fresh-mktemp isolation.
+LOCAL_RUN_CONFIG_DIR="${LOCAL_RUN_CONFIG_DIR:-}"
+
 # ARM_A_DIR: where the arm-A worktree is checked out. Defaults to the
 # historical CI location; LOCAL_RUN mode overrides this to a disposable
 # scratch directory in setup_local_run_isolation() below (issue #314 item 3).
@@ -374,10 +385,45 @@ resolve_cached_baseline_tag() {
 # REGISTRATION is cleaned up via a trap scoped to exactly $ARM_A_DIR, so a
 # local run never leaves the main checkout's `git worktree list` pointing at
 # a now-orphaned scratch path, and never touches anything outside it.
+#
+# LOCAL_RUN_CONFIG_DIR (field report, first real local run): a fresh
+# mktemp'd CLAUDE_CONFIG_DIR isolates plugin/marketplace state correctly but
+# also isolates AUTHENTICATION, so the CLI starts logged out and the
+# preflight invocation fails every time. The fix is NOT to redirect
+# `.credentials.json` into the scratch dir -- that was tried and it is
+# DANGEROUS: the CLI refreshes its OAuth token via write-temp-then-rename,
+# which replaces a symlink (or diverges from a copy) with a fresh regular
+# file inside the scratch dir; deleting that scratch dir afterwards then
+# destroys the only copy of the refreshed token and LOGS THE OPERATOR OUT of
+# their real host session. This happened. Never read, print, copy, move,
+# symlink, or delete anything named `.credentials.json` anywhere in this
+# script.
+#
+# Instead, when LOCAL_RUN_CONFIG_DIR is set, the operator supplies their OWN
+# persistent config directory that they have already logged into once
+# (`CLAUDE_CONFIG_DIR=<dir> claude` then `/login`), and CLAUDE_CONFIG_DIR
+# points there instead of under a throwaway mktemp root. That directory is
+# never created here -- an auto-created, never-logged-into typo'd path would
+# silently reproduce the exact logged-out preflight failure this exists to
+# fix, after already spending the one billed preflight invocation -- so a
+# missing or non-directory path is a hard abort. It is also never deleted;
+# it is the operator's own persistent asset, reused across runs.
 setup_local_run_isolation() {
     LOCAL_RUN_SCRATCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/marc-local-run.XXXXXX")"
-    CLAUDE_CONFIG_DIR="$LOCAL_RUN_SCRATCH_DIR/claude-config"
-    mkdir -p "$CLAUDE_CONFIG_DIR"
+    if [ -n "${LOCAL_RUN_CONFIG_DIR:-}" ]; then
+        if [ ! -e "$LOCAL_RUN_CONFIG_DIR" ]; then
+            echo "Error: LOCAL_RUN_CONFIG_DIR is set to '$LOCAL_RUN_CONFIG_DIR' but that path does not exist. Create it and log into it first: mkdir -p '$LOCAL_RUN_CONFIG_DIR' && CLAUDE_CONFIG_DIR='$LOCAL_RUN_CONFIG_DIR' claude, then run /login. This script will never auto-create it -- a typo'd path would silently start the preflight invocation logged out again." >&2
+            exit 1
+        fi
+        if [ ! -d "$LOCAL_RUN_CONFIG_DIR" ]; then
+            echo "Error: LOCAL_RUN_CONFIG_DIR is set to '$LOCAL_RUN_CONFIG_DIR' but that path is not a directory. Point it at a directory you created and logged into with CLAUDE_CONFIG_DIR='$LOCAL_RUN_CONFIG_DIR' claude followed by /login." >&2
+            exit 1
+        fi
+        CLAUDE_CONFIG_DIR="$LOCAL_RUN_CONFIG_DIR"
+    else
+        CLAUDE_CONFIG_DIR="$LOCAL_RUN_SCRATCH_DIR/claude-config"
+        mkdir -p "$CLAUDE_CONFIG_DIR"
+    fi
     export CLAUDE_CONFIG_DIR
     ARM_A_DIR="$LOCAL_RUN_SCRATCH_DIR/arm-a"
     # PREFLIGHT_STATE_DIR: PR #316 (`@rev` BLOCK). This used to be the fixed,
@@ -392,9 +438,15 @@ setup_local_run_isolation() {
     PREFLIGHT_STATE_DIR="$LOCAL_RUN_SCRATCH_DIR/preflight-state"
     mkdir -p "$PREFLIGHT_STATE_DIR"
     echo "Local run mode (LOCAL_RUN=true): isolating this run at $LOCAL_RUN_SCRATCH_DIR" >&2
-    echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR (never the host's real Claude Code config -- inspect or delete this directory yourself when done)" >&2
+    if [ -n "${LOCAL_RUN_CONFIG_DIR:-}" ]; then
+        echo "  config dir mode: REUSED operator-owned config (LOCAL_RUN_CONFIG_DIR set)" >&2
+        echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR (this is YOUR persistent, already-logged-in config dir -- it is not deleted or modified by this script beyond the plugin/marketplace mutations it always makes)" >&2
+    else
+        echo "  config dir mode: FRESH throwaway config (LOCAL_RUN_CONFIG_DIR unset)" >&2
+        echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR (never the host's real Claude Code config -- inspect or delete this directory yourself when done)" >&2
+    fi
     echo "  arm-A worktree will be checked out at $ARM_A_DIR (not ../arm-a)" >&2
-    echo "  preflight telemetry state dir: $PREFLIGHT_STATE_DIR (fresh scratch, never \$HOME/.claude -- see PR #316)" >&2
+    echo "  preflight telemetry state dir: $PREFLIGHT_STATE_DIR (always under the fresh per-run scratch root, never inside a reused config dir, and never \$HOME/.claude -- see PR #316)" >&2
     trap 'git worktree remove --force "$ARM_A_DIR" 2>/dev/null || true; git worktree prune 2>/dev/null || true' EXIT
 }
 
