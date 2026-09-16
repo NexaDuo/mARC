@@ -314,7 +314,8 @@ else
 fi
 
 # -----------------------------------------------------------------------
-# Part 4: resolve_prev_release_tag() (issue #304 `@rev` review, BLOCKING).
+# Part 4: resolve_prev_release_tag() (issue #304 `@rev` review, BLOCKING;
+# issue #309 changed what counts as a valid stopping point).
 #
 # PREV_TAG used to be `git describe --tags --abbrev=0 "$CURRENT_REF^"` --
 # nearest tag by ANCESTRY, with no regard for release-vs-patch shape.
@@ -322,10 +323,14 @@ fi
 # docs/marc/benchmarks/<tag>/manifest.json, so the next minor/major
 # release's cache lookup would key on that patch tag, miss unconditionally,
 # and re-run arm A -- extra PAID `claude` invocations, reopening the exact
-# waste issue #304 exists to close. This builds a small, real git repo with
-# a fabricated tag history and exercises resolve_prev_release_tag()
-# against it directly (a `cd`, not a mock -- the function shells out to
-# real `git describe`).
+# waste issue #304 exists to close. Issue #304 fixed this by walking to the
+# nearest RELEASE-SHAPED ancestor tag instead -- safe only while release
+# shape and "has a manifest" were the same thing, which issue #309 breaks
+# (the paid path is no longer tied to tag shape at all, so most
+# release-shaped tags will now have no manifest). This builds a small, real
+# git repo with a fabricated tag history and exercises
+# resolve_prev_release_tag() against it directly (a `cd`, not a mock -- the
+# function shells out to real `git describe`).
 # -----------------------------------------------------------------------
 
 # Every `git tag` below is pinned with `-c tag.gpgsign=false`: a lightweight
@@ -335,6 +340,15 @@ fi
 # message?" -- reproduced while writing this test) with no GPG key
 # configured in this sandbox. See AGENTS.md's "guard scripts against
 # ambient config" lesson.
+# A manifest's CONTENT is irrelevant to resolve_prev_release_tag() -- it
+# only checks the file's existence (main() is the one that reads task_hash
+# etc. out of it) -- so this helper writes a minimal placeholder.
+write_manifest() {
+    local repo="$1" tag="$2"
+    mkdir -p "$repo/docs/marc/benchmarks/$tag"
+    echo '{}' > "$repo/docs/marc/benchmarks/$tag/manifest.json"
+}
+
 GIT_REPO="$WORK/prev-tag-repo"
 mkdir -p "$GIT_REPO"
 (
@@ -343,15 +357,17 @@ mkdir -p "$GIT_REPO"
     git config user.email "test@example.com"
     git config user.name "test"
 
-    # commit 1: a legacy 3-component release tag (pre-CalVer scheme).
+    # commit 1: a legacy 3-component release tag (pre-CalVer scheme). HAS a
+    # manifest -- it was actually measured.
     echo a > f.txt && git add f.txt && git commit -qm "c1"
     git -c tag.gpgsign=false tag v0.28.0
 
-    # commit 2: a CalVer release tag.
+    # commit 2: a CalVer release tag. HAS a manifest.
     echo b > f.txt && git add f.txt && git commit -qm "c2"
     git -c tag.gpgsign=false tag v26.9.15
 
     # commit 3: a CalVer PATCH tag on top of it (same day, disambiguated).
+    # Never has a manifest of its own by construction (issue #304).
     echo c > f.txt && git add f.txt && git commit -qm "c3"
     git -c tag.gpgsign=false tag v26.9.15.1
 
@@ -359,31 +375,35 @@ mkdir -p "$GIT_REPO"
     echo d > f.txt && git add f.txt && git commit -qm "c4"
     git -c tag.gpgsign=false tag v26.9.16
 )
+write_manifest "$GIT_REPO" v0.28.0
+write_manifest "$GIT_REPO" v26.9.15
 
 # 4a. Walking back from a new release tag whose immediate ancestor is a
-# PATCH tag must skip it and land on the preceding RELEASE tag -- not the
-# patch tag itself, and not silently miss (empty string) either.
+# PATCH tag (no manifest by construction) must skip it and land on the
+# preceding tag THAT HAS A MANIFEST -- not the patch tag itself, and not
+# silently miss (empty string) either.
 got="$(cd "$GIT_REPO" && resolve_prev_release_tag "v26.9.16" 2>/dev/null)"
 if [ "$got" = "v26.9.15" ]; then
-    pass "resolve_prev_release_tag() skips an intervening patch tag (v26.9.15.1) and lands on the preceding release tag (v26.9.15)"
+    pass "resolve_prev_release_tag() skips an intervening patch tag (v26.9.15.1) and lands on the preceding MEASURED tag (v26.9.15)"
 else
     fail "resolve_prev_release_tag() from v26.9.16 -- expected 'v26.9.15', got '$got'"
 fi
 
 # 4b. Same repo, but confirm the walk is willing to cross the legacy
-# v0.x.y <-> vYY.M.D scheme boundary when the nearer release tag is itself
-# unreachable (i.e. walking from the patch tag directly): a legitimate
-# prior release, not a different kind of artifact, and there is no reason
-# to hard-fail just because the versioning scheme changed at that point.
+# v0.x.y <-> vYY.M.D scheme boundary when the nearer tag is itself
+# unreachable (i.e. walking from v26.9.15 directly, past its own manifest,
+# to whatever's further back): a legitimate prior measurement, not a
+# different kind of artifact, and there is no reason to hard-fail just
+# because the versioning scheme changed at that point.
 got_legacy="$(cd "$GIT_REPO" && resolve_prev_release_tag "v26.9.15" 2>/dev/null)"
 if [ "$got_legacy" = "v0.28.0" ]; then
-    pass "resolve_prev_release_tag() walks back across the legacy v0.x.y/CalVer scheme boundary to v0.28.0 when that is the nearest release-shaped ancestor"
+    pass "resolve_prev_release_tag() walks back across the legacy v0.x.y/CalVer scheme boundary to v0.28.0 when that is the nearest MEASURED ancestor"
 else
     fail "resolve_prev_release_tag() from v26.9.15 -- expected 'v0.28.0' (legacy boundary), got '$got_legacy'"
 fi
 
 # 4c. No-previous-release case: a repo whose only ancestor tag is a PATCH
-# tag, with nothing release-shaped further back, must degrade to an empty
+# tag, with nothing measured further back, must degrade to an empty
 # PREV_TAG -- the SAME signal main()'s existing
 # `[ -z "$PREV_TAG" ]` -> "Error: No previous tag found. Cannot perform
 # A/B test." path already treats as a hard, honest failure. It must NOT
@@ -407,6 +427,46 @@ if [ -z "$got_none" ]; then
     pass "resolve_prev_release_tag() returns empty (honest 'no previous release' signal) when only a patch tag exists further back, not the patch tag itself"
 else
     fail "resolve_prev_release_tag() with no release-shaped ancestor -- expected empty, got '$got_none'"
+fi
+
+# -----------------------------------------------------------------------
+# 4d. Issue #309's motivating case: since the paid path is no longer tied
+# to tag shape at all, a release-shaped tag can easily have NO manifest --
+# nobody happened to run the (now-manual) paid dispatch on it. Sequence:
+# release N (HAS a manifest) -> release N+1 (release-shaped, NO manifest,
+# because #309 made the paid path opt-in) -> release N+2 (current, under
+# test). Resolution from N+2 must land on N, not N+1 -- landing on N+1
+# would make main()'s `[ -f "$MANIFEST_PATH" ]` check miss and re-run arm A
+# from scratch even though a perfectly good baseline sits one tag further
+# back.
+# -----------------------------------------------------------------------
+UNMEASURED_RELEASE_REPO="$WORK/unmeasured-release-repo"
+mkdir -p "$UNMEASURED_RELEASE_REPO"
+(
+    cd "$UNMEASURED_RELEASE_REPO"
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "test"
+
+    # release N: measured, has a manifest.
+    echo a > f.txt && git add f.txt && git commit -qm "c1"
+    git -c tag.gpgsign=false tag v26.9.10
+
+    # release N+1: release-shaped, but NEVER measured (no manifest) --
+    # the #309 case.
+    echo b > f.txt && git add f.txt && git commit -qm "c2"
+    git -c tag.gpgsign=false tag v26.9.13
+
+    # release N+2 (HEAD): the release under test.
+    echo c > f.txt && git add f.txt && git commit -qm "c3"
+    git -c tag.gpgsign=false tag v26.9.16
+)
+write_manifest "$UNMEASURED_RELEASE_REPO" v26.9.10
+got_skip_unmeasured="$(cd "$UNMEASURED_RELEASE_REPO" && resolve_prev_release_tag "v26.9.16" 2>/dev/null)"
+if [ "$got_skip_unmeasured" = "v26.9.10" ]; then
+    pass "resolve_prev_release_tag() skips a release-shaped ancestor tag with NO manifest (v26.9.13) and lands on the nearest one that was actually measured (v26.9.10) -- issue #309"
+else
+    fail "resolve_prev_release_tag() from v26.9.16 with an unmeasured release-shaped tag in between -- expected 'v26.9.10', got '$got_skip_unmeasured'"
 fi
 
 echo

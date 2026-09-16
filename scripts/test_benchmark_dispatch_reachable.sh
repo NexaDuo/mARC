@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regression test for issues #291 and #304.
+# Regression test for issues #291, #304, and #309.
 #
 # #291: the real three-arm measurement in run_token_benchmark.sh used to be
 # reachable ONLY via `[ "$EVENT_NAME" != "release" ]`, i.e. only on a
@@ -12,22 +12,35 @@
 # #304: the owner decided a paid measurement IS wanted, once per
 # minor/major release, never for a patch. Since `release` can never fire,
 # the trigger moved to the tag PUSH itself (the same trigger release.yml
-# uses to publish), and is_real_run() now also consults the tag shape:
-# a 3-component CalVer tag (vYY.M.D) is a release; a 4-component tag
-# (vYY.M.D.MICRO) is a patch of one (CHANGELOG.md's own versioning note).
+# uses to publish), and is_real_run() consulted the tag shape: a
+# 3-component CalVer tag (vYY.M.D) was a release; a 4-component tag
+# (vYY.M.D.MICRO) was a patch of one (CHANGELOG.md's own versioning note).
+#
+# #309: that tag-shape trigger let CI spend real API credit on its own, with
+# no human confirming the spend at that moment (any release-shaped tag
+# push, scripted or manual, billed automatically). The owner decided the
+# paid measurement must be an explicit human action, run locally at release
+# time — CI never spends on its own again. The tag-shape axis is REMOVED
+# from is_real_run() entirely: the ONLY reachable trigger for the real path
+# is now `workflow_dispatch` with `real_run` explicitly `"true"`. A tag
+# push, of ANY shape (release or patch), now ALWAYS stays on the free stub
+# path.
 #
 # This test is deliberately NOT pinned to "release is broken" (that
 # instance). It asserts the durable properties the issues ask for: the
 # real-run path has a reachable trigger that does not require the
-# never-firing `release` event; a minor/major tag push takes the real path;
-# a patch tag push does not; a dispatched run that does not explicitly opt
-# in still takes the free stub path; and the workflow's publish steps can
-# never independently disagree with is_real_run() because they read its
-# own emitted step output rather than re-deriving the decision.
+# never-firing `release` event; NO tag push of any shape takes the real
+# path (issue #309); a dispatched run that does not explicitly opt in still
+# takes the free stub path; and the workflow's publish steps can never
+# independently disagree with is_real_run() because they read its own
+# emitted step output rather than re-deriving the decision.
 #
-# Run this against the pre-#304 script (`git show origin/main:scripts/run_token_benchmark.sh`)
-# and the tag-shape / release-event-removed assertions below go RED. See the
-# PR body for the actual red/green transcript.
+# Run this against the pre-#309 script (`git show
+# 87fb102:scripts/run_token_benchmark.sh`, the tip before this fix) and the
+# release-shaped-tag-must-stay-free assertion below goes RED (that script
+# treated a release-shaped tag push as a real/paid run). See the PR body
+# for the actual red/green transcript.
+#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -172,9 +185,11 @@ fi
 
 # -----------------------------------------------------------------------
 # Part 2: the script's real-vs-stub decision, exercised directly, across
-# the full matrix issue #304's acceptance criteria requires: a minor/major
-# tag, a patch tag, workflow_dispatch with real_run=true, and
-# workflow_dispatch at the default.
+# the full matrix issue #309's acceptance criteria requires: EVERY tag
+# push (release-shaped or patch-shaped) must stay free, a bare `release`
+# event must stay free, and the ONLY reachable real path is an explicit
+# workflow_dispatch with real_run="true". Anything ambiguous (any other
+# value of real_run, any other event) must fail CLOSED (stay free).
 # -----------------------------------------------------------------------
 
 if [ ! -f "$TARGET" ]; then
@@ -210,9 +225,9 @@ OUTPUT_FILE="$(mktemp)"
 trap 'rm -f "$OUTPUT_FILE"' EXIT
 
 check_real_run() {
-    local desc="$1" expected="$2" event="$3" ref_type="${4:-branch}" ref_name="${5:-main}" real_run_input="${6:-}"
+    local desc="$1" expected="$2" event="$3" ref_name="${4:-main}" real_run_input="${5:-}"
     local got got_output
-    if EVENT_NAME="$event" REF_TYPE="$ref_type" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" is_real_run; then
+    if EVENT_NAME="$event" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" is_real_run; then
         got="true"
     else
         got="false"
@@ -227,7 +242,7 @@ check_real_run() {
     # same inputs (issue #304 single-source-of-truth for the workflow's
     # publish gating).
     : > "$OUTPUT_FILE"
-    EVENT_NAME="$event" REF_TYPE="$ref_type" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" \
+    EVENT_NAME="$event" CURRENT_REF="$ref_name" REAL_RUN_INPUT="$real_run_input" \
         GITHUB_OUTPUT="$OUTPUT_FILE" emit_real_run_output
     got_output="$(grep -o 'real_run=.*' "$OUTPUT_FILE" | cut -d= -f2)"
     if [ "$got_output" = "$expected" ]; then
@@ -238,25 +253,33 @@ check_real_run() {
 }
 
 # push to a branch (the normal push-to-main CI run) -- stub, unchanged.
-check_real_run "push to main (branch) stays on the stub path" false "push" "branch" "main" ""
-check_real_run "pull_request event stays on the stub path" false "pull_request" "branch" "main" ""
+check_real_run "push to main (branch) stays on the stub path" false "push" "main" ""
+check_real_run "pull_request event stays on the stub path" false "pull_request" "main" ""
 
-# push of a TAG -- issue #304's new mechanism. Tag shapes below are drawn
-# straight from `git tag --sort=-creatordate` (v26.9.15.1, v26.9.15,
-# v26.9.8, v0.28.0, ...) and CHANGELOG.md's versioning note: a 3-component
-# CalVer tag is a release, a 4th MICRO component makes it a patch.
-check_real_run "a 3-component release tag (v26.9.15) takes the real path -- THE reachable trigger issue #304 requires" true "push" "tag" "v26.9.15" ""
-check_real_run "a 3-component release tag (v26.9.8) takes the real path" true "push" "tag" "v26.9.8" ""
-check_real_run "a legacy 3-component release tag (v0.28.0) takes the real path" true "push" "tag" "v0.28.0" ""
-check_real_run "a 4-component PATCH tag (v26.9.15.1) stays on the stub path -- never billed (issue #304)" false "push" "tag" "v26.9.15.1" ""
+# push of a TAG -- issue #309's whole point: NO tag shape is ever real
+# anymore, regardless of what it used to mean under issue #304. Tag shapes
+# below are drawn straight from `git tag --sort=-creatordate` (v26.9.15.1,
+# v26.9.15, v26.9.8, v0.28.0, ...) and CHANGELOG.md's versioning note (a
+# 3-component CalVer tag was a "release", a 4th MICRO component a "patch")
+# -- kept here specifically to prove that distinction no longer matters to
+# is_real_run() at all.
+check_real_run "a 3-component release-shaped tag (v26.9.15) push stays on the stub path -- issue #309: CI must never spend on its own, even on a release tag" false "push" "v26.9.15" ""
+check_real_run "a 3-component release-shaped tag (v26.9.8) push stays on the stub path" false "push" "v26.9.8" ""
+check_real_run "a legacy 3-component release-shaped tag (v0.28.0) push stays on the stub path" false "push" "v0.28.0" ""
+check_real_run "a 4-component patch-shaped tag (v26.9.15.1) push stays on the stub path" false "push" "v26.9.15.1" ""
+check_real_run "a tag push whose ref isn't even version-shaped stays on the stub path" false "push" "some-other-tag" ""
 
 # `release` must no longer be an unconditional real-run arm (removed, not
-# left disagreeing with the tag-push rule -- issue #304's explicit AC).
-check_real_run "a bare 'release' event (if it ever fired) is NOT treated as real -- the arm was removed, not left inconsistent (issue #304)" false "release" "branch" "main" ""
+# left disagreeing with the tag-push rule -- issue #304's explicit AC,
+# still true under #309).
+check_real_run "a bare 'release' event (if it ever fired) is NOT treated as real -- the arm was removed, not left inconsistent (issue #304)" false "release" "main" ""
 
-check_real_run "workflow_dispatch with real_run unset stays on the stub path (safe default)" false "workflow_dispatch" "branch" "main" ""
-check_real_run "workflow_dispatch with real_run=false stays on the stub path" false "workflow_dispatch" "branch" "main" "false"
-check_real_run "workflow_dispatch with real_run=true takes the real path -- the manual route stays available, unchanged" true "workflow_dispatch" "branch" "main" "true"
+check_real_run "workflow_dispatch with real_run unset stays on the stub path (safe default)" false "workflow_dispatch" "main" ""
+check_real_run "workflow_dispatch with real_run=false stays on the stub path" false "workflow_dispatch" "main" "false"
+check_real_run "workflow_dispatch with real_run=TRUE (wrong case) stays on the stub path -- fail CLOSED on anything ambiguous (issue #309)" false "workflow_dispatch" "main" "TRUE"
+check_real_run "workflow_dispatch with real_run=1 stays on the stub path -- fail CLOSED, only the literal string 'true' opts in (issue #309)" false "workflow_dispatch" "main" "1"
+check_real_run "workflow_dispatch on a tag ref with real_run unset stays on the stub path -- the ref/event shape is irrelevant now, only real_run matters (issue #309)" false "workflow_dispatch" "v26.9.15" ""
+check_real_run "workflow_dispatch with real_run=true takes the real path -- the ONLY reachable trigger for a paid run (issue #309)" true "workflow_dispatch" "main" "true"
 
 # -----------------------------------------------------------------------
 # Part 3: lockstep check between token-benchmark.yml's publish `if:`

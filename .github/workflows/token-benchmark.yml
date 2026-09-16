@@ -3,53 +3,48 @@ name: Token Consumption Benchmark
 on:
   push:
     branches: [main]
-    # Issue #304: the owner decided a paid measurement per release IS
-    # wanted, for a minor/major release only, never a patch. `release:
-    # types: [published]` (removed below) can never fire in this repo --
-    # release.yml publishes with the auto-provisioned GITHUB_TOKEN, and
-    # GitHub does not raise workflow events from GITHUB_TOKEN actions
-    # (issue #291) -- so the paid run had no reachable trigger tied to an
-    # actual release. Fix: key off the TAG PUSH ITSELF, the exact same
-    # trigger release.yml already uses (`on: push: tags: v*.*.*`). That push
-    # is raised by whoever ran `git push --tags` (a human/CI identity's own
-    # token), not GITHUB_TOKEN, so it fires normally -- verified by
-    # inspecting release.yml's own working `on: push: tags:` trigger and by
-    # GitHub's documented GITHUB_TOKEN anti-recursion behavior (#291); NOT
-    # verified by spending money (never do that to test this).
+    # Issue #304 used to key the paid path off a release-shaped TAG PUSH
+    # itself. Issue #309 found the cost of that: CI would spend real API
+    # credit on any release-shaped tag push, with no human confirming the
+    # spend at that moment. The owner decided the paid measurement runs
+    # locally, by hand, at release time instead (docs/marc/benchmarks/
+    # README.md has the exact command).
     #
-    # scripts/run_token_benchmark.sh's is_real_run() then decides, from
-    # GITHUB_REF_TYPE/GITHUB_REF_NAME, whether this specific tag is a real
-    # (minor/major, 3-component vYY.M.D) release or a patch (4-component
-    # vYY.M.D.MICRO, per CHANGELOG.md's versioning note) -- only the former
-    # takes the paid path. A patch tag still runs this workflow (cheap: the
-    # free stub/report path, same as a push to main) but never the paid one.
+    # This workflow still triggers on a tag push (kept so the free
+    # stub/report path -- job summary + artifact -- still exercises itself
+    # on every release, same as any other push) but
+    # scripts/run_token_benchmark.sh's is_real_run() no longer looks at tag
+    # shape at all: EVERY tag push, release-shaped or not, takes the free
+    # stub path now. See is_real_run()'s own comment for the full rule.
     tags:
       - "v*.*.*"
   pull_request:
     types: [opened, synchronize, reopened]
-  # Issue #291: workflow_dispatch makes the real measurement runnable on
-  # demand, independent of any tag. `real_run` defaults to false (the free
-  # stub/report path) so a casual dispatch never spends money; it must be
-  # explicitly set to run the real measurement — issue #275: 3 tasks x 3
+  # Issue #291/#309: workflow_dispatch is now the ONLY reachable trigger for
+  # the real measurement -- an explicit, one-off human action, never an
+  # automatic consequence of pushing a tag or a branch. `real_run` defaults
+  # to false (the free stub/report path) so a casual dispatch never spends
+  # money; it must be explicitly set to "true" -- issue #275: 3 tasks x 3
   # arms x 5 iterations = 45 live `claude` invocations if arm A (the
-  # previous release) must be re-run, or 30 if its baseline is cached (see
-  # scripts/run_token_benchmark.sh's manifest/task-hash reuse logic). A
-  # minor/major release tag push (above) costs the SAME 30-45 invocations,
-  # automatically, with no prompt -- that is the cost an operator incurs by
-  # cutting a minor/major release; a patch tag costs nothing.
+  # previous release) must be re-run, or 30 if its cached baseline resolves
+  # (see scripts/run_token_benchmark.sh's manifest/task-hash reuse logic and
+  # resolve_prev_release_tag()). The owner's preferred way to take this real
+  # path is actually running the script locally (docs/marc/benchmarks/
+  # README.md), not dispatching this workflow -- but the dispatch path
+  # stays, for the rare case CI itself needs to run it, gated the same way.
   # Issue #296: publishing was gated to `if: github.event_name == 'release'`
   # alone, and since `release` can never fire, the publish path was
   # unreachable by ANY route (not just the real-measurement path above) — a
-  # second layer of the same #291 defect. Fix (issue #304 supersedes the
+  # second layer of the same #291 defect. Fix (issue #304/#309 supersede the
   # mechanism, keeping the intent): the "Run Token Benchmark" step below
   # exports whether it took the real path as a step output
   # (`steps.run_benchmark.outputs.real_run`), computed by the SAME
   # is_real_run() the script uses for everything else -- see the `if:`
   # conditions on "Generate Dashboard Files" / "Commit Dashboard and
-  # Benchmarks" below. A run left on the stub path (patch tag, push to main,
-  # PR, or a workflow_dispatch left at its default `real_run=false`) still
-  # publishes nothing — it only reports to the job summary and uploads the
-  # raw measurement as a workflow artifact, same as before.
+  # Benchmarks" below. A run left on the stub path (any tag push, push to
+  # main, PR, or a workflow_dispatch left at its default `real_run=false`)
+  # still publishes nothing — it only reports to the job summary and
+  # uploads the raw measurement as a workflow artifact, same as before.
   workflow_dispatch:
     inputs:
       real_run:
@@ -194,17 +189,18 @@ jobs:
       # suppressing real findings (review on PR #297 caught this — the
       # first version of this step used the wrong pairing). See
       # generate_badge()'s docstring in generate_telemetry_dashboard.py.
-      # Issue #291/#296/#304: publishing (this step and "Commit Dashboard and
-      # Benchmarks" below) runs exactly when "Run Token Benchmark" took the
-      # real (paid) path — a minor/major release-tag push, or a
-      # `workflow_dispatch` run that opted in (`real_run=true`) — see the
-      # trigger comment at the top of this file. Both steps read the SAME
+      # Issue #291/#296/#304/#309: publishing (this step and "Commit
+      # Dashboard and Benchmarks" below) runs exactly when "Run Token
+      # Benchmark" took the real (paid) path — only a `workflow_dispatch`
+      # run that explicitly opted in (`real_run=true`); no tag push, of any
+      # shape, ever reaches here automatically anymore — see the trigger
+      # comment at the top of this file. Both steps read the SAME
       # `steps.run_benchmark.outputs.real_run` output computed once by
       # is_real_run() in scripts/run_token_benchmark.sh, rather than
       # re-deriving the decision here in a second, independently-maintained
       # expression — the class of bug #296's review caught (two hand-written
-      # conditions of the same fact silently drifting apart). A patch-tag
-      # push, a push to main, a PR, or a dispatch left at the default
+      # conditions of the same fact silently drifting apart). Any tag push,
+      # a push to main, a PR, or a dispatch left at the default
       # `real_run=false` never reaches here (job summary + artifact only,
       # same as always).
       - name: Generate Dashboard Files
