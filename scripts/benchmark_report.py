@@ -264,17 +264,35 @@ def main(argv=None) -> int:
         iterations=args.iterations,
     )
 
-    print("--- Noise Floor (MAD, same-commit toggle pair, pooled + de-duplicated) ---")
-    print(f"{'task':<10} {'MAD (abs)':>14} {'MAD (pct)':>10} {'n':>4}")
-    for name in task_names:
+    # Issue #308 review (`@rev`, PR #310): the same-commit toggle pair's
+    # pooled dispersion is only a NOISE floor for `neutral` -- the task the
+    # guard structurally cannot fire on in either arm, so its two arms are
+    # draws from the same distribution. The guard DOES fire on `control`
+    # and `sweep` (issue #308's own Finding 2: `control`'s old-estimator
+    # 159.9% was real guard effect, not noise), so pooling their two arms
+    # mixes signal into a number that would be mislabeled "noise" -- a
+    # reader could mistake it for a legitimate per-task floor and gate
+    # something on it. Only ever compute/print this for `neutral`; do not
+    # extend this loop to other tasks without re-deriving whether their two
+    # same-commit arms are actually a negative control.
+    NOISE_FLOOR_TASK = "neutral"
+    print(f"--- Noise Floor (MAD, same-commit toggle pair, {NOISE_FLOOR_TASK} only) ---")
+    print(f"({NOISE_FLOOR_TASK} is the only task the guard structurally cannot fire on in "
+          f"either arm, so it is the only valid noise-floor source; other tasks' same-commit "
+          f"dispersion includes real guard effect and is not printed here to avoid mislabeling "
+          f"signal as noise)")
+    if NOISE_FLOOR_TASK in task_names:
+        print(f"{'task':<10} {'MAD (abs)':>14} {'MAD (pct)':>10} {'n':>4}")
         floor = mad_floor([
-            os.path.join(args.dir, f"toggle_baseline-{name}.jsonl"),
-            os.path.join(args.dir, f"toggle_post-{name}.jsonl"),
+            os.path.join(args.dir, f"toggle_baseline-{NOISE_FLOOR_TASK}.jsonl"),
+            os.path.join(args.dir, f"toggle_post-{NOISE_FLOOR_TASK}.jsonl"),
         ])
         if floor is None:
-            print(f"{name:<10} {'n/a':>14} {'n/a':>10} {'0':>4}")
+            print(f"{NOISE_FLOOR_TASK:<10} {'n/a':>14} {'n/a':>10} {'0':>4}")
         else:
-            print(f"{name:<10} {floor.mad_abs:>14,.0f} {floor.mad_pct:>9.1f}% {floor.n:>4}")
+            print(f"{NOISE_FLOOR_TASK:<10} {floor.mad_abs:>14,.0f} {floor.mad_pct:>9.1f}% {floor.n:>4}")
+    else:
+        print(f"(no '{NOISE_FLOOR_TASK}' task in this task set -- no noise floor to report)")
     print("(provisional -- issue #298: n this small is too few to trust the floor's numeric "
           "value on its own; this is the estimator/presentation fix, not a trustworthiness claim)\n")
 
