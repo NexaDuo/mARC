@@ -314,8 +314,9 @@ else
 fi
 
 # -----------------------------------------------------------------------
-# Part 4: resolve_prev_release_tag() (issue #304 `@rev` review, BLOCKING;
-# issue #309 changed what counts as a valid stopping point).
+# Part 4: resolve_prev_release_tag() -- the COMPARISON TARGET, pure tag
+# shape (issue #304 `@rev` review, BLOCKING; issue #313 restored this after
+# #312 conflated it with the cache lookup).
 #
 # PREV_TAG used to be `git describe --tags --abbrev=0 "$CURRENT_REF^"` --
 # nearest tag by ANCESTRY, with no regard for release-vs-patch shape.
@@ -324,11 +325,11 @@ fi
 # release's cache lookup would key on that patch tag, miss unconditionally,
 # and re-run arm A -- extra PAID `claude` invocations, reopening the exact
 # waste issue #304 exists to close. Issue #304 fixed this by walking to the
-# nearest RELEASE-SHAPED ancestor tag instead -- safe only while release
-# shape and "has a manifest" were the same thing, which issue #309 breaks
-# (the paid path is no longer tied to tag shape at all, so most
-# release-shaped tags will now have no manifest). This builds a small, real
-# git repo with a fabricated tag history and exercises
+# nearest RELEASE-SHAPED ancestor tag instead, skipping patch tags. This is
+# a question about TAG SHAPE ONLY -- resolve_prev_release_tag() does NOT
+# consult manifest presence at all; see Part 5 below for the separate
+# manifest-presence walk (resolve_cached_baseline_tag()). This builds a
+# small, real git repo with a fabricated tag history and exercises
 # resolve_prev_release_tag() against it directly (a `cd`, not a mock -- the
 # function shells out to real `git describe`).
 # -----------------------------------------------------------------------
@@ -430,15 +431,15 @@ else
 fi
 
 # -----------------------------------------------------------------------
-# 4d. Issue #309's motivating case: since the paid path is no longer tied
-# to tag shape at all, a release-shaped tag can easily have NO manifest --
-# nobody happened to run the (now-manual) paid dispatch on it. Sequence:
-# release N (HAS a manifest) -> release N+1 (release-shaped, NO manifest,
-# because #309 made the paid path opt-in) -> release N+2 (current, under
-# test). Resolution from N+2 must land on N, not N+1 -- landing on N+1
-# would make main()'s `[ -f "$MANIFEST_PATH" ]` check miss and re-run arm A
-# from scratch even though a perfectly good baseline sits one tag further
-# back.
+# 4d. resolve_prev_release_tag() is PURE SHAPE -- it must land on the
+# nearest release-shaped ancestor tag regardless of whether that tag has a
+# manifest. Sequence: release N (HAS a manifest) -> release N+1
+# (release-shaped, NO manifest, because #309 made the paid path opt-in) ->
+# release N+2 (current, under test). The COMPARISON TARGET (this function)
+# must be N+1 -- it is the actual previous release, and is what gets
+# checked out for arm A -- even though it has no cached data. See Part 5
+# below for resolve_cached_baseline_tag(), which is the function that must
+# skip N+1 (no manifest) and land on N instead.
 # -----------------------------------------------------------------------
 UNMEASURED_RELEASE_REPO="$WORK/unmeasured-release-repo"
 mkdir -p "$UNMEASURED_RELEASE_REPO"
@@ -462,11 +463,102 @@ mkdir -p "$UNMEASURED_RELEASE_REPO"
     git -c tag.gpgsign=false tag v26.9.16
 )
 write_manifest "$UNMEASURED_RELEASE_REPO" v26.9.10
-got_skip_unmeasured="$(cd "$UNMEASURED_RELEASE_REPO" && resolve_prev_release_tag "v26.9.16" 2>/dev/null)"
-if [ "$got_skip_unmeasured" = "v26.9.10" ]; then
-    pass "resolve_prev_release_tag() skips a release-shaped ancestor tag with NO manifest (v26.9.13) and lands on the nearest one that was actually measured (v26.9.10) -- issue #309"
+got_comparison_target="$(cd "$UNMEASURED_RELEASE_REPO" && resolve_prev_release_tag "v26.9.16" 2>/dev/null)"
+if [ "$got_comparison_target" = "v26.9.13" ]; then
+    pass "resolve_prev_release_tag() lands on the nearest release-shaped ancestor (v26.9.13) as the COMPARISON TARGET even though it has no manifest -- issue #313"
 else
-    fail "resolve_prev_release_tag() from v26.9.16 with an unmeasured release-shaped tag in between -- expected 'v26.9.10', got '$got_skip_unmeasured'"
+    fail "resolve_prev_release_tag() from v26.9.16 -- expected the release-shaped v26.9.13 as comparison target, got '$got_comparison_target'"
+fi
+
+# -----------------------------------------------------------------------
+# Part 5: resolve_cached_baseline_tag() -- the CACHE SOURCE, manifest
+# presence only (issue #309 introduced this walk; issue #313 split it out
+# of resolve_prev_release_tag() into its own function so the comparison
+# target and the cache lookup can never be reconflated).
+#
+# Reuses UNMEASURED_RELEASE_REPO from 4d: release N (v26.9.10, HAS a
+# manifest) -> release N+1 (v26.9.13, release-shaped, NO manifest) ->
+# release N+2 (v26.9.16, current). Resolution from N+2 must land on N, not
+# N+1 -- landing on N+1 would make main()'s `[ -f "$MANIFEST_PATH" ]` check
+# miss and re-run arm A from scratch (~15 extra PAID `claude` invocations)
+# even though a perfectly good baseline sits one tag further back. This is
+# exactly #312's original finding; it must not regress.
+# -----------------------------------------------------------------------
+got_skip_unmeasured="$(cd "$UNMEASURED_RELEASE_REPO" && resolve_cached_baseline_tag "v26.9.16" 2>/dev/null)"
+if [ "$got_skip_unmeasured" = "v26.9.10" ]; then
+    pass "resolve_cached_baseline_tag() skips a release-shaped ancestor tag with NO manifest (v26.9.13) and lands on the nearest one that was actually measured (v26.9.10) -- issue #309/#312"
+else
+    fail "resolve_cached_baseline_tag() from v26.9.16 with an unmeasured release-shaped tag in between -- expected 'v26.9.10', got '$got_skip_unmeasured'"
+fi
+
+# 5b. Same GIT_REPO as Part 4 (v0.28.0 manifest -> v26.9.15 manifest ->
+# v26.9.15.1 patch -> v26.9.16 HEAD): the cache walk must land on the same
+# tag as the comparison target here, since v26.9.15 both is release-shaped
+# AND has a manifest -- a sanity check that the two functions agree in the
+# ordinary (measured-immediate-predecessor) case.
+got_cache_ordinary="$(cd "$GIT_REPO" && resolve_cached_baseline_tag "v26.9.16" 2>/dev/null)"
+if [ "$got_cache_ordinary" = "v26.9.15" ]; then
+    pass "resolve_cached_baseline_tag() agrees with resolve_prev_release_tag() (v26.9.15) in the ordinary measured-predecessor case"
+else
+    fail "resolve_cached_baseline_tag() from v26.9.16 -- expected 'v26.9.15', got '$got_cache_ordinary'"
+fi
+
+# -----------------------------------------------------------------------
+# Part 6: THE BOOTSTRAP CASE (issue #313) -- the regression #312 missed.
+# A repo where release-shaped ancestor tags EXIST, but NO tag anywhere
+# (release-shaped or not) has ever written a manifest -- this repo's actual
+# state as of #313, because the paid path became workflow_dispatch-only in
+# #309 and nobody has run it since. resolve_prev_release_tag() (the
+# comparison target) MUST still resolve non-empty here -- there IS a
+# previous release, it's just unmeasured -- and main()'s
+# `[ -z "$PREV_TAG" ]` fatal check must NOT fire. resolve_cached_baseline_tag()
+# legitimately returns empty here (nothing to reuse), and that must NOT be
+# treated as fatal either -- it is the ordinary "run arm A fresh" case.
+# -----------------------------------------------------------------------
+BOOTSTRAP_REPO="$WORK/bootstrap-repo"
+mkdir -p "$BOOTSTRAP_REPO"
+(
+    cd "$BOOTSTRAP_REPO"
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "test"
+
+    # release N-1: release-shaped, but no manifest was ever written for it.
+    echo a > f.txt && git add f.txt && git commit -qm "c1"
+    git -c tag.gpgsign=false tag v26.9.10
+
+    # release N: release-shaped, also no manifest.
+    echo b > f.txt && git add f.txt && git commit -qm "c2"
+    git -c tag.gpgsign=false tag v26.9.13
+
+    # release N+1 (HEAD): the release under test. No docs/marc/benchmarks/
+    # directory exists anywhere in this repo at all.
+    echo c > f.txt && git add f.txt && git commit -qm "c3"
+    git -c tag.gpgsign=false tag v26.9.16
+)
+bootstrap_comparison="$(cd "$BOOTSTRAP_REPO" && resolve_prev_release_tag "v26.9.16" 2>/dev/null)"
+if [ "$bootstrap_comparison" = "v26.9.13" ]; then
+    pass "BOOTSTRAP CASE: resolve_prev_release_tag() resolves a non-empty comparison target (v26.9.13) when no tag anywhere has a manifest -- issue #313"
+else
+    fail "BOOTSTRAP CASE: resolve_prev_release_tag() -- expected 'v26.9.13', got '$bootstrap_comparison' (empty here is exactly the #313 regression: benchmark unrunnable)"
+fi
+
+bootstrap_cache="$(cd "$BOOTSTRAP_REPO" && resolve_cached_baseline_tag "v26.9.16" 2>/dev/null)"
+if [ -z "$bootstrap_cache" ]; then
+    pass "BOOTSTRAP CASE: resolve_cached_baseline_tag() returns empty (no cached baseline exists) without being treated as fatal -- issue #313"
+else
+    fail "BOOTSTRAP CASE: resolve_cached_baseline_tag() -- expected empty (no manifest anywhere), got '$bootstrap_cache'"
+fi
+
+# The combination that actually mattered in production: a non-empty
+# comparison target with an empty cache tag must NOT be fatal in main()'s
+# logic -- verified structurally here (both resolvers agree with the
+# no-cache-is-not-fatal contract); main()'s own `[ -z "$PREV_TAG" ]` early
+# exit is exercised indirectly since PREV_TAG is populated above.
+if [ -n "$bootstrap_comparison" ] && [ -z "$bootstrap_cache" ]; then
+    pass "BOOTSTRAP CASE: comparison target resolved while cache stays empty -- main()'s fatal check (keyed on PREV_TAG only) would NOT fire"
+else
+    fail "BOOTSTRAP CASE: unexpected combination (comparison='$bootstrap_comparison' cache='$bootstrap_cache')"
 fi
 
 echo

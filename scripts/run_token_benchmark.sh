@@ -249,24 +249,79 @@ is_patch_tag() {
     [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
-# resolve_prev_release_tag: find the nearest ANCESTOR tag that actually has
-# a cached baseline manifest on disk (docs/marc/benchmarks/<tag>/
-# manifest.json), skipping any patch tags and any release-shaped tag that
-# was never actually measured, in between.
+# resolve_prev_release_tag: find the nearest ANCESTOR tag that is
+# RELEASE-SHAPED (is_release_tag), skipping patch tags in between. This
+# answers a question about TAG SHAPE, not about measurement data: it is the
+# previous release, full stop -- the thing arm A actually checks out
+# (`git worktree add ../arm-a "$PREV_TAG"`) and the thing the run is labelled
+# against ("Comparing $PREV_TAG (A) vs $CURRENT_REF (B/C)"). It has nothing
+# to say about whether a cached baseline manifest happens to exist for that
+# tag -- see resolve_cached_baseline_tag() below for that, separate,
+# question.
 #
-# Issue #309: before this fix, this walked to the nearest RELEASE-SHAPED
-# ancestor tag (is_release_tag), on the assumption that release shape and
-# "has a manifest" were the same thing -- true only while a release-shaped
-# tag push was itself the thing that triggered the paid run (issue #304).
-# Once #309 made the paid path an explicit workflow_dispatch opt-in only
-# (is_real_run(), above), that assumption breaks: most release-shaped tags
-# will now have NO manifest at all, because nobody happened to run the paid
-# dispatch on them. Landing on such a tag would make main()'s
-# `[ -f "$MANIFEST_PATH" ]` check (below) miss unconditionally and re-run
-# arm A from scratch -- ~15 extra PAID `claude` invocations -- even when a
-# perfectly good baseline sits one or two tags further back. Fix: the walk's
-# stopping condition is now "does a manifest exist for this candidate",
-# not "is this candidate release-shaped".
+# Issue #313 (bug introduced by #312): #312 correctly changed the CACHE
+# question ("is there already a manifest we can reuse") to key off manifest
+# presence instead of tag shape, but routed both the cache question and this
+# comparison-target question through this one function/variable. On a repo
+# where NO tag anywhere has a manifest yet (this repo's actual state as of
+# #313 -- the paid path became workflow_dispatch-opt-in-only in #309, so
+# most release-shaped tags are simply never measured), this function then
+# returned an empty string and main()'s `[ -z "$PREV_TAG" ]` check treated
+# "nothing is cached yet" as "no previous release exists", hard-failing the
+# whole benchmark with `exit 1` even though a perfectly good previous
+# release tag (just unmeasured) was sitting right there. Fix: this function
+# goes back to being purely shape-based (its pre-#312 behavior); a separate
+# resolve_cached_baseline_tag() now owns the manifest-presence walk that
+# #312 introduced.
+#
+# No-previous-release case: if no release-shaped ancestor tag exists at all,
+# this returns an empty string -- the ONLY thing that should make main()'s
+# `[ -z "$PREV_TAG" ]` check fire "no previous tag found, cannot perform A/B
+# test". A missing CACHE is never fatal (see resolve_cached_baseline_tag).
+resolve_prev_release_tag() {
+    local from_ref="$1"
+    local candidate="$from_ref"
+
+    while true; do
+        if ! candidate=$(git describe --tags --abbrev=0 "${candidate}^" 2>/dev/null); then
+            echo ""
+            return 0
+        fi
+        if is_patch_tag "$candidate"; then
+            echo "Skipping patch tag $candidate (issue #304) while resolving the previous RELEASE-SHAPED tag." >&2
+            continue
+        fi
+        if is_release_tag "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+        echo "Skipping $candidate: not release-shaped while resolving the previous release tag." >&2
+    done
+}
+
+# resolve_cached_baseline_tag: find the nearest ANCESTOR tag that actually
+# has a cached baseline manifest on disk (docs/marc/benchmarks/<tag>/
+# manifest.json), skipping any patch tags and any release-shaped tag that
+# was never actually measured, in between. This answers a question about
+# MEASUREMENT DATA, not tag shape -- it is deliberately independent of
+# resolve_prev_release_tag() above (issue #313).
+#
+# Issue #309: introduced this manifest-presence walk (originally folded into
+# resolve_prev_release_tag() itself). Once #309 made the paid path an
+# explicit workflow_dispatch opt-in only (is_real_run(), above), most
+# release-shaped tags have NO manifest at all, because nobody happened to
+# run the paid dispatch on them. Landing on such a tag as "the cache" would
+# make main()'s `[ -f "$MANIFEST_PATH" ]` check miss unconditionally and
+# re-run arm A from scratch -- ~15 extra PAID `claude` invocations -- even
+# when a perfectly good baseline sits one or two tags further back. So the
+# walk's stopping condition is "does a manifest exist for this candidate",
+# not "is this candidate release-shaped" -- and it is allowed to walk PAST
+# resolve_prev_release_tag()'s comparison target and land on an older tag.
+# That is intentional, not a bug: the manifest's own TASK_HASH (task set +
+# CLI version + model + iterations, checked in main() right after this
+# resolves) is the mechanism that decides whether an older cached baseline
+# is still comparable, not the tag's recency. A cached baseline is reused
+# only when that hash still matches; otherwise main() re-runs arm A anyway.
 #
 # Patch tags are still skipped explicitly (they never carry a manifest of
 # their own by construction -- issue #304's original finding, still true)
@@ -274,19 +329,18 @@ is_patch_tag() {
 # tag with no manifest is skipped too, but logged with its own distinct
 # message so the two cases aren't conflated in the log.
 #
-# No-previous-release case: if no ancestor tag with a manifest exists at
-# all, this returns an empty string -- the SAME signal `main()`'s existing
-# `[ -z "$PREV_TAG" ]` check already treats as "no previous tag found,
-# cannot perform A/B test" (a hard, honest failure, not a silent
-# no-op/false-baseline comparison). That behavior is unchanged by this fix;
-# only what counts as a valid PREV_TAG changed.
+# No-cached-baseline case: if no ancestor tag with a manifest exists at all,
+# this returns an empty string -- NOT a fatal condition. It means "nothing
+# to reuse, run arm A fresh" (main()'s RERUN_A=true path), the same
+# pre-#309/#312 behavior of printing "No cached baseline found ... Running
+# arm A." and proceeding.
 #
 # Legacy tags: `git tag --sort=-creatordate` shows 3-component `v0.28.0`,
 # `v0.27.0`, etc. alongside the CalVer `vYY.M.D` tags. This walk is
 # deliberately allowed to cross that scheme boundary -- a legacy tag with a
 # manifest is just as valid a baseline as a CalVer one; nothing about the
 # versioning-scheme change itself makes an old measurement invalid.
-resolve_prev_release_tag() {
+resolve_cached_baseline_tag() {
     local from_ref="$1"
     local candidate="$from_ref"
     local skipped_any=false
@@ -304,7 +358,7 @@ resolve_prev_release_tag() {
             return 0
         fi
         if is_patch_tag "$candidate"; then
-            echo "Skipping patch tag $candidate (no manifest of its own by construction, issue #304) while resolving the previous MEASURED release tag (issue #309)." >&2
+            echo "Skipping patch tag $candidate (no manifest of its own by construction, issue #304) while resolving the cached baseline tag (issue #309)." >&2
         elif is_release_tag "$candidate"; then
             echo "Skipping $candidate: release-shaped but no cached manifest found at docs/marc/benchmarks/$candidate/manifest.json (issue #309)." >&2
         else
@@ -464,9 +518,11 @@ JSON
     PREV_TAG=$(resolve_prev_release_tag "$CURRENT_REF")
 
     if [ -z "$PREV_TAG" ]; then
-        echo "Error: No previous tag found. Cannot perform A/B test."
+        echo "Error: No previous release tag found. Cannot perform A/B test."
         exit 1
     fi
+
+    CACHE_TAG=$(resolve_cached_baseline_tag "$CURRENT_REF")
 
     echo "Comparing $PREV_TAG (A) vs $CURRENT_REF (B/C), ${#TASK_NAMES[@]} tasks x $ITERATIONS iterations"
 
@@ -481,26 +537,26 @@ JSON
     CLAUDE_VERSION=$(resolve_claude_version) || exit 1
     TASK_HASH=$(compute_task_hash "$CLAUDE_VERSION" "$MODEL" "$(task_set_blob)" "$ITERATIONS")
 
-    MANIFEST_PATH="docs/marc/benchmarks/$PREV_TAG/manifest.json"
     RERUN_A=true
 
-    if [ -f "$MANIFEST_PATH" ]; then
+    if [ -n "$CACHE_TAG" ]; then
+        MANIFEST_PATH="docs/marc/benchmarks/$CACHE_TAG/manifest.json"
         CACHED_HASH=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1])).get('task_hash', ''))" "$MANIFEST_PATH")
         ALL_BASELINES_PRESENT=true
         for name in "${TASK_NAMES[@]}"; do
-            [ -f "docs/marc/benchmarks/$PREV_TAG/baseline-$name.jsonl" ] || ALL_BASELINES_PRESENT=false
+            [ -f "docs/marc/benchmarks/$CACHE_TAG/baseline-$name.jsonl" ] || ALL_BASELINES_PRESENT=false
         done
         if [ "$CACHED_HASH" == "$TASK_HASH" ] && [ "$ALL_BASELINES_PRESENT" = true ]; then
-            echo "Manifest matches (task set + CLI + model + iterations unchanged)! Reusing baseline for all tasks."
+            echo "Manifest matches (task set + CLI + model + iterations unchanged)! Reusing baseline from $CACHE_TAG for all tasks."
             for name in "${TASK_NAMES[@]}"; do
-                cp "docs/marc/benchmarks/$PREV_TAG/baseline-$name.jsonl" "baseline-$name.jsonl"
+                cp "docs/marc/benchmarks/$CACHE_TAG/baseline-$name.jsonl" "baseline-$name.jsonl"
             done
             RERUN_A=false
         else
             echo "Manifest drift detected (task set, CLI, model, or iteration count changed) or a per-task baseline is missing. Re-running arm A."
         fi
     else
-        echo "No cached baseline found for $PREV_TAG. Running arm A."
+        echo "No cached baseline found for $PREV_TAG (or any older ancestor tag). Running arm A."
     fi
 
     if [ "$RERUN_A" = true ]; then
