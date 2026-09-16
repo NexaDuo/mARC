@@ -116,6 +116,23 @@ enabled = false
 # do not repeat that when editing this block).
 # [token_guard]
 # max_read_lines = 350
+#
+# Bulk-reader delegation (optional, OFF unless you also set bulk_reader =
+# true, origin: #320). This is a SEPARATE opt-in from the [token_guard]
+# section itself: denying a read is local, but bulk_reader = true makes the
+# guard spawn a subprocess against an external CLI (`core/scripts/
+# dispatch_agent.py --harness antigravity`) to summarize the over-threshold
+# file on a cheaper worker, writing the summary to disk and denying the
+# original read with a path to it instead of bare advice. With
+# [token_guard] present and bulk_reader absent or false, behaviour is
+# byte-for-byte the deny-only guard above. Fails open, always: a missing
+# `agy` binary on PATH, a non-zero exit, empty output, or a timeout all
+# fall back to the plain deny — it never hangs the session and never
+# requires antigravity to be installed. bulk_reader_timeout bounds the
+# delegated subprocess (default 20s, within the 10-30s delegation tax the
+# Spotify study measured for this shape of worker call).
+# bulk_reader = true
+# bulk_reader_timeout = 20
 
 # --- Cross-harness orchestration & routing (optional, origin: #239, #241) ---
 [orchestration]
