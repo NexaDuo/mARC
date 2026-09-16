@@ -32,6 +32,7 @@ Design (see PR body for the full justification):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import statistics
 import sys
@@ -54,6 +55,84 @@ def median_weighted(path: str) -> tuple[float, int] | None:
     if not weighted:
         return None
     return statistics.median(weighted), len(weighted)
+
+
+def pooled_weighted(paths: list[str]) -> list[int]:
+    """Pool every "weighted" value across `paths`, de-duplicating any path
+    whose full set of values is identical to one already pooled.
+
+    Issue #308: `scripts/run_token_benchmark.sh` deliberately reuses
+    `post-<task>.jsonl` as `toggle_post-<task>.jsonl` (arm B is the guard-on
+    side of both the inter-release comparison AND the same-commit "causal
+    proof" toggle comparison, an intentional cost saving -- one fewer set of
+    paid `claude` invocations per release). Those two files are
+    byte-identical for every task in the archived run. Pooling "4 files" as
+    if they were 4 independent samples double-counts the same 5
+    measurements as 10, understating the true dispersion. This pools by
+    DISTINCT measured arm: a file whose value tuple has already been seen
+    contributes nothing further.
+    """
+    seen: set[str] = set()
+    pooled: list[int] = []
+    for path in paths:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            records = token_telemetry_report.load_records(path)
+        except OSError:
+            continue
+        values = tuple(int(r.get("weighted", 0) or 0) for r in records)
+        if not values:
+            continue
+        digest = hashlib.sha256(repr(values).encode("utf-8")).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        pooled.extend(values)
+    return pooled
+
+
+class MadFloor:
+    """A dispersion-based noise floor (issue #308).
+
+    `mad_abs`   -- median absolute deviation, in weighted tokens.
+    `mad_pct`   -- mad_abs expressed as a percentage of the pooled median.
+    `n`         -- count of pooled, de-duplicated observations the estimator
+                   was computed over (kept small and explicit -- issue #298
+                   remains open on whether n this small can be trusted for
+                   the floor's numeric VALUE; this class only fixes the
+                   estimator and its presentation, not that question).
+    """
+
+    __slots__ = ("mad_abs", "mad_pct", "n")
+
+    def __init__(self, mad_abs: float, mad_pct: float, n: int) -> None:
+        self.mad_abs = mad_abs
+        self.mad_pct = mad_pct
+        self.n = n
+
+
+def mad_floor(paths: list[str]) -> MadFloor | None:
+    """Compute a MAD-based noise floor over the pooled, de-duplicated
+    "weighted" observations found in `paths`.
+
+    Replaces the previous "gap between two medians" floor (median-vs-median
+    is a claim about central tendency, not dispersion -- over the same five
+    `toggle_baseline-neutral` observations, median-vs-median put the floor
+    at 33.7% while MAD puts it at 2.1%; pooled across both same-commit arms
+    per this function's de-duplication, MAD is ~31.5% on the archived run).
+    Returns None if fewer than 2 distinct observations are available (no
+    dispersion is computable) or the pooled median is <= 0.
+    """
+    values = pooled_weighted(paths)
+    if len(values) < 2:
+        return None
+    center = statistics.median(values)
+    if center <= 0:
+        return None
+    mad_abs = statistics.median([abs(v - center) for v in values])
+    mad_pct = (mad_abs / center) * 100
+    return MadFloor(mad_abs, mad_pct, len(values))
 
 
 def fmt_cell(sample, iterations: int | None = None) -> str:
@@ -184,6 +263,20 @@ def main(argv=None) -> int:
         task_names, "toggle_baseline", "toggle_post", args.cost_per_million, args.dir,
         iterations=args.iterations,
     )
+
+    print("--- Noise Floor (MAD, same-commit toggle pair, pooled + de-duplicated) ---")
+    print(f"{'task':<10} {'MAD (abs)':>14} {'MAD (pct)':>10} {'n':>4}")
+    for name in task_names:
+        floor = mad_floor([
+            os.path.join(args.dir, f"toggle_baseline-{name}.jsonl"),
+            os.path.join(args.dir, f"toggle_post-{name}.jsonl"),
+        ])
+        if floor is None:
+            print(f"{name:<10} {'n/a':>14} {'n/a':>10} {'0':>4}")
+        else:
+            print(f"{name:<10} {floor.mad_abs:>14,.0f} {floor.mad_pct:>9.1f}% {floor.n:>4}")
+    print("(provisional -- issue #298: n this small is too few to trust the floor's numeric "
+          "value on its own; this is the estimator/presentation fix, not a trustworthiness claim)\n")
 
     if args.iterations is not None and (result_a["has_untrustworthy"] or result_b["has_untrustworthy"]):
         print(f"FAIL: at least one (task, arm) cell has n <= {untrustworthy_threshold(args.iterations)}/{args.iterations} "

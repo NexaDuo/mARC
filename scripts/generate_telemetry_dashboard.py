@@ -77,19 +77,26 @@ def generate_badge(baseline_path, badge_current_path, neutral_no_guard_path, neu
     correct "current" value to diff against the previous release's baseline.
 
     Issue #296 re-scope: the badge answers "tokens saved on THIS release",
-    not a standing "mARC saves X%" property — 0/"No Change" is the correct,
-    expected reading for most releases. Three states, in order:
+    not a standing "mARC saves X%" property — 0%/no-signal is the correct,
+    expected reading for most releases. Two states, in order:
 
       1. "No Data" (inactive) — no baseline/current data, or no `neutral`
          pair to measure a noise floor from. A missing noise floor falls
          back to "No Data", NEVER to an ungated raw number — publishing a
          delta without a floor to gate it is the exact failure that put a
          fabricated 15.2% on this badge before (issue #274/#279).
-      2. "No Change" (informational) — the reported task's delta does not
-         exceed the noise floor measured from `neutral` (the task the guard
-         structurally cannot fire on in either arm). Below that floor, a
-         number is indistinguishable from noise.
-      3. A real percentage (success/orange) — the delta clears the floor.
+      2. A margin/band, e.g. "-40.0% ±31.5%" (issue #308) — the measured
+         delta, plus or minus the measured noise floor, ALWAYS shown
+         together. Issue #308 replaced the previous behavior of silently
+         suppressing the number below a cutoff ("No Change") with this
+         band: a badge that carries its own uncertainty is self-documenting
+         about instrument quality in a way silent suppression is not, and
+         it stops discarding information the operator may still want. The
+         badge color still signals confidence: "success"/"orange" when the
+         band's interval [pct - floor, pct + floor] excludes zero (the
+         delta is bigger than the noise), "informational" when the interval
+         straddles zero (the number cannot be told apart from noise, but
+         is shown anyway, band and all).
 
     The noise floor MUST be a same-commit pairing (`neutral_no_guard_path`
     = arm C, guard=999999, vs `neutral_guarded_path` = arm B, guard=350 —
@@ -99,8 +106,24 @@ def generate_badge(baseline_path, badge_current_path, neutral_no_guard_path, neu
     release AND threshold, so it would absorb ordinary release-to-release
     drift into the floor and silently inflate it over time as more releases
     ship, suppressing real findings — a mistake caught in review on PR #297
-    before it shipped. Run 34987534132's same-commit `neutral` pair
-    measured this floor at 33.7%.
+    before it shipped.
+
+    Issue #308: the floor is now a MAD (median absolute deviation) over the
+    pooled, de-duplicated `neutral` same-commit observations
+    (benchmark_report.mad_floor), not the old "gap between two medians" —
+    median-vs-median is a claim about central tendency, not dispersion.
+    `scripts/run_token_benchmark.sh` deliberately reuses `post-<task>.jsonl`
+    as `toggle_post-<task>.jsonl` (arm B is the guard-on side of both
+    comparisons), so mad_floor() de-duplicates by content before pooling —
+    it must never treat those as two independent samples. Run 34987534132's
+    same-commit `neutral` pair measured this MAD-derived floor at ~31.5%
+    (was 33.7% under the old median-vs-median estimator; the near-agreement
+    here is coincidental, not a design guarantee — the two estimators
+    diverge by an order of magnitude on other slices of the same data, see
+    issue #308). The floor's numeric VALUE remains provisional per #298
+    (n=5 same-commit runs is too few for any dispersion statistic, MAD
+    included, to be trusted on its own) — this function fixes the estimator
+    and the presentation, not that open question.
 
     MEDIAN, not sum, across iterations (reusing benchmark_report.
     median_weighted — see its module docstring and the import comment above
@@ -136,39 +159,41 @@ def generate_badge(baseline_path, badge_current_path, neutral_no_guard_path, neu
         write(no_data_badge)
         return
 
-    # Noise floor: the absolute percentage gap between `neutral`'s two
-    # SAME-COMMIT arms (no-guard vs guard=350). `neutral` cannot be
-    # affected by the guard, so this gap IS the instrument's measurement
-    # noise, computed fresh from this run's own data — never hardcoded
-    # (issue #296).
-    floor_pct = None
+    # Noise floor: a MAD (median absolute deviation) over the pooled,
+    # de-duplicated `neutral` SAME-COMMIT observations (no-guard vs
+    # guard=350). `neutral` cannot be affected by the guard, so this
+    # dispersion IS the instrument's measurement noise, computed fresh from
+    # this run's own data — never hardcoded (issue #296), and pooled by
+    # distinct arm rather than by file count so the deliberate
+    # post/toggle_post file reuse is never double-counted (issue #308).
+    floor = None
     if neutral_no_guard_path and neutral_guarded_path:
-        neutral_no_guard_sample = benchmark_report.median_weighted(neutral_no_guard_path)
-        neutral_guarded_sample = benchmark_report.median_weighted(neutral_guarded_path)
-        if neutral_no_guard_sample is not None and neutral_guarded_sample is not None and neutral_no_guard_sample[0] > 0:
-            floor_pct = abs(_pct_delta(neutral_no_guard_sample[0], neutral_guarded_sample[0]))
+        floor = benchmark_report.mad_floor([neutral_no_guard_path, neutral_guarded_path])
 
-    if floor_pct is None:
+    if floor is None:
         # `neutral` is missing or yields no usable floor — publish nothing
         # rather than an ungated number (see the docstring above).
         write(no_data_badge)
         return
 
     pct = _pct_delta(base_median, post_median)
-    if abs(pct) <= floor_pct:
-        badge = {
-            "schemaVersion": 1,
-            "label": BADGE_LABEL,
-            "message": "No Change",
-            "color": "informational",
-        }
+    floor_pct = floor.mad_pct
+    lower, upper = pct - floor_pct, pct + floor_pct
+    if lower > 0:
+        color = "success"
+    elif upper < 0:
+        color = "orange"
     else:
-        badge = {
-            "schemaVersion": 1,
-            "label": BADGE_LABEL,
-            "message": f"{pct:.1f}%",
-            "color": "success" if pct > 0 else "orange",
-        }
+        # The band straddles zero: indistinguishable from noise. Shown
+        # anyway, band and all — issue #308 replaced silent suppression
+        # ("No Change") with an always-visible margin.
+        color = "informational"
+    badge = {
+        "schemaVersion": 1,
+        "label": BADGE_LABEL,
+        "message": f"{pct:.1f}% ±{floor_pct:.1f}%",
+        "color": color,
+    }
     write(badge)
 
 def main():

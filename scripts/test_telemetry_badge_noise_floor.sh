@@ -1,26 +1,28 @@
 #!/bin/bash
-# Regression test for issue #296.
+# Regression test for issue #296, updated for issue #308.
 #
 # Paid run 34987534132 measured the `neutral` task (the task the read-guard
 # structurally cannot fire on in either arm), on its SAME-COMMIT pairing
-# (arm C / toggle_baseline, no guard, vs arm B / toggle_post, guard=350), at
-# a 33.7% gap -- pure measurement noise, since nothing under test could have
-# moved it. Publishing a per-release delta smaller than that gap as
-# "savings" would automate the exact fabrication issue #274 committed by
-# hand (the "15.2%" badge). generate_badge() in
-# scripts/generate_telemetry_dashboard.py must:
+# (arm C / toggle_baseline, no guard, vs arm B / toggle_post, guard=350).
+# Publishing a per-release delta smaller than that noise as "savings" would
+# automate the exact fabrication issue #274 committed by hand (the "15.2%"
+# badge). generate_badge() in scripts/generate_telemetry_dashboard.py must:
 #
-#   1. Compute the noise floor from THIS run's own same-commit `neutral`
-#      no-guard/guarded pair (never hardcoded, never the inter-release arm A
-#      vs B pairing -- that pairing differs by both release AND threshold
-#      and would absorb release drift into the floor; caught in PR #297
-#      review).
-#   2. Report "No Change" (not a number) when the reported task's delta does
-#      not exceed that floor.
-#   3. Still report a real percentage when the delta DOES exceed the floor
-#      (this state is already covered by
+#   1. Compute the noise floor as a MAD (median absolute deviation) over the
+#      pooled, de-duplicated same-commit `neutral` no-guard/guarded
+#      observations (never hardcoded, never the inter-release arm A vs B
+#      pairing -- that pairing differs by both release AND threshold and
+#      would absorb release drift into the floor; caught in PR #297 review;
+#      issue #308 replaced the old median-vs-median gap with this MAD
+#      estimator because a gap between two medians is a claim about
+#      central tendency, not dispersion).
+#   2. ALWAYS show the delta as a band (e.g. "-5.0% ±11.1%"), never suppress
+#      it below the floor -- issue #308. Color still signals confidence:
+#      "informational" when the band [pct-floor, pct+floor] straddles zero
+#      (indistinguishable from noise), "success"/"orange" when it doesn't
+#      (that state is already covered by
 #      test_telemetry_badge_dashboard_same_run.sh's dynamic check).
-#   4. Fall back to the honest "No Data" state -- never an ungated number --
+#   3. Fall back to the honest "No Data" state -- never an ungated number --
 #      when `neutral` data is missing, even if baseline/current data for the
 #      reported task is perfectly valid.
 #
@@ -57,9 +59,9 @@ JSON
 # Neutral task, same-commit pairing (arm C / toggle_baseline = no guard, vs
 # arm B / toggle_post = guard=350 -- re-pointed on PR #297 review from the
 # wrong inter-release arm A vs B pairing, which would have absorbed release
-# drift into the floor instead of measuring pure noise): ~25% delta --
-# larger than control's ~5%, so it IS the noise floor and control's delta
-# must NOT clear it.
+# drift into the floor instead of measuring pure noise). Pooled MAD over
+# these 10 distinct values (median 9000, MAD 1000) is 11.1%, comfortably
+# larger than control's ~5% delta, so control's delta must NOT clear it.
 cat > "$TMPDIR/toggle_baseline-neutral.jsonl" <<'JSON'
 {"session_id": "n1", "weighted": 7900}
 {"session_id": "n2", "weighted": 8000}
@@ -86,23 +88,26 @@ run_badge() {
         "$@"
 }
 
-# --- 1. Within-noise: delta below the measured floor -> "No Change" -------
+# --- 1. Within-noise: delta smaller than the measured MAD floor -> the
+# number is still SHOWN (issue #308: no more silent suppression), but
+# colored "informational" because [pct-floor, pct+floor] straddles zero. --
 WITHIN_NOISE_OUT="$TMPDIR/within-noise-badge.json"
 if ! run_badge "$WITHIN_NOISE_OUT" \
     --neutral-no-guard "$TMPDIR/toggle_baseline-neutral.jsonl" \
     --neutral-guarded "$TMPDIR/toggle_post-neutral.jsonl"; then
     fail "generate_telemetry_dashboard.py exited non-zero on the within-noise fixture"
-elif grep -q '"No Change"' "$WITHIN_NOISE_OUT" && grep -q '"informational"' "$WITHIN_NOISE_OUT"; then
-    pass "badge reports 'No Change'/informational when the reported delta does not exceed the measured noise floor"
+elif grep -q '"informational"' "$WITHIN_NOISE_OUT" && grep -qE '±|\\u00b1' "$WITHIN_NOISE_OUT"; then
+    pass "badge reports informational/band when the reported delta does not exceed the measured MAD noise floor"
 else
-    fail "badge did not report 'No Change' for a delta below the noise floor: $(cat "$WITHIN_NOISE_OUT")"
+    fail "badge did not report an informational band for a delta below the noise floor: $(cat "$WITHIN_NOISE_OUT")"
 fi
 
-# It must not read as a savings figure: no bare percentage in the message.
-if grep -q '"message": "No Change"' "$WITHIN_NOISE_OUT"; then
-    pass "within-noise message carries no percentage figure"
+# The number must still be visible (not discarded) -- issue #308's whole
+# point is that suppressing it ("No Change") throws away information.
+if grep -q '"message": "-5.0% ' "$WITHIN_NOISE_OUT"; then
+    pass "within-noise message still carries the actual delta figure (-5.0%), not a suppressed placeholder"
 else
-    fail "within-noise badge message is not the expected 'No Change' literal: $(cat "$WITHIN_NOISE_OUT")"
+    fail "within-noise badge message did not carry the expected -5.0% figure: $(cat "$WITHIN_NOISE_OUT")"
 fi
 
 # --- 2. Missing neutral data -> honest "No Data", never an ungated number -
@@ -132,6 +137,44 @@ elif grep -q '"No Data"' "$EMPTY_NEUTRAL_OUT" && grep -q '"inactive"' "$EMPTY_NE
     pass "badge falls back to honest 'No Data'/inactive when neutral files exist but yield no floor"
 else
     fail "badge published something other than 'No Data' with empty neutral files: $(cat "$EMPTY_NEUTRAL_OUT")"
+fi
+
+# --- 4. Double-counting regression guard (issue #308's core trap): a
+# fixture where the same-commit "guarded" neutral file is BYTE-IDENTICAL to
+# a hypothetical extra "post" file (mirroring run_token_benchmark.sh's real
+# `cp post-<task>.jsonl toggle_post-<task>.jsonl`) must not be pooled twice.
+# Pool the SAME file twice via --neutral-guarded pointed at a duplicate path
+# of --neutral-no-guard's pair partner and assert the floor computed from 2
+# distinct files (10 values) is unaffected by ALSO handing mad_floor a
+# duplicate of one of them directly, at the Python level.
+DEDUP_CHECK="$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_ROOT/scripts')
+import benchmark_report as br
+
+a = '$TMPDIR/toggle_baseline-neutral.jsonl'
+b = '$TMPDIR/toggle_post-neutral.jsonl'
+
+# Correct: pool the 2 distinct arms -> 10 observations.
+correct = br.mad_floor([a, b])
+
+# Buggy shape this test exists to catch: naively pooling 'post-neutral.jsonl'
+# (byte-identical copy of b, mirroring run_token_benchmark.sh's cp) AS WELL
+# AS b itself must NOT double b's 5 values to 10 (20 total) -- de-duplication
+# must collapse the identical-content file back down to the same 10.
+import shutil
+dup = '$TMPDIR/post-neutral.jsonl'
+shutil.copyfile(b, dup)
+deduped = br.mad_floor([a, b, dup])
+
+print(correct.n, deduped.n)
+")"
+CORRECT_N="$(echo "$DEDUP_CHECK" | awk '{print $1}')"
+DEDUPED_N="$(echo "$DEDUP_CHECK" | awk '{print $2}')"
+if [ "$CORRECT_N" = "10" ] && [ "$DEDUPED_N" = "10" ]; then
+    pass "mad_floor() pools by distinct arm: handing it a byte-identical extra file still yields n=10, not 15/20 (issue #308 double-counting trap)"
+else
+    fail "mad_floor() double-counted a byte-identical duplicate file: got n=$CORRECT_N (2 distinct files) and n=$DEDUPED_N (with a duplicate added), expected 10 and 10"
 fi
 
 echo "---"
