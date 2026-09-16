@@ -313,6 +313,102 @@ else
     pass "resolve_claude_version fails loudly (non-zero) instead of hashing a placeholder"
 fi
 
+# -----------------------------------------------------------------------
+# Part 4: resolve_prev_release_tag() (issue #304 `@rev` review, BLOCKING).
+#
+# PREV_TAG used to be `git describe --tags --abbrev=0 "$CURRENT_REF^"` --
+# nearest tag by ANCESTRY, with no regard for release-vs-patch shape.
+# Because a patch tag never takes the real (paid) path, it never writes
+# docs/marc/benchmarks/<tag>/manifest.json, so the next minor/major
+# release's cache lookup would key on that patch tag, miss unconditionally,
+# and re-run arm A -- extra PAID `claude` invocations, reopening the exact
+# waste issue #304 exists to close. This builds a small, real git repo with
+# a fabricated tag history and exercises resolve_prev_release_tag()
+# against it directly (a `cd`, not a mock -- the function shells out to
+# real `git describe`).
+# -----------------------------------------------------------------------
+
+# Every `git tag` below is pinned with `-c tag.gpgsign=false`: a lightweight
+# tag must behave identically regardless of the operator's global git
+# config, and a `tag.gpgsign=true` global setting otherwise turns a plain
+# `git tag <name>` into a failing signed-tag attempt ("fatal: no tag
+# message?" -- reproduced while writing this test) with no GPG key
+# configured in this sandbox. See AGENTS.md's "guard scripts against
+# ambient config" lesson.
+GIT_REPO="$WORK/prev-tag-repo"
+mkdir -p "$GIT_REPO"
+(
+    cd "$GIT_REPO"
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "test"
+
+    # commit 1: a legacy 3-component release tag (pre-CalVer scheme).
+    echo a > f.txt && git add f.txt && git commit -qm "c1"
+    git -c tag.gpgsign=false tag v0.28.0
+
+    # commit 2: a CalVer release tag.
+    echo b > f.txt && git add f.txt && git commit -qm "c2"
+    git -c tag.gpgsign=false tag v26.9.15
+
+    # commit 3: a CalVer PATCH tag on top of it (same day, disambiguated).
+    echo c > f.txt && git add f.txt && git commit -qm "c3"
+    git -c tag.gpgsign=false tag v26.9.15.1
+
+    # commit 4 (HEAD): the next minor/major release under test.
+    echo d > f.txt && git add f.txt && git commit -qm "c4"
+    git -c tag.gpgsign=false tag v26.9.16
+)
+
+# 4a. Walking back from a new release tag whose immediate ancestor is a
+# PATCH tag must skip it and land on the preceding RELEASE tag -- not the
+# patch tag itself, and not silently miss (empty string) either.
+got="$(cd "$GIT_REPO" && resolve_prev_release_tag "v26.9.16" 2>/dev/null)"
+if [ "$got" = "v26.9.15" ]; then
+    pass "resolve_prev_release_tag() skips an intervening patch tag (v26.9.15.1) and lands on the preceding release tag (v26.9.15)"
+else
+    fail "resolve_prev_release_tag() from v26.9.16 -- expected 'v26.9.15', got '$got'"
+fi
+
+# 4b. Same repo, but confirm the walk is willing to cross the legacy
+# v0.x.y <-> vYY.M.D scheme boundary when the nearer release tag is itself
+# unreachable (i.e. walking from the patch tag directly): a legitimate
+# prior release, not a different kind of artifact, and there is no reason
+# to hard-fail just because the versioning scheme changed at that point.
+got_legacy="$(cd "$GIT_REPO" && resolve_prev_release_tag "v26.9.15" 2>/dev/null)"
+if [ "$got_legacy" = "v0.28.0" ]; then
+    pass "resolve_prev_release_tag() walks back across the legacy v0.x.y/CalVer scheme boundary to v0.28.0 when that is the nearest release-shaped ancestor"
+else
+    fail "resolve_prev_release_tag() from v26.9.15 -- expected 'v0.28.0' (legacy boundary), got '$got_legacy'"
+fi
+
+# 4c. No-previous-release case: a repo whose only ancestor tag is a PATCH
+# tag, with nothing release-shaped further back, must degrade to an empty
+# PREV_TAG -- the SAME signal main()'s existing
+# `[ -z "$PREV_TAG" ]` -> "Error: No previous tag found. Cannot perform
+# A/B test." path already treats as a hard, honest failure. It must NOT
+# silently return the patch tag itself (which has no manifest) or fabricate
+# a comparison.
+NO_PREV_REPO="$WORK/no-prev-repo"
+mkdir -p "$NO_PREV_REPO"
+(
+    cd "$NO_PREV_REPO"
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "test"
+    echo a > f.txt && git add f.txt && git commit -qm "c1"
+    git -c tag.gpgsign=false tag v26.9.15.1
+
+    echo b > f.txt && git add f.txt && git commit -qm "c2"
+    git -c tag.gpgsign=false tag v26.9.16
+)
+got_none="$(cd "$NO_PREV_REPO" && resolve_prev_release_tag "v26.9.16" 2>/dev/null)"
+if [ -z "$got_none" ]; then
+    pass "resolve_prev_release_tag() returns empty (honest 'no previous release' signal) when only a patch tag exists further back, not the patch tag itself"
+else
+    fail "resolve_prev_release_tag() with no release-shaped ancestor -- expected empty, got '$got_none'"
+fi
+
 echo
 if [ "$FAILS" -eq 0 ]; then
     echo "All checks passed."
