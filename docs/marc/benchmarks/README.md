@@ -36,10 +36,40 @@ not).
 
 Issue #309: CI never spends real API credit on its own. The paid,
 three-task/three-arm measurement runs by hand, on the owner's own account,
-at release time. **Use `LOCAL_RUN=true` for this** (issue #314):
+at release time. **Use `LOCAL_RUN=true` for this** (issue #314).
+
+### One-time setup: your own persistent config dir
+
+The first real local run aborted at the preflight with `Not logged in ·
+Please run /login`. `LOCAL_RUN=true` points `CLAUDE_CONFIG_DIR` at an
+isolated directory so plugin/marketplace mutations never touch your real
+Claude Code config — but a brand-new directory has no login in it either,
+so the CLI starts logged out and every invocation fails. Do this once:
 
 ```
-LOCAL_RUN=true GITHUB_EVENT_NAME=workflow_dispatch REAL_RUN_INPUT=true scripts/run_token_benchmark.sh
+mkdir -p ~/marc-bench-config
+chmod 700 ~/marc-bench-config
+CLAUDE_CONFIG_DIR=~/marc-bench-config claude
+# then run /login inside that session
+```
+
+Log in there separately from your normal `claude` session because this
+directory is where the benchmark installs and removes plugins/marketplaces
+under the hood, and that must never touch your real, everyday config.
+
+**Never** symlink, copy, or otherwise redirect your real
+`~/.claude/.credentials.json` into an isolated config dir as a shortcut
+around this. It was tried: the CLI refreshes its OAuth token via
+write-temp-then-rename, which replaces a symlinked/copied credentials file
+with a new regular file inside the scratch dir, and deleting that scratch
+dir afterwards destroys the only copy of the refreshed token — logging you
+out of your real session. Always give the isolated dir its own real login
+instead.
+
+### Running the benchmark
+
+```
+LOCAL_RUN=true LOCAL_RUN_CONFIG_DIR=~/marc-bench-config GITHUB_EVENT_NAME=workflow_dispatch REAL_RUN_INPUT=true scripts/run_token_benchmark.sh
 ```
 
 `LOCAL_RUN=true` is what makes this safe to run on your own machine instead
@@ -49,19 +79,26 @@ of a disposable CI runner:
   CLI mid-session. The version is still resolved from whatever `claude` is
   already on your `PATH` and still feeds the drift-guard hash (issue #281
   item 3 stays fixed).
-- Points `CLAUDE_CONFIG_DIR` at a fresh throwaway directory for the whole
-  run, so every `claude plugin marketplace add/remove` and `claude plugin
-  install marc@nexaduo` call lands there instead of mutating your real
-  Claude Code config or marketplace registrations. The script prints that
-  directory's path; inspect or delete it yourself when done — it is not
-  auto-deleted.
-- Checks out the arm-A (previous release) worktree in that same scratch
+- Points `CLAUDE_CONFIG_DIR` at an isolated directory for the whole run, so
+  every `claude plugin marketplace add/remove` and `claude plugin install
+  marc@nexaduo` call lands there instead of mutating your real Claude Code
+  config or marketplace registrations. With `LOCAL_RUN_CONFIG_DIR` set (as
+  above), that directory is the persistent, already-logged-in one you set up
+  once — it is reused across runs and never deleted. Without it, the script
+  falls back to a fresh throwaway directory for the run (its path is
+  printed; inspect or delete it yourself when done) — but that fallback
+  starts logged out, so the preflight below will fail unless you supply
+  `LOCAL_RUN_CONFIG_DIR`.
+- Checks out the arm-A (previous release) worktree in a fresh scratch
   location instead of `../arm-a`, so it never creates a sibling directory
-  next to your checkout. That location is a fresh `mktemp -d` path made new
-  for every run (it can never collide with a leftover from an earlier one);
-  the worktree registration is removed via an `EXIT` trap
-  (`git worktree remove --force`, then `git worktree prune`) when the script
-  exits.
+  next to your checkout. That location is always a new `mktemp -d` path made
+  fresh for every run regardless of `LOCAL_RUN_CONFIG_DIR` (it can never
+  collide with a leftover from an earlier one); the worktree registration is
+  removed via an `EXIT` trap (`git worktree remove --force`, then `git
+  worktree prune`) when the script exits. The preflight telemetry state
+  directory (below) is likewise always fresh scratch, never inside
+  `LOCAL_RUN_CONFIG_DIR` — reusing it there would let a stale row from an
+  earlier run produce a false pass.
 - Before spending on the full 30-45 invocations, makes exactly ONE real
   invocation and verifies a telemetry row was actually written under the
   isolated config. If it wasn't, the run aborts immediately instead of
