@@ -230,6 +230,34 @@ else
     fail "run_local_preflight() succeeded but the target file has no content"
 fi
 
+# -----------------------------------------------------------------------
+# Part 4c (PR #316, `@rev` BLOCK): the exact reproduction. A STALE telemetry
+# row already sits at the path the preflight inspects for THIS invocation
+# (temp_run_1/token-telemetry.jsonl) -- e.g. left over from an earlier local
+# run -- and the stub `claude` for this invocation writes NOTHING (simulating
+# the Stop hook failing to fire under CLAUDE_CONFIG_DIR isolation). Before
+# the fix, `[ -s "$target_file" ]` alone would pass because run_claude_safely
+# copies the stale row into $target_file via `cat`. This MUST abort.
+# -----------------------------------------------------------------------
+PREFLIGHT_STATE_STALE="$WORK/preflight-state-stale"
+PREFLIGHT_TARGET_STALE="$WORK/preflight-stale.jsonl"
+mkdir -p "$PREFLIGHT_STATE_STALE/temp_run_1"
+echo '{"session_id": "sess-STALE-leftover", "weighted": 999, "turns": 1, "model": "stub-model", "timestamp": 1600000000}' \
+    > "$PREFLIGHT_STATE_STALE/temp_run_1/token-telemetry.jsonl"
+
+if PATH="$PREFLIGHT_BIN:$PATH" MARC_TEST_WRITE_TELEMETRY=0 \
+    run_local_preflight "$PREFLIGHT_STATE_STALE" "$PREFLIGHT_TARGET_STALE" \
+    > "$WORK/4c.out" 2>&1; then
+    fail "run_local_preflight() exited 0 with only a STALE pre-existing telemetry row and no new write (the exact @rev reproduction) -- should ABORT"
+else
+    pass "run_local_preflight() aborts when only a stale pre-existing row is present and nothing new was recorded"
+fi
+if grep -q "did not fire under config isolation" "$WORK/4c.out"; then
+    pass "run_local_preflight() names the Stop-hook-did-not-fire case distinctly for the stale-row scenario"
+else
+    fail "run_local_preflight() did not distinguish the stale-row case ($(cat "$WORK/4c.out"))"
+fi
+
 echo
 if [ "$FAILS" -eq 0 ]; then
     echo "All checks passed."

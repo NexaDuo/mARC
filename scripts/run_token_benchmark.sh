@@ -380,9 +380,21 @@ setup_local_run_isolation() {
     mkdir -p "$CLAUDE_CONFIG_DIR"
     export CLAUDE_CONFIG_DIR
     ARM_A_DIR="$LOCAL_RUN_SCRATCH_DIR/arm-a"
+    # PREFLIGHT_STATE_DIR: PR #316 (`@rev` BLOCK). This used to be the fixed,
+    # non-randomized `$HOME/.claude/marc-state-preflight`, never cleaned
+    # between invocations -- unlike everything else LOCAL_RUN touches, which
+    # lives under this same fresh $LOCAL_RUN_SCRATCH_DIR. A leftover row from
+    # any earlier local run at that fixed path let run_local_preflight()
+    # report success by echoing back stale data, exactly when the isolation
+    # risk it exists to catch had materialized. Putting it inside the
+    # mktemp'd scratch root makes it empty by construction on every run --
+    # it cannot inherit anything, because nothing else has ever written here.
+    PREFLIGHT_STATE_DIR="$LOCAL_RUN_SCRATCH_DIR/preflight-state"
+    mkdir -p "$PREFLIGHT_STATE_DIR"
     echo "Local run mode (LOCAL_RUN=true): isolating this run at $LOCAL_RUN_SCRATCH_DIR" >&2
     echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR (never the host's real Claude Code config -- inspect or delete this directory yourself when done)" >&2
     echo "  arm-A worktree will be checked out at $ARM_A_DIR (not ../arm-a)" >&2
+    echo "  preflight telemetry state dir: $PREFLIGHT_STATE_DIR (fresh scratch, never \$HOME/.claude -- see PR #316)" >&2
     trap 'git worktree remove --force "$ARM_A_DIR" 2>/dev/null || true; git worktree prune 2>/dev/null || true' EXIT
 }
 
@@ -392,23 +404,25 @@ setup_local_run_isolation() {
 # which is about local runs, and CI's runner is disposable so a leftover
 # worktree from a previous invocation essentially never happens there.
 #
-# In LOCAL_RUN=true mode a developer machine is NOT disposable: a crashed or
-# interrupted previous local run can leave a stale worktree at $dir, and the
-# blind `|| true` would silently mask that `git worktree add` failure -- the
-# very next line (`pushd "$dir"`) would still succeed against whatever old
-# checkout is already sitting there, so the run would silently measure arm A
-# against the WRONG code with no error printed at all. Local mode therefore
-# explicitly detects and clears a pre-existing worktree at $dir first, and
-# then does NOT swallow a genuine `git worktree add` failure once that's
-# done -- a real failure (bad tag, permissions, disk) still aborts loudly.
+# In LOCAL_RUN=true mode a developer machine is NOT disposable, so a real
+# `git worktree add` failure (bad tag, permissions, disk) must still abort
+# loudly instead of being swallowed by `|| true` -- the very next line
+# (`pushd "$dir"`) would otherwise succeed against whatever happened to be
+# there and silently measure arm A against the wrong code.
+#
+# PR #316 (`@rev` review): this used to also detect and clear a
+# "pre-existing worktree at $dir" before adding. That branch was dead code:
+# $dir is ARM_A_DIR, which under LOCAL_RUN=true is set exactly once, inside
+# setup_local_run_isolation(), to `$LOCAL_RUN_SCRATCH_DIR/arm-a` where
+# $LOCAL_RUN_SCRATCH_DIR is a brand-new `mktemp -d` directory this same
+# invocation just created -- nothing can already exist at that path, so
+# `[ -d "$dir" ]` could never be true. `@sec` had only cleared the branch as
+# "safe" because it could currently target nothing but the scratch dir;
+# removed rather than left in place, so a future change that lets $dir alias
+# something real doesn't inherit an untested destructive path.
 add_arm_a_worktree() {
     local dir="$1" tag="$2"
     if [ "$LOCAL_RUN" = "true" ]; then
-        if [ -d "$dir" ]; then
-            echo "Local mode: stale arm-a worktree found at $dir (leftover from a previous run). Removing it before checking out $tag fresh." >&2
-            git worktree remove --force "$dir" 2>/dev/null || rm -rf "$dir"
-            git worktree prune 2>/dev/null || true
-        fi
         git worktree add "$dir" "$tag"
     else
         git worktree add "$dir" "$tag" || true
@@ -432,14 +446,41 @@ add_arm_a_worktree() {
 run_local_preflight() {
     local state_dir="$1"
     local target_file="$2"
+    # PR #316 (`@rev` BLOCK, reproduced without any real `claude`
+    # invocation): a plain `[ -s "$target_file" ]` check after the run is not
+    # enough -- it can pass on a STALE row left by an earlier invocation that
+    # wrote to this exact per-run file, even if THIS invocation's Stop hook
+    # never fired. Item 1 of the fix (setup_local_run_isolation, above) makes
+    # $state_dir fresh-by-construction so that can no longer happen via the
+    # normal call path; this is item 2, belt-and-suspenders: capture the row
+    # count for the one file this single invocation would write to
+    # (temp_run_1, since n=1 below) BEFORE calling out, and require it to
+    # have gone up afterwards, rather than trusting non-emptiness alone.
+    local telemetry_file="$state_dir/temp_run_1/token-telemetry.jsonl"
+    local rows_before=0
+    if [ -f "$telemetry_file" ]; then
+        rows_before=$(wc -l < "$telemetry_file" | tr -d ' ')
+    fi
+
     echo "--- LOCAL PREFLIGHT: one real (billed) invocation to confirm telemetry survives CLAUDE_CONFIG_DIR isolation before spending on the rest of the run ---"
     rm -f "$target_file"
     run_claude_safely "Reply with just the word OK." "$target_file" "$state_dir" 1 "local-preflight"
-    if [ -s "$target_file" ]; then
-        echo "Local preflight OK: telemetry recorded ($(wc -l < "$target_file" | tr -d ' ') row(s)) at $state_dir. Proceeding with the full measurement."
+
+    local rows_after=0
+    if [ -f "$telemetry_file" ]; then
+        rows_after=$(wc -l < "$telemetry_file" | tr -d ' ')
+    fi
+
+    if [ -s "$target_file" ] && [ "$rows_after" -gt "$rows_before" ]; then
+        echo "Local preflight OK: telemetry recorded ($((rows_after - rows_before)) new row(s), strictly more than the $rows_before present beforehand) at $state_dir. Proceeding with the full measurement."
         return 0
     fi
-    echo "Error: LOCAL PREFLIGHT FAILED. The one real (billed) invocation completed but no telemetry row was written under CLAUDE_CONFIG_DIR isolation (CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-unset}). This means the plugin's Stop hook telemetry does not survive config isolation on this machine -- proceeding would spend on the ~44 remaining paid invocations for ZERO samples, the exact failure mode issue #314 exists to prevent. ABORTING before further spend." >&2
+
+    if [ "${LAST_RUN_FAILED:-0}" -gt 0 ]; then
+        echo "Error: LOCAL PREFLIGHT FAILED. The one real (billed) invocation itself failed (nonzero exit) -- see the 'FAILED: nonzero exit code' line above. This is an invocation/CLI error, not evidence about whether telemetry survives CLAUDE_CONFIG_DIR isolation. ABORTING before further spend." >&2
+    else
+        echo "Error: LOCAL PREFLIGHT FAILED. The one real (billed) invocation completed but no NEW telemetry row was written under CLAUDE_CONFIG_DIR isolation (CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-unset}; rows before=$rows_before, after=$rows_after at $telemetry_file). The invocation succeeded but nothing was recorded -- the Stop hook did not fire under config isolation. This means the plugin's Stop hook telemetry does not survive config isolation on this machine -- proceeding would spend on the ~44 remaining paid invocations for ZERO samples, the exact failure mode issue #314 exists to prevent. ABORTING before further spend." >&2
+    fi
     return 1
 }
 
@@ -542,6 +583,12 @@ run_claude_safely() {
         fi
     done
     echo "  [summary] $label: ok=$ok lost=$lost(instrument) failed=$failed(invocation) -- requested n=$n"
+    # Exposed as a global (deliberately NOT `local`) so a caller that needs to
+    # distinguish "the invocation itself failed" from "it succeeded but
+    # nothing was recorded" -- run_local_preflight(), PR #316 -- can read it
+    # without this function's return code carrying extra meaning for its
+    # other, unrelated callers.
+    LAST_RUN_FAILED=$failed
 }
 
 # write_task_names: single source of truth for which task names exist in
@@ -637,7 +684,7 @@ JSON
         claude plugin install marc@nexaduo
         mkdir -p .agents
         printf '[telemetry]\nenabled = true\n' > .agents/team.toml
-        if ! run_local_preflight "$HOME/.claude/marc-state-preflight" "$GITHUB_WORKSPACE/preflight.jsonl"; then
+        if ! run_local_preflight "$PREFLIGHT_STATE_DIR" "$GITHUB_WORKSPACE/preflight.jsonl"; then
             exit 1
         fi
     fi
