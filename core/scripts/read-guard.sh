@@ -2,9 +2,13 @@
 # opt-in read-guard script for PreToolUse to intercept large file reads (Issue #262)
 # Bulk-reader delegation (opt-in, off by default) added in issue #320: when
 # [token_guard].bulk_reader = true, an over-threshold untargeted read is
-# routed to core/scripts/dispatch_agent.py --harness antigravity, which
-# writes a summary to disk; the guard then denies the original read with a
-# path to that (small, cheap-to-read) summary instead of bare advice.
+# routed to core/scripts/dispatch_agent.py --role bulk-reader --harness
+# claude-code. That role's tools: Read-only frontmatter is a verified,
+# harness-enforced hard boundary on claude-code (issue #322/#323 review), so
+# the worker has no execution surface even if the file it summarizes tries to
+# steer it. The guard itself writes the worker's summary text to disk (the
+# worker has no Write tool to do it itself) and denies the original read with
+# a path to that (small, cheap-to-read) summary instead of bare advice.
 
 set -u
 
@@ -199,24 +203,32 @@ def main():
 
 
 def try_bulk_reader(file_path, timeout_sec):
-    '''Delegate summarizing an over-threshold file to a cheap harness (issue #320).
+    '''Delegate summarizing an over-threshold file to a cheap, minimal-tool
+    worker (issue #320; routed to the dedicated 'bulk-reader' role on
+    claude-code per the #322/#323 review -- NOT 'research' on antigravity,
+    which was found to give the delegated worker Bash/WebFetch/WebSearch
+    with no enforced restriction on the antigravity harness).
 
-    Fail-open, always: any failure here (missing agy binary, dispatch
-    subprocess error, non-zero exit, empty/missing output, timeout) returns
-    None so the caller falls back to the pre-existing bare deny-with-advice.
-    Never raises, never hangs the session past timeout_sec + a small buffer
-    for the outer subprocess itself.
+    Fail-open, always: any failure here (missing claude binary, dispatch
+    subprocess error, non-zero exit, empty output, timeout) returns None so
+    the caller falls back to the pre-existing bare deny-with-advice. Never
+    raises, never hangs the session past timeout_sec + a small buffer for the
+    outer subprocess itself.
+
+    Delivery shape: the worker has NO Write tool (issue #320/#322 review,
+    HIGH finding -- Read-only is the whole point of the sandbox), so it
+    cannot write its own summary to disk. Instead it is instructed to output
+    the summary as its final response text, which THIS function (not the
+    worker) captures from the subprocess's stdout and writes to the scratch
+    file itself.
     '''
     try:
         import shutil as _shutil
         # Checked directly here (not left to dispatch_agent.py's own
-        # fallback) so a missing 'agy' binary short-circuits before ever
-        # spawning a subprocess: dispatch_agent.py's fallback-to-host-harness
-        # would otherwise resolve to 'claude' inside a Claude Code hook,
-        # which is a different, unwanted failure mode (a nested claude CLI
-        # invocation from within this hook) rather than the fail-open this
-        # feature promises.
-        if _shutil.which('agy') is None:
+        # fallback) so a missing 'claude' binary short-circuits before ever
+        # spawning a subprocess, rather than silently falling back to
+        # whatever host harness dispatch_agent.py would otherwise pick.
+        if _shutil.which('claude') is None:
             return None
 
         here = os.environ.get('MARC_READ_GUARD_DIR') or os.path.dirname(os.path.abspath(sys.argv[0]))
@@ -238,10 +250,11 @@ def try_bulk_reader(file_path, timeout_sec):
         summary_path = os.path.join(scratch_dir, f'{base}.summary.md')
 
         prompt = (
-            f'Read the file at {file_path!r} in full. Write a concise summary '
-            f'(purpose, key functions/classes, notable logic) to disk at '
-            f'{summary_path!r} as plain text, well under 350 lines. '
-            f'Do not modify {file_path!r}. When done, output only the word DONE.'
+            f'Read the file at {file_path!r} in full. Then output, as your '
+            f'entire final response, a concise factual summary (purpose, key '
+            f'functions/classes, notable logic), well under 350 lines. '
+            f'Output only the summary text itself -- no preamble, no '
+            f'commentary, nothing else.'
         )
 
         env = dict(os.environ)
@@ -250,9 +263,9 @@ def try_bulk_reader(file_path, timeout_sec):
         proc = subprocess.run(
             [
                 sys.executable or 'python3', dispatch_script,
-                '--role', 'research',
+                '--role', 'bulk-reader',
                 '--prompt', prompt,
-                '--harness', 'antigravity',
+                '--harness', 'claude-code',
                 '--timeout', str(timeout_sec),
             ],
             capture_output=True,
@@ -262,10 +275,11 @@ def try_bulk_reader(file_path, timeout_sec):
         )
         if proc.returncode != 0:
             return None
-        if not os.path.isfile(summary_path):
+        summary_text = (proc.stdout or '').strip()
+        if not summary_text:
             return None
-        if os.path.getsize(summary_path) == 0:
-            return None
+        with open(summary_path, 'w', encoding='utf-8') as sf:
+            sf.write(summary_text)
         return summary_path
     except Exception:
         return None

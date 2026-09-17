@@ -95,41 +95,38 @@ def parse_deny_reason(proc: subprocess.CompletedProcess) -> Optional[str]:
     return data.get("hookSpecificOutput", {}).get("permissionDecisionReason")
 
 
-def make_fake_agy(bin_dir: str, behavior: str) -> None:
-    """Write a fake `agy` executable to `bin_dir` for a given `behavior`.
+def make_fake_claude(bin_dir: str, behavior: str) -> None:
+    """Write a fake `claude` executable to `bin_dir` for a given `behavior`.
+
+    Routed to `claude` (not `agy`) since issue #322/#323 review moved the
+    bulk-reader worker to the 'bulk-reader' role on the claude-code harness
+    (the harness where `tools:` restrictions are measured/enforced), away
+    from 'research' on antigravity.
 
     behavior:
-      'success' - parses the summary path out of the prompt and writes to it.
+      'success' - prints a fixed summary as its ENTIRE stdout (the worker has
+                  no Write tool, issue #320/#322 review HIGH finding -- the
+                  guard itself captures this stdout and writes it to disk).
       'fail'    - exits non-zero, writes nothing.
       'hang'    - sleeps far longer than any timeout under test.
-      'empty'   - exits 0 but never writes the summary file.
+      'empty'   - exits 0 but prints nothing (blank stdout).
     """
     os.makedirs(bin_dir, exist_ok=True)
-    agy_path = os.path.join(bin_dir, "agy")
+    claude_path = os.path.join(bin_dir, "claude")
     if behavior == "success":
-        script = (
-            "#!/usr/bin/env python3\n"
-            "import sys, re\n"
-            "prompt = sys.argv[-1] if len(sys.argv) > 1 else ''\n"
-            "m = re.search(r\"disk at '([^']+)'\", prompt)\n"
-            "if m:\n"
-            "    with open(m.group(1), 'w') as f:\n"
-            "        f.write('summary: fake content\\n')\n"
-            "print('DONE')\n"
-            "sys.exit(0)\n"
-        )
+        script = "#!/usr/bin/env bash\necho 'summary: fake content'\nexit 0\n"
     elif behavior == "fail":
         script = "#!/usr/bin/env bash\nexit 1\n"
     elif behavior == "hang":
         script = "#!/usr/bin/env bash\nsleep 60\n"
     elif behavior == "empty":
-        script = "#!/usr/bin/env bash\necho DONE\nexit 0\n"
+        script = "#!/usr/bin/env bash\nexit 0\n"
     else:
         raise ValueError(f"unknown behavior: {behavior}")
-    with open(agy_path, "w", encoding="utf-8") as f:
+    with open(claude_path, "w", encoding="utf-8") as f:
         f.write(script)
-    st = os.stat(agy_path)
-    os.chmod(agy_path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    st = os.stat(claude_path)
+    os.chmod(claude_path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def test_no_token_guard_section_is_inert() -> None:
@@ -169,7 +166,7 @@ def test_bulk_reader_enabled_worker_succeeds() -> None:
         )
         big = write_big_file(tmp)
         bin_dir = os.path.join(tmp, "fakebin")
-        make_fake_agy(bin_dir, "success")
+        make_fake_claude(bin_dir, "success")
         proc = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big}}, extra_path=bin_dir)
         reason = parse_deny_reason(proc)
         check(reason is not None, f"guard still denies the original read (got stdout={proc.stdout!r}, stderr={proc.stderr!r})")
@@ -231,9 +228,10 @@ def test_bulk_reader_fail_open() -> None:
     print("\n--- Test (d): bulk_reader enabled, worker missing/fails/times out -> fall back, bounded, no hang ---")
     toml_body = "[token_guard]\nmax_read_lines = 350\nbulk_reader = true\nbulk_reader_timeout = 3\n"
 
-    # d1. 'agy' missing from PATH entirely -- must NOT depend on antigravity
-    # being installed on the test machine. Use a minimal PATH with none of
-    # the fake bins so `shutil.which('agy')` genuinely finds nothing.
+    # d1. 'claude' missing from PATH entirely -- must NOT depend on any
+    # harness binary being pre-installed on the test machine. Use a minimal
+    # PATH with none of the fake bins so `shutil.which('claude')` genuinely
+    # finds nothing.
     with tempfile.TemporaryDirectory() as tmp:
         write_team_toml(tmp, toml_body)
         big = write_big_file(tmp)
@@ -244,44 +242,86 @@ def test_bulk_reader_fail_open() -> None:
             extra_env={"PATH": minimal_path},
         )
         reason = parse_deny_reason(proc)
-        check(proc.returncode == 0, f"guard exits 0 even with agy missing (got {proc.returncode})")
-        check(reason is not None and "exceeds threshold" in reason, f"falls back to plain deny with agy missing ({reason})")
-        check(reason is not None and "bulk-reader" not in reason.lower(), f"no bulk-reader claim when agy is missing ({reason})")
+        check(proc.returncode == 0, f"guard exits 0 even with claude missing (got {proc.returncode})")
+        check(reason is not None and "exceeds threshold" in reason, f"falls back to plain deny with claude missing ({reason})")
+        check(reason is not None and "bulk-reader" not in reason.lower(), f"no bulk-reader claim when claude is missing ({reason})")
 
-    # d2. 'agy' present but exits non-zero.
+    # d2. 'claude' present but exits non-zero.
     with tempfile.TemporaryDirectory() as tmp:
         write_team_toml(tmp, toml_body)
         big = write_big_file(tmp)
         bin_dir = os.path.join(tmp, "fakebin")
-        make_fake_agy(bin_dir, "fail")
+        make_fake_claude(bin_dir, "fail")
         proc = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big}}, extra_path=bin_dir)
         reason = parse_deny_reason(proc)
-        check(reason is not None and "bulk-reader" not in reason.lower(), f"falls back to plain deny when agy exits non-zero ({reason})")
+        check(reason is not None and "bulk-reader" not in reason.lower(), f"falls back to plain deny when claude exits non-zero ({reason})")
 
-    # d3. 'agy' present but never writes the summary file (empty output).
+    # d3. 'claude' present but never writes the summary file (empty output).
     with tempfile.TemporaryDirectory() as tmp:
         write_team_toml(tmp, toml_body)
         big = write_big_file(tmp)
         bin_dir = os.path.join(tmp, "fakebin")
-        make_fake_agy(bin_dir, "empty")
+        make_fake_claude(bin_dir, "empty")
         proc = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big}}, extra_path=bin_dir)
         reason = parse_deny_reason(proc)
-        check(reason is not None and "bulk-reader" not in reason.lower(), f"falls back to plain deny when agy writes no summary ({reason})")
+        check(reason is not None and "bulk-reader" not in reason.lower(), f"falls back to plain deny when claude writes no summary ({reason})")
 
-    # d4. 'agy' hangs well past its configured timeout. The guard must still
+    # d4. 'claude' hangs well past its configured timeout. The guard must still
     # return within a bounded time (never hang the session).
     with tempfile.TemporaryDirectory() as tmp:
         write_team_toml(tmp, toml_body)
         big = write_big_file(tmp)
         bin_dir = os.path.join(tmp, "fakebin")
-        make_fake_agy(bin_dir, "hang")
+        make_fake_claude(bin_dir, "hang")
         import time
         start = time.time()
         proc = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big}}, extra_path=bin_dir, timeout=30.0)
         elapsed = time.time() - start
         reason = parse_deny_reason(proc)
         check(elapsed < 15.0, f"guard returns well within a bounded time despite a hanging worker (elapsed={elapsed:.1f}s)")
-        check(reason is not None and "bulk-reader" not in reason.lower(), f"falls back to plain deny when agy hangs ({reason})")
+        check(reason is not None and "bulk-reader" not in reason.lower(), f"falls back to plain deny when claude hangs ({reason})")
+
+
+def test_bulk_reader_routes_to_dedicated_role_on_claude_code() -> None:
+    """Regression test for the #322/#323 review: the delegated worker MUST be
+    the dedicated 'bulk-reader' role (tools: Read only) on the claude-code
+    harness, never 'research' (which carries Bash/WebFetch/WebSearch) and
+    never antigravity (where `tools:` restrictions were empirically found
+    NOT to be enforced under --dangerously-skip-permissions, issue #323)."""
+    print("\n--- Test: bulk-reader worker is dispatched as role='bulk-reader' on harness='claude-code' ---")
+    import importlib.util
+
+    dispatch_path = os.path.join(HERE, "dispatch_agent.py")
+    spec = importlib.util.spec_from_file_location("dispatch_agent", dispatch_path)
+    dispatch_agent = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(dispatch_agent)
+
+    check(
+        dispatch_agent.ROLE_TO_AGENT.get("bulk-reader") == "bulk-reader",
+        "ROLE_TO_AGENT maps 'bulk-reader' to the dedicated 'bulk-reader' agent (not 'research')",
+    )
+    for host in ("claude-code", "antigravity", "copilot"):
+        check(
+            dispatch_agent.DEFAULT_HYBRID_MATRIX.get(host, {}).get("bulk-reader") == "claude-code",
+            f"DEFAULT_HYBRID_MATRIX['{host}']['bulk-reader'] == 'claude-code' (must not drift with the host)",
+        )
+
+    cmd = dispatch_agent.build_harness_command("claude-code", "bulk-reader", "read this file")
+    check(
+        cmd == ["claude", "--dangerously-skip-permissions", "--agent", "bulk-reader", "-p", "read this file"],
+        f"build_harness_command('claude-code', 'bulk-reader', ...) invokes --agent bulk-reader (got {cmd})",
+    )
+
+    # The actual read-guard.sh call path: assert it names role 'bulk-reader'
+    # and harness 'claude-code' literally in its subprocess argv, not 'research'/'antigravity'.
+    guard_src_path = os.path.join(HERE, "read-guard.sh")
+    with open(guard_src_path, encoding="utf-8") as f:
+        guard_src = f.read()
+    check("'--role', 'bulk-reader'" in guard_src, "read-guard.sh dispatches with --role bulk-reader")
+    check("'--harness', 'claude-code'" in guard_src, "read-guard.sh dispatches with --harness claude-code")
+    check("'--role', 'research'" not in guard_src, "read-guard.sh no longer dispatches the 'research' role")
+    check("'--harness', 'antigravity'" not in guard_src, "read-guard.sh no longer dispatches to the 'antigravity' harness")
 
 
 def test_sec_rev_bypass_unaffected() -> None:
@@ -329,6 +369,7 @@ def main() -> int:
     test_no_token_guard_section_is_inert()
     test_token_guard_without_bulk_reader_key_unchanged()
     test_bulk_reader_enabled_worker_succeeds()
+    test_bulk_reader_routes_to_dedicated_role_on_claude_code()
     test_bulk_reader_fail_open()
     test_sec_rev_bypass_unaffected()
     test_targeted_read_passes_through()
