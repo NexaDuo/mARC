@@ -82,10 +82,17 @@ MODEL="claude-sonnet-5"
 #              cannot substitute for (routing priority order, fallback
 #              behavior, the full CLI contract) -- verified locally (see PR
 #              body) to force an untargeted `Read` of the whole file, which
-#              deterministically trips read-guard.sh. This is the task a
-#              re-measurement should compare arm B (deny-only) against a new
-#              arm D (bulk_reader = true) on, to actually exercise the
-#              execution layer rather than the enforcement layer alone.
+#              deterministically trips read-guard.sh. Issue #324: this is the
+#              ONLY task arm D (below) is run against, specifically so it can
+#              be compared against arm B on this task -- the meaningful
+#              contrast for the study's claim is arm B (enforcement only, the
+#              guard denies) vs arm D (enforcement + execution, the
+#              bulk-reader worker summarizes instead), NOT arm D against the
+#              guard-off control (arm C). Comparing D against C would be the
+#              same enforcement-on-vs-enforcement-off comparison that already
+#              produced the known-negative result (run 34987534132: guard
+#              costs 2.6x, noise floor 33.7%) -- it would tell you nothing
+#              about whether DELEGATING instead of DENYING helps.
 TASK_NAMES=(control sweep neutral bulk_read_forced)
 TASK_PROMPTS=(
     "read core/scripts/board.py and output a summary"
@@ -104,6 +111,16 @@ TASK_PROMPTS=(
 # deliberate cost tradeoff — see the PR body for the full invocation-count
 # and cost accounting across 3 tasks x 3 arms x 5 iterations.
 ITERATIONS=5
+
+# ARM_D_TASK (issue #324): the single task name arm D (bulk_reader=true) is
+# measured against. Arm D makes real, billed `claude` invocations through
+# the worker delegation path (#320/#322), so it deliberately does NOT repeat
+# every task -- only the one task (bulk_read_forced, see its comment above)
+# that is verified to deterministically trip the guard's enforcement path in
+# the first place. Kept as a named constant, not a hardcoded string in
+# main(), so scripts/benchmark_report.py's matching constant (documented
+# there) and this script can never silently drift onto different task names.
+ARM_D_TASK="bulk_read_forced"
 
 # --- Testable helpers (defined before main(); see the sourcing guard at the
 # bottom of this file). Keeping these as standalone functions lets a companion
@@ -567,6 +584,44 @@ install_claude_cli_if_needed() {
     npm i -g @anthropic-ai/claude-code
 }
 
+# resolve_task_index: pure helper, no side effects. Prints the index of
+# `target` within TASK_NAMES (so a caller can look up its matching
+# TASK_PROMPTS entry) or returns non-zero if `target` is not in the task
+# set. Extracted so arm D's "find my task's prompt" logic is directly
+# testable without a real measurement environment (issue #324).
+resolve_task_index() {
+    local target="$1"
+    local idx
+    for idx in "${!TASK_NAMES[@]}"; do
+        if [ "${TASK_NAMES[$idx]}" = "$target" ]; then
+            echo "$idx"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# arm_d_team_toml: pure function, no side effects. Returns the
+# `.agents/team.toml` body for arm D (issue #324): the SAME guard threshold
+# as arm B (max_read_lines = 350, so the guard still fires the same way it
+# does in arm B) PLUS `bulk_reader = true`, so an over-threshold untargeted
+# Read that arm B would simply deny instead gets delegated to the
+# bulk-reader worker (#320/#322) -- this is what actually exercises the
+# execution layer, not merely the enforcement layer arm B/C already cover.
+# Extracted as its own function (rather than inlined via heredoc the way
+# arm B/C are) specifically so scripts/test_run_token_benchmark.sh can
+# assert `bulk_reader = true` is actually present without needing a real
+# measurement environment -- the literal gap issue #324 exists to close.
+arm_d_team_toml() {
+    cat << 'CONFIG'
+[telemetry]
+enabled = true
+[token_guard]
+max_read_lines = 350
+bulk_reader = true
+CONFIG
+}
+
 is_real_run() {
     # Issue #309: the ONLY reachable path to the paid measurement. Fail
     # CLOSED on anything else -- no tag shape, no branch, no event other
@@ -837,6 +892,46 @@ CONFIG
         run_claude_safely "$prompt" "$PWD/toggle_baseline-$name.jsonl" "$HOME/.claude/marc-state-c-$name" "$ITERATIONS" "arm C / task=$name"
         cp "$PWD/post-$name.jsonl" "$PWD/toggle_post-$name.jsonl"
     done
+
+    # Issue #324: arm D actually exercises the bulk-reader execution layer
+    # #322 shipped -- until this arm existed, NO benchmark arm ever set
+    # `bulk_reader = true`, so the feature it measures could never be
+    # measured (arm B/C above only ever toggle max_read_lines). Runs against
+    # ARM_D_TASK ONLY (not the full task set) -- these are real, billed
+    # `claude` invocations through the worker delegation path, and only
+    # ARM_D_TASK is verified to deterministically trip the guard's
+    # enforcement path in the first place (see its comment in the task-set
+    # block above), so running the other tasks here would just spend money
+    # measuring a branch that structurally never fires.
+    #
+    # THE COMPARISON THIS ARM EXISTS FOR: arm B (task=$ARM_D_TASK,
+    # enforcement only -- the guard denies) vs arm D (task=$ARM_D_TASK,
+    # enforcement + execution -- the worker summarizes instead). NOT arm D
+    # against arm C (the guard-off control): that comparison would just
+    # repeat the enforcement-on-vs-enforcement-off comparison that already
+    # produced the known-negative result (run 34987534132: guard costs 2.6x,
+    # noise floor 33.7%) and would say nothing about whether delegating
+    # instead of denying actually helps. scripts/benchmark_report.py prints
+    # this exact B-vs-D contrast explicitly, by name, for the same reason.
+    #
+    # THIS ARM DOES NOT FEED THE BADGE. Per #303/#305 the badge is fed the
+    # SHIPPED-DEFAULT arm, and `bulk_reader` defaults to OFF (see
+    # docs/team.toml.example) -- arm D is opt-in-on-opt-in and nobody ships
+    # it by default. token-benchmark.yml's "Generate Dashboard Files" step
+    # is unchanged by this arm and continues reading only
+    # baseline-control.jsonl / toggle_baseline-control.jsonl / arm B+C
+    # neutral files -- see the comment there.
+    echo "--- RUNNING ARM D ($CURRENT_REF with guard=350 + bulk_reader=true, task=$ARM_D_TASK only) ---"
+    arm_d_team_toml > .agents/team.toml
+
+    if ! ARM_D_IDX=$(resolve_task_index "$ARM_D_TASK"); then
+        echo "Error: ARM_D_TASK='$ARM_D_TASK' is not in TASK_NAMES. Arm D cannot run -- refusing to silently skip it (issue #324's whole point is that this arm must not go unmeasured)." >&2
+        exit 1
+    fi
+    arm_d_prompt="${TASK_PROMPTS[$ARM_D_IDX]}"
+    echo "  arm D / task=$ARM_D_TASK"
+    rm -f "$PWD/bulk_reader-$ARM_D_TASK.jsonl"
+    run_claude_safely "$arm_d_prompt" "$PWD/bulk_reader-$ARM_D_TASK.jsonl" "$HOME/.claude/marc-state-d-$ARM_D_TASK" "$ITERATIONS" "arm D / task=$ARM_D_TASK"
 
     write_task_names
     write_iterations

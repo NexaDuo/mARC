@@ -569,6 +569,82 @@ else
     fail "BOOTSTRAP CASE: unexpected combination (comparison='$bootstrap_comparison' cache='$bootstrap_cache')"
 fi
 
+# -----------------------------------------------------------------------
+# Part 7: arm D (issue #324) -- no benchmark arm ever set `bulk_reader =
+# true`, so the execution layer #322 shipped could never be measured. This
+# asserts (a) arm_d_team_toml() actually emits `bulk_reader = true` (the
+# literal gap this issue closes), (b) it keeps the same `max_read_lines`
+# threshold as arm B so the two are otherwise comparable, and (c)
+# resolve_task_index() correctly locates ARM_D_TASK's prompt within
+# TASK_NAMES/TASK_PROMPTS -- i.e. arm D is wired to run against a real,
+# distinct task, not an empty/wrong prompt.
+# -----------------------------------------------------------------------
+
+arm_d_toml_out="$(arm_d_team_toml)"
+if echo "$arm_d_toml_out" | grep -q "^bulk_reader = true$"; then
+    pass "arm_d_team_toml() sets bulk_reader = true (issue #324's literal gap)"
+else
+    fail "arm_d_team_toml() did NOT set bulk_reader = true -- got: $arm_d_toml_out"
+fi
+
+if echo "$arm_d_toml_out" | grep -q "^max_read_lines = 350$"; then
+    pass "arm_d_team_toml() keeps the same max_read_lines=350 threshold as arm B (comparable enforcement)"
+else
+    fail "arm_d_team_toml() did not set max_read_lines = 350 -- got: $arm_d_toml_out"
+fi
+
+if [ -n "$ARM_D_TASK" ] && printf '%s\n' "${TASK_NAMES[@]}" | grep -qx "$ARM_D_TASK"; then
+    pass "ARM_D_TASK ('$ARM_D_TASK') names a real entry in TASK_NAMES"
+else
+    fail "ARM_D_TASK ('$ARM_D_TASK') is not present in TASK_NAMES -- arm D would abort at runtime"
+fi
+
+if arm_d_idx="$(resolve_task_index "$ARM_D_TASK")"; then
+    expected_prompt="${TASK_PROMPTS[$arm_d_idx]}"
+    if [ -n "$expected_prompt" ]; then
+        pass "resolve_task_index() resolves ARM_D_TASK to a non-empty prompt (index $arm_d_idx)"
+    else
+        fail "resolve_task_index() resolved ARM_D_TASK to index $arm_d_idx, but TASK_PROMPTS there is empty"
+    fi
+else
+    fail "resolve_task_index('$ARM_D_TASK') failed to find the task at all"
+fi
+
+if resolve_task_index "not-a-real-task-name" > /dev/null 2>&1; then
+    fail "resolve_task_index() succeeded on a task name that does not exist"
+else
+    pass "resolve_task_index() fails (non-zero) on a task name that does not exist"
+fi
+
+# -----------------------------------------------------------------------
+# Part 8: arms are distinguishable in the emitted telemetry filenames
+# (issue #324's regression test requirement). Arm B writes
+# post-<task>.jsonl, arm D writes bulk_reader-<task>.jsonl -- different
+# filenames for the same task, so scripts/benchmark_report.py's arm-B-vs-
+# arm-D table (base_suffix="post", post_suffix="bulk_reader") can tell them
+# apart. This is a static assertion over the script's own source (grep for
+# the literal filename patterns main() writes) rather than an end-to-end
+# run, for the same reason Part 1-6 above stub instead of executing main()
+# directly -- no real git tag/CLI/credentials are available in this test
+# environment.
+# -----------------------------------------------------------------------
+
+# These are literal grep patterns matched against run_token_benchmark.sh's
+# own SOURCE TEXT, not shell expansions.
+# shellcheck disable=SC2016
+if grep -q '"\$PWD/post-\$name\.jsonl"' "$TARGET"; then
+    pass "arm B writes post-<task>.jsonl (distinguishable filename)"
+else
+    fail "did not find arm B's post-<task>.jsonl write in $TARGET"
+fi
+
+# shellcheck disable=SC2016
+if grep -q '"\$PWD/bulk_reader-\$ARM_D_TASK\.jsonl"' "$TARGET"; then
+    pass "arm D writes bulk_reader-<task>.jsonl -- a DIFFERENT filename from arm B's post-<task>.jsonl, so the two arms' telemetry are distinguishable on disk"
+else
+    fail "did not find arm D's bulk_reader-<task>.jsonl write in $TARGET"
+fi
+
 echo
 if [ "$FAILS" -eq 0 ]; then
     echo "All checks passed."
