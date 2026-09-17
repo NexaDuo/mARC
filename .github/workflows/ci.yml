@@ -812,12 +812,12 @@ jobs:
 
       # 8c-read-guard. read-guard.sh bulk-reader delegation self-test (issue
       #     #320). Drives the real read-guard.sh as a subprocess against
-      #     scratch team.toml/target files and stubbed 'agy'/'ps' binaries.
+      #     scratch team.toml/target files and stubbed 'claude'/'ps' binaries.
       #     Covers: no [token_guard] section stays inert; [token_guard]
       #     without bulk_reader unchanged; bulk_reader success returns a
       #     disk summary path; bulk_reader missing/failing/timing-out
       #     binary always fails open to the plain deny (bounded, no hang,
-      #     no dependency on antigravity/agy being installed); the @sec/
+      #     no dependency on claude-code/claude being installed); the @sec/
       #     @rev bypass still short-circuits; targeted (limit/offset) reads
       #     still pass through untouched. Deterministic, offline, zero
       #     token cost.

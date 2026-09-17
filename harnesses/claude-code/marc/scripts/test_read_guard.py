@@ -110,6 +110,11 @@ def make_fake_claude(bin_dir: str, behavior: str) -> None:
       'fail'    - exits non-zero, writes nothing.
       'hang'    - sleeps far longer than any timeout under test.
       'empty'   - exits 0 but prints nothing (blank stdout).
+      'verbose' - exits 0 but prints MORE lines than any max_read_lines used
+                  in these tests, simulating a worker that overshoots its own
+                  350-line instruction (honest miscount, or a verbose-output
+                  injection the Read-only sandbox does nothing to stop) --
+                  issue #322 review MEDIUM finding.
     """
     os.makedirs(bin_dir, exist_ok=True)
     claude_path = os.path.join(bin_dir, "claude")
@@ -121,6 +126,8 @@ def make_fake_claude(bin_dir: str, behavior: str) -> None:
         script = "#!/usr/bin/env bash\nsleep 60\n"
     elif behavior == "empty":
         script = "#!/usr/bin/env bash\nexit 0\n"
+    elif behavior == "verbose":
+        script = "#!/usr/bin/env bash\nfor i in $(seq 1 500); do echo \"line $i\"; done\nexit 0\n"
     else:
         raise ValueError(f"unknown behavior: {behavior}")
     with open(claude_path, "w", encoding="utf-8") as f:
@@ -282,6 +289,57 @@ def test_bulk_reader_fail_open() -> None:
         check(reason is not None and "bulk-reader" not in reason.lower(), f"falls back to plain deny when claude hangs ({reason})")
 
 
+def test_bulk_reader_truncates_and_discloses_oversized_summary() -> None:
+    """Regression test for the #322 review (MEDIUM): a worker summary that
+    exceeds max_read_lines must be truncated to fit AND the deny reason must
+    say so honestly, never assert 'well under the threshold' when that was
+    never actually verified."""
+    print("\n--- Test: oversized bulk-reader summary is truncated and honestly disclosed ---")
+    with tempfile.TemporaryDirectory() as tmp:
+        write_team_toml(
+            tmp,
+            "[token_guard]\nmax_read_lines = 350\nbulk_reader = true\nbulk_reader_timeout = 5\n",
+        )
+        big = write_big_file(tmp)
+        bin_dir = os.path.join(tmp, "fakebin")
+        make_fake_claude(bin_dir, "verbose")
+        proc = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big}}, extra_path=bin_dir)
+        reason = parse_deny_reason(proc)
+        check(reason is not None, f"guard still denies the original read (stdout={proc.stdout!r})")
+        check(
+            reason is not None and "truncated" in reason.lower(),
+            f"reason honestly discloses truncation instead of claiming 'well under the threshold' ({reason})",
+        )
+        check(
+            reason is not None and "well under the threshold" not in reason,
+            f"reason does NOT assert the unverified 'well under the threshold' claim ({reason})",
+        )
+
+        summary_path = None
+        if reason:
+            for token in reason.split():
+                if token.startswith("/") and os.path.isfile(token.rstrip(".,")):
+                    summary_path = token.rstrip(".,")
+                    break
+        check(summary_path is not None, f"a real (truncated) summary path is embedded in the reason ({reason})")
+        if summary_path:
+            with open(summary_path, encoding="utf-8") as f:
+                content = f.read()
+            content_lines = content.split("\n")
+            check(
+                len(content_lines) <= 350,
+                f"truncated summary file itself is capped at max_read_lines (got {len(content_lines)} lines)",
+            )
+            check(
+                "truncated" in content_lines[-1].lower(),
+                f"truncated summary file's last line marks the truncation (got {content_lines[-1]!r})",
+            )
+            try:
+                os.remove(summary_path)
+            except OSError:
+                pass
+
+
 def test_bulk_reader_routes_to_dedicated_role_on_claude_code() -> None:
     """Regression test for the #322/#323 review: the delegated worker MUST be
     the dedicated 'bulk-reader' role (tools: Read only) on the claude-code
@@ -369,6 +427,7 @@ def main() -> int:
     test_no_token_guard_section_is_inert()
     test_token_guard_without_bulk_reader_key_unchanged()
     test_bulk_reader_enabled_worker_succeeds()
+    test_bulk_reader_truncates_and_discloses_oversized_summary()
     test_bulk_reader_routes_to_dedicated_role_on_claude_code()
     test_bulk_reader_fail_open()
     test_sec_rev_bypass_unaffected()

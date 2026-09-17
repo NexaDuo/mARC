@@ -182,13 +182,30 @@ def main():
                     reason = f'File exceeds threshold ({lines} > {max_lines} lines). Use targeted reads (limit/offset) or grep.'
 
                     if bulk_reader_enabled:
-                        summary_path = try_bulk_reader(file_to_check, bulk_reader_timeout)
-                        if summary_path:
-                            reason = (
-                                f'File exceeds threshold ({lines} > {max_lines} lines). '
-                                f'A bulk-reader summary was generated on a cheaper worker: '
-                                f'read {summary_path} instead (it is well under the threshold).'
-                            )
+                        bulk_result = try_bulk_reader(file_to_check, bulk_reader_timeout, max_lines)
+                        if bulk_result:
+                            summary_path, summary_truncated = bulk_result
+                            if summary_truncated:
+                                # issue #322 review (MEDIUM): the worker's own
+                                # 350-line instruction is advisory, not
+                                # enforced -- a verbose-output injection (the
+                                # Read-only sandbox stops it from ACTING, not
+                                # from talking a lot) can still blow past
+                                # max_lines. Say so honestly instead of
+                                # claiming 'well under the threshold' when
+                                # that was never actually checked.
+                                reason = (
+                                    f'File exceeds threshold ({lines} > {max_lines} lines). '
+                                    f'A bulk-reader summary was generated on a cheaper worker but '
+                                    f'exceeded the {max_lines}-line threshold itself and was truncated '
+                                    f'to fit: read {summary_path} instead.'
+                                )
+                            else:
+                                reason = (
+                                    f'File exceeds threshold ({lines} > {max_lines} lines). '
+                                    f'A bulk-reader summary was generated on a cheaper worker: '
+                                    f'read {summary_path} instead (it is well under the threshold).'
+                                )
 
                     print(json.dumps({
                         'hookSpecificOutput': {
@@ -202,7 +219,7 @@ def main():
             pass
 
 
-def try_bulk_reader(file_path, timeout_sec):
+def try_bulk_reader(file_path, timeout_sec, max_lines):
     '''Delegate summarizing an over-threshold file to a cheap, minimal-tool
     worker (issue #320; routed to the dedicated 'bulk-reader' role on
     claude-code per the #322/#323 review -- NOT 'research' on antigravity,
@@ -221,6 +238,16 @@ def try_bulk_reader(file_path, timeout_sec):
     the summary as its final response text, which THIS function (not the
     worker) captures from the subprocess's stdout and writes to the scratch
     file itself.
+
+    Returns (summary_path, truncated) on success, None on any fail-open path.
+    'max_lines' bounds the summary itself (issue #322 review, MEDIUM finding
+    -- chosen fix: truncate-and-disclose over verify-then-fallback, so a
+    worker that overshoots its own 350-line instruction, whether by an
+    honest miscount or a verbose-output injection the Read-only sandbox does
+    nothing to stop, still yields a usable capped file instead of throwing
+    away a completed delegation and falling back to the bare deny. The
+    caller is told plainly when this happened rather than the reason
+    asserting an unverified 'well under the threshold').
     '''
     try:
         import shutil as _shutil
@@ -278,9 +305,21 @@ def try_bulk_reader(file_path, timeout_sec):
         summary_text = (proc.stdout or '').strip()
         if not summary_text:
             return None
+
+        summary_lines = summary_text.split('\n')
+        truncated = False
+        if max_lines > 0 and len(summary_lines) > max_lines:
+            truncated = True
+            summary_lines = summary_lines[:max_lines - 1] if max_lines > 1 else []
+            summary_lines.append(
+                f'[... truncated: bulk-reader worker output exceeded the '
+                f'{max_lines}-line threshold ...]'
+            )
+            summary_text = '\n'.join(summary_lines)
+
         with open(summary_path, 'w', encoding='utf-8') as sf:
             sf.write(summary_text)
-        return summary_path
+        return summary_path, truncated
     except Exception:
         return None
 
