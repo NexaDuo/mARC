@@ -587,10 +587,17 @@ else
     fail "arm_d_team_toml() did NOT set bulk_reader = true -- got: $arm_d_toml_out"
 fi
 
-if echo "$arm_d_toml_out" | grep -q "^max_read_lines = 350$"; then
-    pass "arm_d_team_toml() keeps the same max_read_lines=350 threshold as arm B (comparable enforcement)"
+arm_d_max_read_lines="$(echo "$arm_d_toml_out" | grep '^max_read_lines = ' | head -1 | sed 's/^max_read_lines = //')"
+# Issue #324 review (fold-in #3): assert equality with arm B's LIVE shared
+# constant, not a hardcoded "350" literal -- a test pinning the literal would
+# not catch drift between arm B's threshold and arm D's if the two were ever
+# de-synced again. ARM_BD_MAX_READ_LINES is the single source of truth arm B
+# reads from too (see the "arm B with guard=$ARM_BD_MAX_READ_LINES" line in
+# main()).
+if [ -n "$arm_d_max_read_lines" ] && [ "$arm_d_max_read_lines" = "$ARM_BD_MAX_READ_LINES" ]; then
+    pass "arm_d_team_toml() keeps the same max_read_lines=$ARM_BD_MAX_READ_LINES threshold as arm B's live ARM_BD_MAX_READ_LINES (comparable enforcement, no drift)"
 else
-    fail "arm_d_team_toml() did not set max_read_lines = 350 -- got: $arm_d_toml_out"
+    fail "arm_d_team_toml() max_read_lines ('$arm_d_max_read_lines') does not equal ARM_BD_MAX_READ_LINES ('$ARM_BD_MAX_READ_LINES') -- arm B and arm D thresholds have drifted apart"
 fi
 
 if [ -n "$ARM_D_TASK" ] && printf '%s\n' "${TASK_NAMES[@]}" | grep -qx "$ARM_D_TASK"; then
@@ -644,6 +651,140 @@ if grep -q '"\$PWD/bulk_reader-\$ARM_D_TASK\.jsonl"' "$TARGET"; then
 else
     fail "did not find arm D's bulk_reader-<task>.jsonl write in $TARGET"
 fi
+
+# -----------------------------------------------------------------------
+# Part 9: the free/stub CI path emits a bulk_reader-<task>.jsonl for
+# ARM_D_TASK (issue #324 review, fold-in #2). Before this fix, the stub path
+# (the branch every PR/push run and every unconfirmed dispatch takes) never
+# wrote this file at all, so benchmark_report.py's arm-B-vs-arm-D
+# "Execution Layer Proof" table's real aggregation/formatting code was only
+# ever exercised by a paid run or a hand-made fixture -- a regression there
+# could ship silently. This is a static assertion over the script's own
+# source, matching Part 8's approach, since main()'s stub branch isn't
+# invoked directly by sourcing.
+# -----------------------------------------------------------------------
+
+# shellcheck disable=SC2016
+if grep -q '"bulk_reader-\$ARM_D_TASK\.jsonl"' "$TARGET"; then
+    pass "the stub/free-CI path in main() also writes bulk_reader-<task>.jsonl for ARM_D_TASK (so free CI exercises the real Execution Layer Proof code path)"
+else
+    fail "the stub/free-CI path does not write bulk_reader-<task>.jsonl for ARM_D_TASK -- the report's arm-D aggregation code stays untested on free CI"
+fi
+
+# -----------------------------------------------------------------------
+# Part 10: `.agents/team.toml` restore (issue #324 review, `@sec` BLOCK /
+# `@rev` MEDIUM). Before this fix, none of arms B/C/D restored
+# `.agents/team.toml` after mutating it -- under LOCAL_RUN=true this
+# permanently mutated the operator's real working tree, and since the file
+# is gitignored there was nothing for a plain `git checkout` to restore.
+# These tests exercise setup_team_toml_restore()/restore_team_toml()
+# directly (pure enough to call outside main()) inside a scratch directory,
+# covering both the "file existed before" and "file did not exist before"
+# cases, plus the multi-cleanup registry, plus a simulated abort mid-run.
+# -----------------------------------------------------------------------
+
+TEAM_TOML_TESTDIR="$(mktemp -d)"
+
+# 10a: file existed before -- must be restored to its EXACT prior content,
+# not left as whatever arm B/C/D last wrote.
+result_10a="$( (
+    cd "$TEAM_TOML_TESTDIR" || exit 1
+    mkdir -p .agents
+    printf '[telemetry]\noriginal = true\n' > .agents/team.toml
+    # shellcheck source=/dev/null
+    source "$TARGET"
+    EXIT_CLEANUP_CMDS=()
+    setup_team_toml_restore
+    printf '[token_guard]\nbulk_reader = true\n' > .agents/team.toml
+    run_exit_cleanups
+    cat .agents/team.toml
+) )"
+if [ "$result_10a" = "$(printf '[telemetry]\noriginal = true')" ]; then
+    pass "restore_team_toml() restores the file's exact pre-run content when it existed before the run"
+else
+    fail "restore_team_toml() did not restore prior content -- got: $result_10a"
+fi
+
+# 10b: file did NOT exist before -- must be REMOVED (absence restored as
+# absence), never left behind as an empty/mutated file.
+result_10b="$( (
+    cd "$TEAM_TOML_TESTDIR" || exit 1
+    rm -rf .agents
+    # shellcheck source=/dev/null
+    source "$TARGET"
+    EXIT_CLEANUP_CMDS=()
+    setup_team_toml_restore
+    mkdir -p .agents
+    printf '[token_guard]\nbulk_reader = true\n' > .agents/team.toml
+    run_exit_cleanups
+    if [ -f .agents/team.toml ]; then
+        echo "STILL_PRESENT"
+    else
+        echo "ABSENT"
+    fi
+) )"
+if [ "$result_10b" = "ABSENT" ]; then
+    pass "restore_team_toml() removes the file (restores absence as absence, not an empty file) when it did not exist before the run"
+else
+    fail "restore_team_toml() left team.toml behind when it should have restored absence -- got: $result_10b"
+fi
+
+# 10c: register_exit_cleanup()/run_exit_cleanups() aggregate MULTIPLE
+# independent cleanups (the whole reason for the registry -- a bare
+# `trap ... EXIT` call replaces rather than stacks). Two unrelated marker
+# writes must BOTH fire.
+result_10c="$( (
+    cd "$TEAM_TOML_TESTDIR" || exit 1
+    # shellcheck source=/dev/null
+    source "$TARGET"
+    EXIT_CLEANUP_CMDS=()
+    register_exit_cleanup 'touch marker-one'
+    register_exit_cleanup 'touch marker-two'
+    run_exit_cleanups
+    [ -f marker-one ] && [ -f marker-two ] && echo "BOTH_RAN"
+) )"
+if [ "$result_10c" = "BOTH_RAN" ]; then
+    pass "run_exit_cleanups() runs ALL registered cleanups, not just the last-registered one"
+else
+    fail "run_exit_cleanups() did not run both registered cleanups -- got: $result_10c"
+fi
+
+# 10d: simulated abort/failure mid-run still restores. Installs the real
+# `trap run_exit_cleanups EXIT` (the pattern main() uses) inside a subshell
+# with `set -eo pipefail` re-enabled, mutates team.toml, then hits an
+# uncaught failure (not a clean `exit 0`) -- the EXIT trap must still fire
+# and restore, and the non-zero exit code must propagate (not get swallowed
+# by the trap).
+set +e
+(
+    cd "$TEAM_TOML_TESTDIR" || exit 1
+    rm -rf .agents
+    mkdir -p .agents
+    printf '[telemetry]\noriginal = true\n' > .agents/team.toml
+    set -eo pipefail
+    # shellcheck source=/dev/null
+    source "$TARGET"
+    # shellcheck disable=SC2034
+    EXIT_CLEANUP_CMDS=()
+    trap run_exit_cleanups EXIT
+    setup_team_toml_restore
+    printf '[token_guard]\nbulk_reader = true\n' > .agents/team.toml
+    false # uncaught failure under set -e -- simulates an abort mid-run
+)
+abort_exit_code=$?
+set -e
+if [ "$abort_exit_code" -ne 0 ]; then
+    pass "a simulated abort mid-run (uncaught failure under set -e) propagates a non-zero exit code (not swallowed by the EXIT trap)"
+else
+    fail "the abort's non-zero exit code was swallowed -- got exit code $abort_exit_code"
+fi
+if [ "$(cat "$TEAM_TOML_TESTDIR/.agents/team.toml")" = "$(printf '[telemetry]\noriginal = true')" ]; then
+    pass "a simulated abort/failure mid-run still restores team.toml via the EXIT trap (holds on abort paths, not just clean exit)"
+else
+    fail "team.toml was NOT restored after a simulated mid-run abort -- got: $(cat "$TEAM_TOML_TESTDIR/.agents/team.toml" 2>/dev/null || echo '<missing>')"
+fi
+
+rm -rf "$TEAM_TOML_TESTDIR"
 
 echo
 if [ "$FAILS" -eq 0 ]; then

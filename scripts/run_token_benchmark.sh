@@ -39,6 +39,42 @@ ARM_A_DIR="${ARM_A_DIR:-../arm-a}"
 
 MODEL="claude-sonnet-5"
 
+# --- EXIT cleanup registry (issue #324 review) -------------------------------
+# main() needs more than one independent EXIT-time cleanup -- the ARM_A_DIR
+# worktree removal that setup_local_run_isolation() already registers in
+# LOCAL_RUN mode, and now the `.agents/team.toml` restore below -- and a bare
+# `trap '...' EXIT` call REPLACES any trap already registered rather than
+# stacking with it. A second unconditional `trap ... EXIT` call for team.toml
+# would have silently un-registered the ARM_A_DIR cleanup, reintroducing the
+# exact "orphaned git worktree" failure mode that trap exists to prevent.
+# Every EXIT-time cleanup in this script goes through register_exit_cleanup()
+# instead of calling `trap ... EXIT` directly; main() installs the ONE actual
+# trap (`trap run_exit_cleanups EXIT`) that runs whatever has been registered,
+# in registration order, on any exit -- normal, an early `exit 1` abort, or an
+# uncaught error under `set -eo pipefail`.
+EXIT_CLEANUP_CMDS=()
+
+register_exit_cleanup() {
+    EXIT_CLEANUP_CMDS+=("$1")
+}
+
+run_exit_cleanups() {
+    local cmd
+    for cmd in "${EXIT_CLEANUP_CMDS[@]}"; do
+        eval "$cmd"
+    done
+}
+
+# ARM_BD_MAX_READ_LINES (issue #324 review): the read-guard threshold shared
+# by arm B and arm D. Before this, arm B's threshold was inlined as a literal
+# `350` in main()'s heredoc and arm D's copy of the SAME value lived,
+# independently, inside arm_d_team_toml() -- linked only by a comment. A
+# future change to one could silently drift from the other and confound the
+# whole point of the B-vs-D comparison (the two arms are supposed to differ
+# by exactly one variable, bulk_reader). Both call sites now reference this
+# one constant instead.
+ARM_BD_MAX_READ_LINES=350
+
 # --- Task set (issue #275) ---------------------------------------------------
 # The single hardcoded board.py task measured exactly one workload shape: a
 # large single-file read where the work IS the read, so a read-guard (which
@@ -479,7 +515,13 @@ setup_local_run_isolation() {
     fi
     echo "  arm-A worktree will be checked out at $ARM_A_DIR (not ../arm-a)" >&2
     echo "  preflight telemetry state dir: $PREFLIGHT_STATE_DIR (always under the fresh per-run scratch root, never inside a reused config dir, and never \$HOME/.claude -- see PR #316)" >&2
-    trap 'git worktree remove --force "$ARM_A_DIR" 2>/dev/null || true; git worktree prune 2>/dev/null || true' EXIT
+    # Issue #324 review: registered, not a direct `trap ... EXIT` call --
+    # main() owns the single actual trap installation (see the EXIT cleanup
+    # registry comment above) so this cleanup and the team.toml restore
+    # cleanup both run, rather than whichever call happened last silently
+    # replacing the other.
+    # shellcheck disable=SC2016
+    register_exit_cleanup 'git worktree remove --force "$ARM_A_DIR" 2>/dev/null || true; git worktree prune 2>/dev/null || true'
 }
 
 # add_arm_a_worktree: `git worktree add` for arm A, with a local-mode-aware
@@ -603,7 +645,7 @@ resolve_task_index() {
 
 # arm_d_team_toml: pure function, no side effects. Returns the
 # `.agents/team.toml` body for arm D (issue #324): the SAME guard threshold
-# as arm B (max_read_lines = 350, so the guard still fires the same way it
+# as arm B ($ARM_BD_MAX_READ_LINES, so the guard still fires the same way it
 # does in arm B) PLUS `bulk_reader = true`, so an over-threshold untargeted
 # Read that arm B would simply deny instead gets delegated to the
 # bulk-reader worker (#320/#322) -- this is what actually exercises the
@@ -612,14 +654,86 @@ resolve_task_index() {
 # arm B/C are) specifically so scripts/test_run_token_benchmark.sh can
 # assert `bulk_reader = true` is actually present without needing a real
 # measurement environment -- the literal gap issue #324 exists to close.
+#
+# Uses ARM_BD_MAX_READ_LINES (issue #324 review) rather than a second,
+# independent `350` literal -- arm B's own heredoc in main() references the
+# SAME variable, so the two arms' shared threshold can never silently drift
+# apart. The heredoc delimiter is deliberately unquoted (`CONFIG`, not
+# `'CONFIG'`) so that variable actually expands.
 arm_d_team_toml() {
-    cat << 'CONFIG'
+    cat << CONFIG
 [telemetry]
 enabled = true
 [token_guard]
-max_read_lines = 350
+max_read_lines = $ARM_BD_MAX_READ_LINES
 bulk_reader = true
 CONFIG
+}
+
+# setup_team_toml_restore / restore_team_toml (issue #324 review, `@sec`
+# BLOCK + `@rev` finding): arms B, C, and D each overwrite
+# `.agents/team.toml` in the CURRENT checkout (not a scratch directory) with
+# no restore. On a CI runner that's harmless -- the checkout is thrown away
+# after the job -- but under LOCAL_RUN=true (#314/#316) this is the
+# operator's own real working tree, and `.agents/team.toml` is gitignored,
+# so there is nothing for a plain `git checkout -- .agents/team.toml` to
+# restore. Before arm D existed, the LAST write (arm C) left the guard
+# structurally OFF (`max_read_lines = 999999`); now the last write (arm D)
+# leaves a real, opt-in feature flag (`bulk_reader = true`) turned ON in the
+# operator's live checkout, silently changing that checkout's Claude Code
+# session behavior until the operator notices and reverts by hand -- the
+# same shape of surprise issue #287 already burned this repo on once.
+#
+# setup_team_toml_restore() MUST be called exactly once, as the very first
+# thing on the real-run path (before ANY arm's write, including the
+# LOCAL_RUN preflight's own team.toml write) -- it captures whatever sits at
+# `.agents/team.toml` BEFORE this run's first mutation, including its
+# absence, which is a real, distinct case: restoring "absence" as an empty
+# file would leave `[token_guard]` behavior different from before this run
+# ran at all (an empty/missing file and an empty-but-present file are not
+# guaranteed to behave identically to every future reader of this path).
+# register_exit_cleanup(), not a direct `trap ... EXIT` call, so this
+# composes with setup_local_run_isolation()'s own ARM_A_DIR cleanup instead
+# of replacing it (see the EXIT cleanup registry comment near the top of
+# this file) -- and so it fires on a clean exit, an early `exit 1` abort
+# (e.g. resolve_task_index() failing for ARM_D_TASK, or run_local_preflight()
+# aborting), or an uncaught error under `set -eo pipefail`, not just the
+# happy path.
+TEAM_TOML_PATH=""
+TEAM_TOML_BACKUP=""
+TEAM_TOML_EXISTED=false
+
+setup_team_toml_restore() {
+    TEAM_TOML_PATH="$PWD/.agents/team.toml"
+    if [ -f "$TEAM_TOML_PATH" ]; then
+        TEAM_TOML_BACKUP="$(mktemp "${TMPDIR:-/tmp}/marc-team-toml-backup.XXXXXX")"
+        cp "$TEAM_TOML_PATH" "$TEAM_TOML_BACKUP"
+        TEAM_TOML_EXISTED=true
+    else
+        TEAM_TOML_BACKUP=""
+        TEAM_TOML_EXISTED=false
+    fi
+    register_exit_cleanup restore_team_toml
+}
+
+restore_team_toml() {
+    if [ -z "$TEAM_TOML_PATH" ]; then
+        # setup_team_toml_restore() was never called (e.g. a test exercising
+        # this function in isolation) -- nothing to restore, and definitely
+        # nothing to guess a path for.
+        return 0
+    fi
+    if [ "$TEAM_TOML_EXISTED" = "true" ]; then
+        if [ -n "$TEAM_TOML_BACKUP" ] && [ -f "$TEAM_TOML_BACKUP" ]; then
+            mkdir -p "$(dirname "$TEAM_TOML_PATH")"
+            cp "$TEAM_TOML_BACKUP" "$TEAM_TOML_PATH"
+            rm -f "$TEAM_TOML_BACKUP"
+            echo "Restored $TEAM_TOML_PATH to its pre-run contents." >&2
+        fi
+    else
+        rm -f "$TEAM_TOML_PATH"
+        echo "Removed $TEAM_TOML_PATH (it did not exist before this run) -- restoring absence, not leaving an empty/mutated file behind." >&2
+    fi
 }
 
 is_real_run() {
@@ -771,8 +885,21 @@ JSON
             cp "baseline-$name.jsonl" "toggle_baseline-$name.jsonl"
             cp "post-$name.jsonl" "toggle_post-$name.jsonl"
         done
+        # Issue #324 review (fold-in #2): the stub path never wrote a
+        # bulk_reader-<task>.jsonl before, so the "Execution Layer Proof"
+        # table's real aggregation/formatting code in benchmark_report.py was
+        # only ever exercised by a paid run or a hand-made fixture. Emit one
+        # here for ARM_D_TASK so every free/stub CI run walks that real code
+        # path too.
+        cat << JSON > "bulk_reader-$ARM_D_TASK.jsonl"
+{"session_id": "sess-bulk-reader-$ARM_D_TASK-1", "weighted": 6000, "turns": 2, "model": "stub-model", "timestamp": 1700000400}
+{"session_id": "sess-bulk-reader-$ARM_D_TASK-2", "weighted": 4500, "turns": 2, "model": "stub-model", "timestamp": 1700000500}
+JSON
         exit 0
     fi
+
+    trap run_exit_cleanups EXIT
+    setup_team_toml_restore
 
     if [ "$LOCAL_RUN" = "true" ]; then
         setup_local_run_isolation
@@ -856,7 +983,7 @@ JSON
         popd
     fi
 
-    echo "--- RUNNING ARM B ($CURRENT_REF with guard=350) ---"
+    echo "--- RUNNING ARM B ($CURRENT_REF with guard=$ARM_BD_MAX_READ_LINES) ---"
     ensure_marketplace_added "./"
     claude plugin install marc@nexaduo
 
@@ -865,7 +992,7 @@ JSON
 [telemetry]
 enabled = true
 [token_guard]
-max_read_lines = 350
+max_read_lines = $ARM_BD_MAX_READ_LINES
 CONFIG
 
     for idx in "${!TASK_NAMES[@]}"; do
@@ -921,7 +1048,7 @@ CONFIG
     # is unchanged by this arm and continues reading only
     # baseline-control.jsonl / toggle_baseline-control.jsonl / arm B+C
     # neutral files -- see the comment there.
-    echo "--- RUNNING ARM D ($CURRENT_REF with guard=350 + bulk_reader=true, task=$ARM_D_TASK only) ---"
+    echo "--- RUNNING ARM D ($CURRENT_REF with guard=$ARM_BD_MAX_READ_LINES + bulk_reader=true, task=$ARM_D_TASK only) ---"
     arm_d_team_toml > .agents/team.toml
 
     if ! ARM_D_IDX=$(resolve_task_index "$ARM_D_TASK"); then
