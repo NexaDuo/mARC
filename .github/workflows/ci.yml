@@ -810,6 +810,20 @@ jobs:
       - name: cross-harness dispatch self-test
         run: python3 core/scripts/test_dispatch_agent.py
 
+      # 8c-read-guard. read-guard.sh bulk-reader delegation self-test (issue
+      #     #320). Drives the real read-guard.sh as a subprocess against
+      #     scratch team.toml/target files and stubbed 'claude'/'ps' binaries.
+      #     Covers: no [token_guard] section stays inert; [token_guard]
+      #     without bulk_reader unchanged; bulk_reader success returns a
+      #     disk summary path; bulk_reader missing/failing/timing-out
+      #     binary always fails open to the plain deny (bounded, no hang,
+      #     no dependency on claude-code/claude being installed); the @sec/
+      #     @rev bypass still short-circuits; targeted (limit/offset) reads
+      #     still pass through untouched. Deterministic, offline, zero
+      #     token cost.
+      - name: read-guard bulk-reader self-test
+        run: python3 core/scripts/test_read_guard.py
+
       # 8d. Cross-harness script-parity self-test (issue #107). A harness's
       #     compiled SKILL.md can instruct the operator to run
       #     `${SOME_PLUGIN_ROOT}/scripts/<name>.py` while that harness ships

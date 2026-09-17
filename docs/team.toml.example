@@ -116,6 +116,39 @@ enabled = false
 # do not repeat that when editing this block).
 # [token_guard]
 # max_read_lines = 350
+#
+# Bulk-reader delegation (optional, OFF unless you also set bulk_reader =
+# true, origin: #320). This is a SEPARATE opt-in from the [token_guard]
+# section itself: denying a read is local, but bulk_reader = true makes the
+# guard spawn a subprocess against `core/scripts/dispatch_agent.py --role
+# bulk-reader --harness claude-code` to summarize the over-threshold file on
+# a minimal-tool worker (a dedicated `tools: Read`-only specialist, no
+# Bash/WebFetch/WebSearch/Write/Edit -- issue #322/#323 review: that
+# restriction is verified enforced by claude-code even under
+# --dangerously-skip-permissions, which is why claude-code is the pinned
+# target regardless of host harness). The guard writes the worker's summary
+# to disk itself (the worker has no Write tool to do it), denying the
+# original read with a path to it instead of bare advice. With
+# [token_guard] present and bulk_reader absent or false, behaviour is
+# byte-for-byte the deny-only guard above. Fails open, always: a missing
+# `claude` binary on PATH, a non-zero exit, empty output, or a timeout all
+# fall back to the plain deny — it never hangs the session. The scratch
+# summary file lives in a fresh `tempfile.mkdtemp()` directory per
+# invocation (mode 0700, exclusively owned), never a fixed/shared path.
+# bulk_reader_timeout bounds the delegated subprocess (default 20s, within
+# the 10-30s delegation tax the Spotify study measured for this shape of
+# worker call).
+#
+# Note (issue #320 review): the delegated worker session runs with
+# read-guard enforcement fully disabled for its ENTIRE lifetime, not just
+# for the one re-entrant read of the file it was asked to summarize. The
+# guard sets a marker on that subprocess's environment purely to stop it
+# from recursively re-delegating into another bulk-reader worker; that
+# marker also happens to make the guard inert for anything else the worker
+# reads during the same session. If the worker gets steered off-task, it
+# has no size-guard protection on other files it touches either.
+# bulk_reader = true
+# bulk_reader_timeout = 20
 
 # --- Cross-harness orchestration & routing (optional, origin: #239, #241) ---
 [orchestration]

@@ -72,11 +72,26 @@ MODEL="claude-sonnet-5"
 #              it in either configured arm, so any difference this task shows
 #              between arm B and arm C is pure run-to-run variance, not a
 #              guard effect — a sanity check on the other two tasks' deltas.
-TASK_NAMES=(control sweep neutral)
+#   bulk_read_forced - Added for issue #320 (the bulk-reader execution
+#              layer). `sweep` showed nothing most plausibly because the
+#              agent reached for `grep`, which the guard's `cat|less|more|
+#              head|tail` regex never matches, so the guard likely never
+#              fired in either arm on that task. This task asks for a
+#              holistic understanding of core/scripts/dispatch_agent.py (483
+#              lines, over the 350-line threshold) that a `grep` pattern
+#              cannot substitute for (routing priority order, fallback
+#              behavior, the full CLI contract) -- verified locally (see PR
+#              body) to force an untargeted `Read` of the whole file, which
+#              deterministically trips read-guard.sh. This is the task a
+#              re-measurement should compare arm B (deny-only) against a new
+#              arm D (bulk_reader = true) on, to actually exercise the
+#              execution layer rather than the enforcement layer alone.
+TASK_NAMES=(control sweep neutral bulk_read_forced)
 TASK_PROMPTS=(
     "read core/scripts/board.py and output a summary"
     "List every top-level (module-level) function definition across all non-test .py files in core/scripts/ (skip any file whose name starts with test_). Format each as '<filename>: <function_name>(...)'. Do not include methods defined inside classes, or functions nested inside other functions."
     "read AGENTS.md and summarize its \"Operating principles\" section in 3 bullet points"
+    "Read core/scripts/dispatch_agent.py in full and explain, in prose, how it decides which harness to route a subagent to: the exact priority order between the --harness flag, team.toml routes, and the default hybrid matrix, and what happens when the chosen CLI binary is not on PATH."
 )
 
 # Iterations per (task, arm). Run 34961492007's single arm C ranged 14,600 /

@@ -44,6 +44,11 @@ ROLE_TO_AGENT: Dict[str, str] = {
     "rev": "review",
     "review": "review",
     "research": "research",
+    # Minimal-tool worker (issue #320, #322/#323 review): read-only-by-design
+    # specialist the read-guard hook delegates untrusted-file summarization
+    # to. Kept distinct from "research" (which carries Bash/WebFetch/
+    # WebSearch) precisely because it must have no execution surface.
+    "bulk-reader": "bulk-reader",
 }
 
 CANONICAL_ROLES: Dict[str, str] = {
@@ -56,6 +61,7 @@ CANONICAL_ROLES: Dict[str, str] = {
     "rev": "rev",
     "review": "rev",
     "research": "research",
+    "bulk-reader": "bulk-reader",
 }
 
 HARNESS_BINARIES: Dict[str, str] = {
@@ -75,6 +81,15 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "research": "antigravity",
         "sre": "claude-code",
         "design": "claude-code",
+        # Pinned to claude-code regardless of host (issue #320/#323 review):
+        # the `tools:` restriction this role relies on for its sandbox is a
+        # measured, verified-enforced property of claude-code specifically
+        # (Read-only agent got NO_BASH_TOOL even under
+        # --dangerously-skip-permissions) and NOT of antigravity (a
+        # Read-only agent there still got RAN_BASH under the same flag,
+        # tracked as issue #323). This must not drift with the host or with
+        # DEFAULT_HYBRID_MATRIX's normal per-host specialization.
+        "bulk-reader": "claude-code",
     },
     "antigravity": {
         "dev": "claude-code",
@@ -86,6 +101,7 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "research": "antigravity",
         "sre": "antigravity",
         "design": "antigravity",
+        "bulk-reader": "claude-code",
     },
     "copilot": {
         "dev": "claude-code",
@@ -97,6 +113,7 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "research": "antigravity",
         "sre": "copilot",
         "design": "copilot",
+        "bulk-reader": "claude-code",
     },
 }
 
