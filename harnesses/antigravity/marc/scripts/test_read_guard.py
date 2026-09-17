@@ -95,7 +95,7 @@ def parse_deny_reason(proc: subprocess.CompletedProcess) -> Optional[str]:
     return data.get("hookSpecificOutput", {}).get("permissionDecisionReason")
 
 
-def make_fake_claude(bin_dir: str, behavior: str) -> None:
+def make_fake_claude(bin_dir: str, behavior: str, argv_file: Optional[str] = None) -> None:
     """Write a fake `claude` executable to `bin_dir` for a given `behavior`.
 
     Routed to `claude` (not `agy`) since issue #322/#323 review moved the
@@ -115,6 +115,14 @@ def make_fake_claude(bin_dir: str, behavior: str) -> None:
                   350-line instruction (honest miscount, or a verbose-output
                   injection the Read-only sandbox does nothing to stop) --
                   issue #322 review MEDIUM finding.
+      'capture' - exits 0, prints a fixed short summary, AND appends its full
+                  argv (one arg per line, tab-separated) to `argv_file` so a
+                  test can inspect the exact `--prompt` text read-guard.sh
+                  built -- issue #322 review MEDIUM finding (the worker
+                  prompt must interpolate the configured max_lines, not
+                  hardcode 350).
+
+    `argv_file` is required (and only meaningful) when behavior == 'capture'.
     """
     os.makedirs(bin_dir, exist_ok=True)
     claude_path = os.path.join(bin_dir, "claude")
@@ -128,6 +136,15 @@ def make_fake_claude(bin_dir: str, behavior: str) -> None:
         script = "#!/usr/bin/env bash\nexit 0\n"
     elif behavior == "verbose":
         script = "#!/usr/bin/env bash\nfor i in $(seq 1 500); do echo \"line $i\"; done\nexit 0\n"
+    elif behavior == "capture":
+        if not argv_file:
+            raise ValueError("argv_file is required for behavior='capture'")
+        script = (
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' \"$@\" >> {argv_file!r}\n"
+            "echo 'summary: fake content'\n"
+            "exit 0\n"
+        )
     else:
         raise ValueError(f"unknown behavior: {behavior}")
     with open(claude_path, "w", encoding="utf-8") as f:
@@ -340,6 +357,44 @@ def test_bulk_reader_truncates_and_discloses_oversized_summary() -> None:
                 pass
 
 
+def test_bulk_reader_prompt_interpolates_configured_max_lines() -> None:
+    """Regression test for the #322 review (MEDIUM): the worker prompt built
+    by try_bulk_reader() must interpolate the repo's configured max_lines,
+    never hardcode 350 -- on a repo with max_read_lines != 350 a hardcoded
+    prompt would tell the worker one threshold while the guard enforces
+    another, and any truncation-disclosure reason would then misattribute
+    the cause to the worker. Exercised at a deliberately non-default value
+    so a test that only ever ran at 350 could not have caught a drift."""
+    print("\n--- Test: bulk-reader prompt reflects a non-default max_read_lines ---")
+    with tempfile.TemporaryDirectory() as tmp:
+        non_default_max_lines = 120
+        write_team_toml(
+            tmp,
+            f"[token_guard]\nmax_read_lines = {non_default_max_lines}\nbulk_reader = true\nbulk_reader_timeout = 5\n",
+        )
+        # File must exceed the configured (non-default) threshold to trip
+        # the guard and reach try_bulk_reader() at all.
+        big = write_big_file(tmp, lines=non_default_max_lines + 50)
+        bin_dir = os.path.join(tmp, "fakebin")
+        argv_file = os.path.join(tmp, "captured_argv.txt")
+        make_fake_claude(bin_dir, "capture", argv_file=argv_file)
+        proc = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big}}, extra_path=bin_dir)
+        reason = parse_deny_reason(proc)
+        check(reason is not None, f"guard denies the over-threshold read (stdout={proc.stdout!r})")
+        check(os.path.isfile(argv_file), "fake claude captured its argv (worker was actually invoked)")
+        if os.path.isfile(argv_file):
+            with open(argv_file, encoding="utf-8") as f:
+                captured_args = f.read()
+            check(
+                f"well under {non_default_max_lines} lines" in captured_args,
+                f"worker prompt interpolates the configured max_lines={non_default_max_lines} (captured argv={captured_args!r})",
+            )
+            check(
+                "well under 350 lines" not in captured_args,
+                f"worker prompt does NOT hardcode 350 when max_read_lines is set to something else (captured argv={captured_args!r})",
+            )
+
+
 def test_bulk_reader_routes_to_dedicated_role_on_claude_code() -> None:
     """Regression test for the #322/#323 review: the delegated worker MUST be
     the dedicated 'bulk-reader' role (tools: Read only) on the claude-code
@@ -428,6 +483,7 @@ def main() -> int:
     test_token_guard_without_bulk_reader_key_unchanged()
     test_bulk_reader_enabled_worker_succeeds()
     test_bulk_reader_truncates_and_discloses_oversized_summary()
+    test_bulk_reader_prompt_interpolates_configured_max_lines()
     test_bulk_reader_routes_to_dedicated_role_on_claude_code()
     test_bulk_reader_fail_open()
     test_sec_rev_bypass_unaffected()

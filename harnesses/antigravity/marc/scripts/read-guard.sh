@@ -279,7 +279,7 @@ def try_bulk_reader(file_path, timeout_sec, max_lines):
         prompt = (
             f'Read the file at {file_path!r} in full. Then output, as your '
             f'entire final response, a concise factual summary (purpose, key '
-            f'functions/classes, notable logic), well under 350 lines. '
+            f'functions/classes, notable logic), well under {max_lines} lines. '
             f'Output only the summary text itself -- no preamble, no '
             f'commentary, nothing else.'
         )
