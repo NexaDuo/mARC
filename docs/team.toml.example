@@ -131,6 +131,15 @@ enabled = false
 # requires antigravity to be installed. bulk_reader_timeout bounds the
 # delegated subprocess (default 20s, within the 10-30s delegation tax the
 # Spotify study measured for this shape of worker call).
+#
+# Note (issue #320 review): the delegated worker session runs with
+# read-guard enforcement fully disabled for its ENTIRE lifetime, not just
+# for the one re-entrant read of the file it was asked to summarize. The
+# guard sets a marker on that subprocess's environment purely to stop it
+# from recursively re-delegating into another bulk-reader worker; that
+# marker also happens to make the guard inert for anything else the worker
+# reads during the same session. If the worker gets steered off-task, it
+# has no size-guard protection on other files it touches either.
 # bulk_reader = true
 # bulk_reader_timeout = 20
 

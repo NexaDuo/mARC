@@ -21,7 +21,6 @@ import os
 import re
 import subprocess
 import tempfile
-import time
 
 def main():
     try:
@@ -40,6 +39,15 @@ def main():
     # delegate again. This marker, set only around the delegated subprocess
     # call below, makes any nested invocation of this same script exit
     # immediately instead of recursing.
+    #
+    # NOTE (issue #320 review, LOW finding): this is NOT scoped to 'skip the
+    # re-entrant read of the same file' -- it disables read-guard
+    # enforcement for the ENTIRE delegated worker session, because the
+    # marker is set once on the subprocess's environment and inherited by
+    # everything that process (and anything it forks) does for its whole
+    # lifetime. If the worker is steered off-task (e.g. by the very content
+    # it was asked to summarize), it has zero size-guard enforcement on
+    # ANY file it reads during that session, not just the original target.
     if os.environ.get('MARC_BULK_READER_ACTIVE') == '1':
         sys.exit(0)
 
@@ -216,13 +224,18 @@ def try_bulk_reader(file_path, timeout_sec):
         if not os.path.isfile(dispatch_script):
             return None
 
-        scratch_dir = os.path.join(tempfile.gettempdir(), 'marc-bulk-reader')
-        os.makedirs(scratch_dir, exist_ok=True)
+        # A fixed, predictable path under shared /tmp (e.g.
+        # tempfile.gettempdir()/'marc-bulk-reader' with exist_ok=True) would
+        # let a co-resident local user pre-create or symlink that directory
+        # and plant/swap content at the summary path this function discloses
+        # back to the frontier model. tempfile.mkdtemp() instead creates a
+        # brand-new, exclusively-owned (mode 0700), guaranteed-unique
+        # directory per invocation -- there is no pre-existing path to have
+        # been tampered with, and no other local user can have write access
+        # to it (issue #320 review, MEDIUM finding).
+        scratch_dir = tempfile.mkdtemp(prefix='marc-bulk-reader-')
         base = os.path.basename(file_path)
-        summary_path = os.path.join(
-            scratch_dir,
-            f'{base}.{os.getpid()}.{int(time.time() * 1000)}.summary.md',
-        )
+        summary_path = os.path.join(scratch_dir, f'{base}.summary.md')
 
         prompt = (
             f'Read the file at {file_path!r} in full. Write a concise summary '

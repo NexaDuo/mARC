@@ -182,12 +182,47 @@ def test_bulk_reader_enabled_worker_succeeds() -> None:
                     summary_path = token.rstrip(".,")
                     break
         check(summary_path is not None, f"a real summary path is embedded in the reason ({reason})")
+        scratch_dir = None
         if summary_path:
             with open(summary_path, encoding="utf-8") as f:
                 content = f.read()
             check(len(content) > 0, "summary file is non-empty")
+            scratch_dir = os.path.dirname(summary_path)
+            # issue #320 review (MEDIUM): the scratch directory must be a
+            # fresh, exclusively-owned mkdtemp() dir, not the old fixed,
+            # world-guessable '<tmp>/marc-bulk-reader' path -- a plant/swap
+            # window for a co-resident local user who controls that path.
+            check(
+                os.path.basename(scratch_dir) != "marc-bulk-reader",
+                f"scratch dir is NOT the old fixed/predictable name (got {scratch_dir})",
+            )
+            check(
+                stat.S_IMODE(os.stat(scratch_dir).st_mode) == 0o700,
+                f"scratch dir is exclusively owned (mode 0700, got {oct(stat.S_IMODE(os.stat(scratch_dir).st_mode))})",
+            )
             try:
                 os.remove(summary_path)
+            except OSError:
+                pass
+
+        # A second invocation must land in a DIFFERENT scratch dir -- proves
+        # the dir is genuinely per-invocation (mkdtemp), not a shared
+        # fixed/reused path that a second run's summary could collide into.
+        proc2 = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big}}, extra_path=bin_dir)
+        reason2 = parse_deny_reason(proc2)
+        summary_path2 = None
+        if reason2:
+            for token in reason2.split():
+                if token.startswith("/") and os.path.isfile(token.rstrip(".,")):
+                    summary_path2 = token.rstrip(".,")
+                    break
+        if summary_path2 and scratch_dir:
+            check(
+                os.path.dirname(summary_path2) != scratch_dir,
+                "a second invocation gets a distinct, freshly-minted scratch dir",
+            )
+            try:
+                os.remove(summary_path2)
             except OSError:
                 pass
 
