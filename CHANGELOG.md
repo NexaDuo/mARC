@@ -8,6 +8,152 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.9.18] - 2026-09-18
+
+Ships the bulk-reader execution layer the Spotify token study was built around
+(#320, PR #322) and the benchmark arm that exists to measure it (#324, PR #327).
+
+**Both ship UNMEASURED.** No paid benchmark run has been made against
+`bulk_reader = true`. This release publishes no savings figure for the
+execution layer and restates none of the prior enforcement-only findings
+against it. The `Tokens Saved (Last Release)` badge is unaffected: `bulk_reader`
+defaults to `false` in `[token_guard]`, so a fresh install still runs the
+guard-off shipped default, and arm D is wired to never feed the badge — see
+`Known limitations`.
+
+### Added
+- **Bulk-reader delegation for `read-guard.sh` (#320, PR #322).** When an
+  over-threshold, untargeted read is denied, the guard can now delegate it to
+  a dedicated `bulk-reader` sub-agent instead of hitting a bare deny. The
+  sub-agent is Read-only (no Bash/Grep/Glob/Write/Edit/WebFetch/WebSearch/
+  TodoWrite, pinned to Claude Code's `haiku` model, `core/agents/bulk-reader.md`)
+  and writes a disk summary the calling model reads back.
+  - Opt-in via a new `bulk_reader` key under `[token_guard]`, `false` by
+    default and independent of the existing deny-only opt-in.
+  - Fails open on a missing worker binary, non-zero exit, empty output, or
+    timeout, with a recursion guard so a nested delegated read cannot
+    re-trigger delegation.
+  - Routed to the `bulk-reader` role on `claude-code` (not `antigravity`),
+    after an empirical probe showed `tools:` restrictions are harness-enforced
+    on `claude-code` even under `--dangerously-skip-permissions`, but are
+    **not** verified enforced on `antigravity` (tracked as #323, not fixed
+    here).
+  - The delegation's scratch directory is a per-invocation `tempfile.mkdtemp()`
+    (mode `0700`), not a fixed, world-guessable path, closing a plant/swap
+    window a co-resident local user would otherwise have.
+  - The worker's captured summary is capped at the configured `max_read_lines`
+    (interpolated into the worker prompt, never hardcoded) with an honest
+    truncation marker, rather than asserting an unverified "well under the
+    threshold" claim.
+  - `docs/team.toml.example` documents `bulk_reader` and the session-wide
+    scope of `MARC_BULK_READER_ACTIVE` (it disables guard enforcement for the
+    delegated worker's entire session, not only the re-entrant read of the
+    target file).
+  - `test_read_guard.py` covers the full opt-in/recursion/routing/truncation
+    matrix.
+- **Benchmark arm D, `bulk_reader = true` (#324, PR #327).** Adds the arm the
+  bulk-reader feature needed to be measurable at all: guard threshold 350 +
+  `bulk_reader = true`, run against a dedicated `bulk_read_forced` task
+  verified to deterministically trip the guard's enforcement path.
+  `benchmark_report.py` gains an "Execution Layer Proof" table comparing arm B
+  (enforcement-only, deny) against arm D (enforcement + execution, delegate) —
+  the study's actual claim — deliberately not arm D against the guard-off
+  control, which would just repeat the already-known enforcement-on-vs-off
+  result from run 34987534132.
+  - Arm D's worker calls go through the same `run_claude_safely()`
+    ok/lost/failed accounting and untrustworthy-cell exit-code gate as every
+    other arm.
+  - `.agents/team.toml` is now restored on exit for every local run via a
+    stacking `trap run_exit_cleanups EXIT` registry, closing a gap where arms
+    B/C/D permanently mutated the operator's real, gitignored working-tree
+    file under `LOCAL_RUN=true`.
+- **Local-run mode for the token benchmark (#316, #319, #317).**
+  - `LOCAL_RUN=true` runs the paid three-arm measurement by hand without
+    mutating the operator's own Claude Code installation: skips the global
+    `npm i -g @anthropic-ai/claude-code`, isolates `CLAUDE_CONFIG_DIR` to a
+    fresh scratch directory for marketplace/plugin state, and adds a
+    one-invocation preflight that asserts telemetry was actually recorded
+    (a strictly-increasing row count in an always-empty, per-run scratch
+    path) before committing to the rest of the run.
+  - `LOCAL_RUN_CONFIG_DIR` lets the isolated config dir point at a directory
+    the operator has already logged into themselves, instead of starting
+    logged out. Symlinking/copying the host's `.credentials.json` into the
+    scratch dir was tried and rejected — the CLI's write-temp-then-rename
+    OAuth refresh destroys it along with the scratch dir on exit, logging the
+    operator out of their real session.
+  - `docs/marc/benchmarks/README.md`'s "Running it locally" section is
+    corrected: `ANTHROPIC_API_KEY` is CI-only (setting it locally redirects
+    billing off the reader's subscription), a since-removed
+    stale-worktree-detection branch is no longer described, and a preflight
+    failure is no longer misattributed to a telemetry gap.
+
+### Changed
+- **The benchmark's comparison target and baseline-cache lookup are separate
+  questions again (#312, #313).** `resolve_prev_release_tag()` (what arm A is
+  labelled against) went back to pure release-tag-shape resolution; a new
+  `resolve_cached_baseline_tag()` owns the "is there already a manifest we can
+  reuse" question and is allowed to return empty without that being fatal.
+  The cache lookup is a direct check for the comparison target's own
+  `manifest.json` — never an ancestor walk — so a cache hit can no longer
+  silently substitute an older tag's repo code while still labelling the run
+  against the real comparison target.
+- **Paid benchmark runs are triggered only by an explicit human action
+  (#312).** `is_real_run()` no longer has a tag-shape axis at all; the only
+  reachable path to the paid three-arm measurement is `workflow_dispatch`
+  with `real_run="true"`. Every tag push, of any shape, stays on the free
+  stub path (issue #309: CI must never spend real API credit on its own).
+- **The noise floor is derived from MAD dispersion, and the badge publishes as
+  a band (#310).** The prior floor was a gap between two medians — a
+  central-tendency statistic, not a dispersion estimator — and moved by an
+  order of magnitude depending on which estimator was picked (MAD 2.1% vs.
+  median-gap 33.7% vs. stdev 60.4% vs. IQR 79.4%). The badge now publishes its
+  delta as a margin/band (e.g. `-40.0% ±31.5%`) instead of suppressing it below
+  the floor. The per-task MAD table is scoped to the `neutral` task only —
+  `control`/`sweep` see real guard effect, not noise, in their same-commit
+  arms.
+- **Honest loss accounting and shipped-default badge wiring (#305).** A
+  `claude` invocation that exits `0` but leaves no telemetry file is now
+  counted separately from a genuine invocation failure, with a bounded
+  retry for the suspected flush/timeout race; `benchmark_report.py` fails
+  loudly on any `(task, arm)` cell at or below the 3/5 untrustworthy-sample
+  threshold instead of silently reporting a reduced-n median. The
+  `Tokens Saved (Last Release)` badge now reads the same-commit guard-off arm
+  (`toggle_baseline-control.jsonl`), matching the shipped default, instead of
+  the guard-on arm nobody ships — with a static test pinning the workflow's
+  `--badge-current` wiring so a future edit can't silently re-point it.
+- **The paid measurement fires from a minor/major release tag push, never a
+  patch (#306).** Keys off the same `push: tags: v*.*.*` trigger
+  `release.yml` already uses, distinguishing a 3-component release tag from a
+  4-component patch tag per this file's own versioning note, so a patch never
+  bills. `resolve_prev_release_tag()` walks back past patch-shaped ancestor
+  tags to the nearest release-shaped one, avoiding an unnecessary full re-run
+  of arm A against a tag that was never measured.
+
+### Known limitations
+- **The bulk-reader execution layer and benchmark arm D ship unmeasured.** No
+  paid run has been made with `bulk_reader = true`. No savings or cost figure
+  for delegation is published in this release, and none should be inferred
+  from the enforcement-only findings in `26.9.15.1`. Arm D is deliberately
+  wired to never feed the `Tokens Saved` badge (`bulk_reader` defaults off,
+  matching the shipped install; the badge stays fed by the guard-off arm per
+  `26.9.15.1`/#305).
+- **`tools:` restrictions are not verified enforced on `antigravity` under
+  `--dangerously-skip-permissions` (#323).** The bulk-reader delegation is
+  routed to `claude-code` specifically because the boundary was only
+  empirically confirmed there; routing it to `antigravity` remains open.
+- **Delegated worker output is bounded by wall-clock timeout only, not bytes
+  (#325).** The truncation added in this release caps the *captured summary*
+  at `max_read_lines`; the worker invocation itself has no output-size bound.
+- **`/security-review` returned an empty diff on all three `@sec` passes of
+  PR #322 (#326).** The review passes that gated this feature ran against no
+  diff each time; the finding needs investigation before it's trusted as a
+  clean signal on future PRs.
+- **The noise floor is a single MAD estimate with no confirmed sample-size
+  validity (#298).** Whether n=5 same-commit `neutral` observations is
+  sufficient for any dispersion statistic, MAD included, is still open.
+- **The benchmark's comparison target should be the last MEASURED release,
+  not just the last release (#315).** Currently unresolved; a design call.
+
 ## [26.9.15.1] - 2026-09-15
 
 Stabilizes the token benchmark: the measurement path is reachable, the task set
