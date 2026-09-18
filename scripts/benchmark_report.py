@@ -152,6 +152,18 @@ def fmt_cell(sample, iterations: int | None = None) -> str:
 UNTRUSTWORTHY_RATIO_NUM = 3
 UNTRUSTWORTHY_RATIO_DEN = 5
 
+# ARM_D_TASK (issue #324): must match ARM_D_TASK in
+# scripts/run_token_benchmark.sh exactly. Arm D (bulk_reader=true) makes
+# real, billed `claude` invocations through the worker delegation path
+# (#320/#322), so run_token_benchmark.sh deliberately runs it against only
+# this one task -- the task verified to deterministically trip the guard's
+# enforcement path (see that script's task-set comment). This report
+# compares arm B (`post-<task>.jsonl`, enforcement only) against arm D
+# (`bulk_reader-<task>.jsonl`, enforcement + execution) for this task ONLY;
+# other tasks never have a `bulk_reader-<task>.jsonl` file and are not
+# expected to.
+ARM_D_TASK = "bulk_read_forced"
+
 
 def untrustworthy_threshold(iterations: int) -> int:
     return (iterations * UNTRUSTWORTHY_RATIO_NUM) // UNTRUSTWORTHY_RATIO_DEN
@@ -296,7 +308,45 @@ def main(argv=None) -> int:
     print("(provisional -- issue #298: n this small is too few to trust the floor's numeric "
           "value on its own; this is the estimator/presentation fix, not a trustworthiness claim)\n")
 
-    if args.iterations is not None and (result_a["has_untrustworthy"] or result_b["has_untrustworthy"]):
+    # Issue #324: the meaningful contrast for the study's claim is arm B
+    # (enforcement only, the guard denies) vs arm D (enforcement +
+    # execution, the bulk-reader worker summarizes instead) -- NOT arm D
+    # against the guard-off control (arm C, printed above as the "Causal
+    # Proof" pair for a different purpose). Comparing D against C would
+    # just repeat the enforcement-on-vs-enforcement-off comparison that
+    # already produced the known-negative result (run 34987534132: guard
+    # costs 2.6x, noise floor 33.7%) and would say nothing about whether
+    # delegating instead of denying actually helps. Printed only for
+    # ARM_D_TASK -- the one task run_token_benchmark.sh actually runs arm D
+    # against; every other task legitimately has no `bulk_reader-<task>.jsonl`
+    # file and is not a report bug.
+    #
+    # This table does NOT feed the "Tokens Saved" badge (generate_badge() in
+    # scripts/generate_telemetry_dashboard.py) -- the badge is fed the
+    # SHIPPED-DEFAULT arm (#303/#305), and `bulk_reader` defaults to OFF, so
+    # this comparison is reported here, in the console/job-summary report,
+    # and nowhere else.
+    result_d = None
+    if ARM_D_TASK in task_names:
+        result_d = print_comparison_table(
+            f"Execution Layer Proof (Arm B: enforcement-only/deny vs Arm D: "
+            f"enforcement+execution/bulk_reader=true, same commit, '{ARM_D_TASK}' only) -- issue #324",
+            [ARM_D_TASK], "post", "bulk_reader", args.cost_per_million, args.dir,
+            iterations=args.iterations,
+        )
+    else:
+        print(f"(no '{ARM_D_TASK}' task in this task set -- no execution-layer comparison to report)\n")
+
+    has_untrustworthy = result_a["has_untrustworthy"] or result_b["has_untrustworthy"]
+    if result_d is not None:
+        # Arm D's worker invocations are real, billed `claude` calls
+        # (issue #324) -- a worker failure/instrument-loss on that cell must
+        # gate the run exactly the same way arm A/B/C already do, not
+        # silently bias the cell by reporting a median over a
+        # silently-reduced n.
+        has_untrustworthy = has_untrustworthy or result_d["has_untrustworthy"]
+
+    if args.iterations is not None and has_untrustworthy:
         print(f"FAIL: at least one (task, arm) cell has n <= {untrustworthy_threshold(args.iterations)}/{args.iterations} "
               "samples (issue #295). Failing loudly instead of publishing a median over a silently-reduced n.",
               file=sys.stderr)

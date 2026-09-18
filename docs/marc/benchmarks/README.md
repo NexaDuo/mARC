@@ -30,7 +30,49 @@ Every directory holds the same file set: the per-task
 `toggle_post-*.jsonl` (one line per `claude` invocation), `task_names.txt`,
 and `manifest.json` (`model`, `tasks`, `iterations`, `task_hash`, `tag`,
 `claude_version` — the identity that makes two runs' numbers comparable or
-not).
+not). A real run also produces one `bulk_reader-bulk_read_forced.jsonl` (arm
+D, see below) alongside those.
+
+## The arms
+
+- **A** — the previous release (`$PREV_TAG`, a separate git worktree), no
+  `[token_guard]` configured. The baseline everything else is measured
+  against.
+- **B** — the current commit, `[token_guard] max_read_lines = 350`
+  (`bulk_reader` unset/off). Enforcement only: an over-threshold untargeted
+  `Read` is denied.
+- **C** — the current commit, `max_read_lines = 999999` (i.e. structurally
+  never fires). The same-commit, guard-off control used for the "Causal
+  Proof" table and the noise floor.
+- **D** (issue #324) — the current commit, `max_read_lines = 350` **plus**
+  `bulk_reader = true`. Enforcement + execution: the same over-threshold
+  read that arm B denies instead gets delegated to the bulk-reader worker
+  (#320/#322) and summarized. Run against **one task only**
+  (`bulk_read_forced`, the task verified to deterministically trip the
+  guard's enforcement path) — arm D makes real, billed `claude` invocations
+  through the worker delegation path, so it is not repeated across the full
+  task set the way A/B/C are.
+
+**The comparison that matters for the execution-layer claim is B vs D**, not
+D vs C. Arm B already isolates "what does denying cost"; arm C already
+isolates "what does no guard at all cost" (that pairing — enforcement-on vs
+enforcement-off — is exactly the one that produced the known-negative
+result in run 34987534132: guard costs 2.6x, noise floor 33.7%). Neither of
+those tells you whether *delegating* instead of *denying* helps. B vs D
+does, and only B vs D. `scripts/benchmark_report.py` prints this pairing
+under its own "Execution Layer Proof" heading, separate from the
+inter-release and causal-proof tables, and any result in it must still
+clear the measured 33.7% noise floor (#298 is open on giving that floor a
+dispersion measure) before it counts as an effect.
+
+**Arm D never feeds the "Tokens Saved" badge.** Per #303/#305 the badge is
+fed the shipped-default arm — `bulk_reader` defaults to **off**
+(`docs/team.toml.example`), so arm D is not a configuration any release
+actually ships with. `token-benchmark.yml`'s "Generate Dashboard Files" step
+continues to read only `baseline-control.jsonl` / `toggle_baseline-control.jsonl`
+(arm A / arm C) plus the arm B/C `neutral` pair for the noise floor; arm D's
+files are never passed to it. Arm D's own numbers surface only in
+`scripts/benchmark_report.py`'s console/job-summary output.
 
 ## Running it locally
 
@@ -99,7 +141,8 @@ of a disposable CI runner:
   directory (below) is likewise always fresh scratch, never inside
   `LOCAL_RUN_CONFIG_DIR` — reusing it there would let a stale row from an
   earlier run produce a false pass.
-- Before spending on the full 30-45 invocations, makes exactly ONE real
+- Before spending on the full 45-65 invocations (4 tasks x arms A/B/C +
+  arm D's 1 task, issue #324), makes exactly ONE real
   invocation and verifies a telemetry row was actually written under the
   isolated config. If it wasn't, the run aborts immediately instead of
   burning the rest of the budget for zero samples — this guards against the
@@ -111,7 +154,7 @@ of a disposable CI runner:
 Do **not** set `ANTHROPIC_API_KEY`: the script never reads it (it's a CI-only
 secret `token-benchmark.yml` injects to force API-key billing on a
 disposable runner). Locally, with no key present, `claude` bills your own
-Claude Code subscription — the ~30-45 invocations a full run makes are
+Claude Code subscription — the ~45-65 invocations a full run makes are
 enough to consume your 5-hour usage window. `GEMINI_API_KEY` isn't read
 anywhere in this script either; skip it. Run with `git fetch --tags` already
 done, ideally right after tagging a release so the walk in
