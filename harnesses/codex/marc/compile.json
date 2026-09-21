@@ -1,0 +1,19 @@
+{
+  "harness_name": "OpenAI Codex",
+  "config_dir": ".codex",
+  "project_dir_env": "CODEX_PROJECT_DIR",
+  "plugin_root_env": "PLUGIN_ROOT",
+  "plugin_manifest_path": "harnesses/codex/marc/plugin.json",
+  "plugin_list_command": "codex plugin list --json",
+  "dispatch_instructions": "Use Codex subagents configured in .codex/agents/*.toml. Mutating work uses a separate managed worktree; security, review, research, and bulk-reader remain read-only.",
+  "isolation_instructions": "using codex exec --worktree for an isolated mutating run",
+  "compact_action": "start a fresh Codex session",
+  "agents_dir": ".agents",
+  "hook_dialect": "codex",
+  "hook_ids": [
+    "team-toml-dump",
+    "outdated-check",
+    "invariants-card",
+    "read-guard"
+  ]
+}
