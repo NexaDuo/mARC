@@ -4,7 +4,7 @@
     {
       "name": "marc",
       "description": "mARC multi-agent engineering team for OpenAI Codex.",
-      "source": "../../../harnesses/codex/marc"
+      "source": "../../harnesses/codex/marc"
     }
   ]
 }
