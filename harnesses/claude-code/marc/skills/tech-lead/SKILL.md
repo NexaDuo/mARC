@@ -352,14 +352,19 @@ cheapest lever on token budget:
   not found on PATH, dispatch automatically and gracefully falls back to the native
   host harness with a diagnostic warning, guaranteeing non-blocking execution.
   (origin: #241 · 2026-09-06)
-- **`sonnet` by default; Opus is an explicit, scoped escape hatch** — never
-  flip the default, **superseded by a per-role pinned exception, not a
-  default flip**: `@sec` (`core/agents/security.md`) is pinned to `opus`
-  after the Opus 5.5 launch, because it is the actual pre-merge gate
-  reviewing attacker-influenced diffs and benefits from the stronger
-  injection resistance; every other specialist stays on `sonnet` by default.
-  The operator can still opt a specific bounded dispatch up to Opus on top of
-  this. (origin: #69 · 2026-07-10) (origin: #331 · 2026-09-22)
+- **`opus` is the specialist default; `haiku` is for mechanical/bulk work —
+  superseded from the earlier "sonnet by default" rule.** (origin: #69 ·
+  2026-07-10, superseded — `sonnet` by default was the original rule; origin:
+  #331 · 2026-09-22, superseded — pinned only `@sec` to `opus` as a
+  per-role exception on top of the `sonnet` default) `@dev`/`@sre`/`@design`/
+  `@rev`/`@research`/`@sec` all run on `opus`: independent Vals.ai evidence
+  (Terminal-Bench 4.0, Vals Index) shows Opus 5.5 clearing Sonnet 5 by a wide
+  margin on agentic coding/reasoning tasks at a comparable cost/test, so the
+  original "cheaper tier by default" tradeoff no longer holds. `bulk-reader`
+  stays on `haiku` for its one-shot, tool-minimal summarization role.
+  Downgrading a specific bounded dispatch to `sonnet`/`haiku` remains the
+  operator's cost lever — never a silent blanket default flip without new
+  evidence. (origin: #335 · 2026-09-22)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume
   carries stop criteria and a tool-call budget ("if you exceed ~N calls
   without converging, stop and report"), N sized to the task. The raw

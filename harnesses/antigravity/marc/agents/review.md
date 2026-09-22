@@ -6,10 +6,13 @@ description: >-
   pull requests and branch diffs for bugs, regressions, and maintainability
   issues before code merges, alongside `@sec`'s security pass.
 tools: Read, Grep, Glob, Bash, TodoWrite, Skill
-# Pinned to sonnet (was default/inherit): a read-only review pass doesn't need the
-# most expensive tier — a cheap win that keeps dispatch cost bounded. The operator
-# may still Opus-override a specific bounded review when reasoning genuinely needs it.
-model: sonnet
+# Pinned to opus (origin #335, 2026-09-22, superseding the earlier sonnet pin):
+# `@rev` is a pre-merge correctness gate reading attacker-influenced diffs
+# alongside `@sec`, and independent Vals.ai evidence shows Opus 5.5 clearing
+# Sonnet 5 by a wide margin on agentic/reasoning tasks at comparable
+# cost/test. The operator can still downgrade a specific bounded review to
+# sonnet/haiku as a cost lever.
+model: opus
 ---
 
 # @rev — Correctness Reviewer
