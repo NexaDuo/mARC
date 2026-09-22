@@ -8,6 +8,14 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.9.21] - 2026-09-21
+
+### Added
+
+- **OpenAI Codex harness support.** mARC now ships a Codex plugin, native agent
+  definitions, Codex hook rendering, local marketplace metadata, and dispatch
+  routing alongside the existing Claude Code, Antigravity, and Copilot harnesses.
+
 ## [26.9.18] - 2026-09-18
 
 Ships the bulk-reader execution layer the Spotify token study was built around

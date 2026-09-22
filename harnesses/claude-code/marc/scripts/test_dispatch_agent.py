@@ -5,8 +5,8 @@ Stdlib only (no pytest); run directly:  python3 test_dispatch_agent.py
 
 Deterministic, offline, zero token cost — no real network, no live CLI calls.
 Feeds `dispatch_agent.py` synthetic fixtures and asserts:
-  * Command generation across claude-code, antigravity, and copilot for all specialist roles
-  * Embedded default hybrid specialization matrix across all 3 host harnesses and roles (#241)
+  * Command generation across all four host harnesses for specialist roles
+  * Embedded default hybrid specialization matrix across all 4 host harnesses and roles (#241)
   * Route resolution from team.toml [orchestration] (mode='hybrid' vs mode='native')
   * Priority hierarchy: explicit CLI flag > team.toml route > default hybrid matrix
   * CLI availability checking and graceful fallback to host harness
@@ -89,7 +89,13 @@ def test_command_generation() -> None:
         cmd = build_harness_command("copilot", r, prompt)
         check(cmd == ["copilot", "--prompt", prompt], f"copilot command for role '{r}': {cmd}")
 
-    # 4. Unknown harness throws ValueError
+    # 4. Codex uses its native exec entry point and managed worktree.
+    for r in ["dev", "sre", "design", "sec", "rev", "research"]:
+        cmd = build_harness_command("codex", r, prompt)
+        expected = ["codex", "exec", "--worktree", f"Act as the mARC {ROLE_TO_AGENT[r]} specialist. {prompt}"]
+        check(cmd == expected, f"codex command for role '{r}': {cmd}")
+
+    # 5. Unknown harness throws ValueError
     try:
         build_harness_command("unknown-harness", "dev", prompt)
         check(False, "unknown harness should raise ValueError")
@@ -134,6 +140,17 @@ def test_default_hybrid_matrix() -> None:
             "research": "antigravity",
             "sre": "copilot",
             "design": "copilot",
+        },
+        "codex": {
+            "dev": "codex",
+            "engineer": "codex",
+            "sec": "codex",
+            "security": "codex",
+            "rev": "codex",
+            "review": "codex",
+            "research": "codex",
+            "sre": "codex",
+            "design": "codex",
         },
     }
 
@@ -290,15 +307,23 @@ def test_native_harness_detection() -> None:
     cc_env = {"CLAUDE_PLUGIN_ROOT": "/root"}
     check(detect_native_harness(cc_env, mock_which) == "claude-code", "detects claude-code from CLAUDE_PLUGIN_ROOT")
 
-    # 4. Binary fallback when env vars unset
+    # 4. Codex env vars
+    codex_env = {"PLUGIN_ROOT": "/plugin"}
+    check(detect_native_harness(codex_env, mock_which) == "codex", "detects codex from PLUGIN_ROOT")
+
+    # 5. Binary fallback when env vars unset
     def which_only_agy(b):
         return "/bin/agy" if b == "agy" else None
 
     def which_only_copilot(b):
         return "/bin/copilot" if b == "copilot" else None
 
+    def which_only_codex(b):
+        return "/bin/codex" if b == "codex" else None
+
     check(detect_native_harness({}, which_only_agy) == "antigravity", "detects antigravity from PATH when env unset")
     check(detect_native_harness({}, which_only_copilot) == "copilot", "detects copilot from PATH when env unset")
+    check(detect_native_harness({}, which_only_codex) == "codex", "detects codex from PATH when env unset")
 
 
 def test_cli_availability_and_fallback() -> None:
