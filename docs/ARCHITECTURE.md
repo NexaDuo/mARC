@@ -64,10 +64,10 @@ harness's native format:
 
 ```
 harnesses/
-├── claude-code/marc/     # Claude Code plugin (today)
-├── cursor/…              # future — Cursor-native format
-├── codex/…               # future
-└── antigravity/…         # future
+├── claude-code/marc/     # Claude Code plugin
+├── codex/marc/           # OpenAI Codex plugin
+├── antigravity/marc/     # Google Antigravity plugin
+└── copilot/marc/         # GitHub Copilot CLI plugin
 ```
 
 Nesting the Claude Code plugin one level deeper does not affect Claude Code:

@@ -8,7 +8,7 @@ Stdlib only (no third-party dependencies). Can be invoked directly or imported:
 CLI Options:
     --role <role>         Specialist role (dev, sre, design, sec, rev, research, engineer, security, review).
     --prompt <prompt>     Task prompt with context, acceptance criteria, and constraints.
-    --harness <harness>   Target harness (auto, native, claude-code, antigravity, copilot). Default: auto.
+    --harness <harness>   Target harness (auto, native, claude-code, antigravity, copilot, codex). Default: auto.
     --timeout <seconds>   Subprocess execution timeout in seconds. Default: 300.
     --json                Output result as JSON payload.
     --dry-run             Resolve command and print without executing.
@@ -68,6 +68,7 @@ HARNESS_BINARIES: Dict[str, str] = {
     "claude-code": "claude",
     "antigravity": "agy",
     "copilot": "copilot",
+    "codex": "codex",
 }
 
 DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
@@ -113,6 +114,20 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "research": "antigravity",
         "sre": "copilot",
         "design": "copilot",
+        "bulk-reader": "claude-code",
+    },
+    "codex": {
+        "dev": "codex",
+        "engineer": "codex",
+        "sre": "codex",
+        "design": "codex",
+        "sec": "codex",
+        "security": "codex",
+        "rev": "codex",
+        "review": "codex",
+        "research": "codex",
+        # Bulk-reader must use the only harness with a verified read-only
+        # tool boundary until Codex isolation is proven empirically.
         "bulk-reader": "claude-code",
     },
 }
@@ -197,6 +212,8 @@ def detect_native_harness(
         return "copilot"
     if "CLAUDE_PLUGIN_ROOT" in environ or "CLAUDE_PROJECT_DIR" in environ:
         return "claude-code"
+    if "PLUGIN_ROOT" in environ or "CODEX_PROJECT_DIR" in environ:
+        return "codex"
 
     # Check available binaries in PATH
     if which_fn("claude"):
@@ -205,6 +222,8 @@ def detect_native_harness(
         return "antigravity"
     if which_fn("copilot"):
         return "copilot"
+    if which_fn("codex"):
+        return "codex"
 
     return "claude-code"
 
@@ -218,6 +237,11 @@ def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
         return ["agy", "--dangerously-skip-permissions", "--agent", mapped_agent, "-p", prompt]
     elif harness == "copilot":
         return ["copilot", "--prompt", prompt]
+    elif harness == "codex":
+        # Codex selects configured subagents through the model's Agent tool;
+        # `-p` is a profile flag, not an agent selector. State the role in the
+        # prompt and use a managed worktree for mutating runs.
+        return ["codex", "exec", "--worktree", f"Act as the mARC {mapped_agent} specialist. {prompt}"]
     else:
         raise ValueError(f"Unsupported harness: {harness!r}")
 
@@ -440,8 +464,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument(
         "--harness",
         default="auto",
-        choices=["auto", "native", "claude-code", "antigravity", "copilot"],
-        help="Target harness (auto, native, claude-code, antigravity, copilot). Default: auto",
+        choices=["auto", "native", "claude-code", "antigravity", "copilot", "codex"],
+        help="Target harness (auto, native, claude-code, antigravity, copilot, codex). Default: auto",
     )
     parser.add_argument(
         "--timeout",

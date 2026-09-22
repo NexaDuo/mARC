@@ -1,0 +1,13 @@
+{
+  "name": "nexaduo",
+  "plugins": [
+    {
+      "name": "marc",
+      "description": "mARC multi-agent engineering team for OpenAI Codex.",
+      "source": {
+        "source": "local",
+        "path": "./harnesses/codex/marc"
+      }
+    }
+  ]
+}

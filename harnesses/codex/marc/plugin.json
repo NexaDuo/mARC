@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "marc",
+  "version": "26.9.21",
+  "description": "mARC multi-agent engineering team for OpenAI Codex.",
+  "author": {"name": "NexaDuo"},
+  "license": "MIT",
+  "homepage": "https://github.com/NexaDuo/mARC",
+  "repository": "https://github.com/NexaDuo/mARC",
+  "skills": "./skills/"
+}

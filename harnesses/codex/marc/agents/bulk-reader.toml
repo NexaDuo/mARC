@@ -1,0 +1,5 @@
+name = "bulk-reader"
+description = "mARC read-only file summarizer used by the read guard."
+model_reasoning_effort = "low"
+sandbox_mode = "read-only"
+developer_instructions = "Read only the named file and return a concise factual summary. Never execute commands, browse, or edit files."

@@ -203,6 +203,14 @@ _AGY_EVENT_MAP = {
     "stop": "Stop",
 }
 
+_CODEX_EVENT_MAP = {
+    "session_start": "SessionStart",
+    "session_start_compact": "SessionStart",
+    "pre_tool_use": "PreToolUse",
+    "post_tool_use": "PostToolUse",
+    "stop": "Stop",
+}
+
 
 def render_claude_code_hooks(selected_hooks, config):
     """Claude Code dialect: {"hooks": {EventName: [{"matcher", "hooks":
@@ -262,10 +270,28 @@ def render_antigravity_hooks(selected_hooks, config):
     return out
 
 
+def render_codex_hooks(selected_hooks, config):
+    """Codex uses the Claude-compatible grouped hook schema, while commands
+    resolve the Codex plugin root through PLUGIN_ROOT. Keep this renderer
+    separate so future Codex-specific fields (timeout/statusMessage) do not
+    leak into other harnesses."""
+    out = {"hooks": {}}
+    for hook in selected_hooks:
+        event_name = _CODEX_EVENT_MAP[hook["event"]]
+        command = _build_command(hook, config)
+        matcher = _CC_MATCHER_MAP.get(hook["event"], "*")
+        out["hooks"].setdefault(event_name, []).append({
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": command}],
+        })
+    return out
+
+
 _HOOK_DIALECT_RENDERERS = {
     "antigravity": render_antigravity_hooks,
     "claude-code": render_claude_code_hooks,
     "copilot": render_copilot_hooks,
+    "codex": render_codex_hooks,
 }
 
 
