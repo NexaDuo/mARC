@@ -62,6 +62,6 @@ revisão.
 - [ ] Documentar que o comando recebe a raiz do repositório (`codex plugin
   marketplace add .`), pois o Codex procura `.agents/plugins/marketplace.json`
   dentro da raiz selecionada.
-- [ ] Confirmar a instalação usando o identificador público `marc@nexaduo`.
+- [x] Confirmar a instalação usando o identificador público `marc@nexaduo`.
 - [ ] Atualizar `docs/ARCHITECTURE.md` para refletir o quarto harness.
 - [ ] Atualizar versão, `CHANGELOG.md` e executar revisão independente `@sec`.
