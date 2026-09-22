@@ -8,6 +8,31 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.9.22.1] - 2026-09-22
+
+Extends #331's per-role `@sec` opus pin to the rest of the specialist bench
+(#334/#335): `@dev`, `@sre`, `@design`, `@rev`, and `@research`
+(`core/agents/{engineer,sre,design,review,research}.md`) all move to
+`model: opus`. `bulk-reader` stays on `haiku` (one-shot, tool-minimal
+summarization; no reasoning depth needed).
+
+Evidence: Vals.ai (independent, same harness, verified 2026-09-22) —
+Terminal-Bench 4.0: Opus 5.5 61.62% vs Sonnet 5 8.08% (Sonnet cost
+$21.37/task); Vals Index: Fable 5.1 68.83%, Opus 5.5 66.16%, Sonnet 5 59.61%,
+Haiku 4.5 22.90%, cost/test Opus $19.22 vs Sonnet $17.61. Pricing per MTok
+(claude.com/pricing): Opus 5.5 $4/$20, Sonnet 5 $2/$10, Haiku 4.5 $1/$5. The
+earlier "cheaper tier by default" tradeoff behind #69's `sonnet`-by-default
+rule no longer holds at these prices, so `core/skills/tech-lead/SKILL.md`'s
+governed rule is superseded explicitly (origins #69 and #331 kept with a
+superseded note, new tag `(origin: #335 · 2026-09-22)`): `opus` is now the
+specialist default, `haiku` covers mechanical/bulk work, and downgrading a
+specific bounded dispatch to `sonnet`/`haiku` remains the operator's cost
+lever.
+
+As with #331/#333, `model:` frontmatter stays inert on Antigravity and
+Copilot (both pick a model through their own harness-native mechanism, not
+this field) — no compile-pipeline mapping change was needed.
+
 ## [26.9.22] - 2026-09-22
 
 Pins `@sec` (`core/agents/security.md`) to `model: opus` following the Claude

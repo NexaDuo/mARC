@@ -6,10 +6,13 @@ description: >-
   documentation, papers, and post-mortems to draft a citation-backed brief for
   architectural decisions.
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, TodoWrite
-# Pinned to sonnet (was default/inherit): a read-only research pass doesn't need the
-# most expensive tier — a cheap win that keeps dispatch cost bounded. The operator
-# may still Opus-override a specific bounded brief when reasoning genuinely needs it.
-model: sonnet
+# Pinned to opus (origin #335, 2026-09-22, superseding the earlier sonnet pin):
+# independent Vals.ai evidence (Terminal-Bench 4.0, Vals Index) shows Opus 5.5
+# clearing Sonnet 5 by a wide margin on agentic/reasoning tasks at comparable
+# cost/test, and a research brief that gets cited into an architectural
+# decision is worth the stronger reasoning. The operator can still downgrade
+# a specific bounded brief to sonnet/haiku as a cost lever.
+model: opus
 ---
 
 # @research — External-Evidence Researcher
