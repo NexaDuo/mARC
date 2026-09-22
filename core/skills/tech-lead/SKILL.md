@@ -340,7 +340,13 @@ cheapest lever on token budget:
   host harness with a diagnostic warning, guaranteeing non-blocking execution.
   (origin: #241 · 2026-09-06)
 - **`sonnet` by default; Opus is an explicit, scoped escape hatch** — never
-  flip the default. (origin: #69 · 2026-07-10)
+  flip the default, **superseded by a per-role pinned exception, not a
+  default flip**: `@sec` (`core/agents/security.md`) is pinned to `opus`
+  after the Opus 5.5 launch, because it is the actual pre-merge gate
+  reviewing attacker-influenced diffs and benefits from the stronger
+  injection resistance; every other specialist stays on `sonnet` by default.
+  The operator can still opt a specific bounded dispatch up to Opus on top of
+  this. (origin: #69 · 2026-07-10) (origin: #331 · 2026-09-22)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume
   carries stop criteria and a tool-call budget ("if you exceed ~N calls
   without converging, stop and report"), N sized to the task. The raw
