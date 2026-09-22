@@ -211,6 +211,8 @@ def detect_native_harness(
         return "copilot"
     if "CLAUDE_PLUGIN_ROOT" in environ or "CLAUDE_PROJECT_DIR" in environ:
         return "claude-code"
+    if "PLUGIN_ROOT" in environ or "CODEX_PROJECT_DIR" in environ:
+        return "codex"
 
     # Check available binaries in PATH
     if which_fn("claude"):
@@ -219,6 +221,8 @@ def detect_native_harness(
         return "antigravity"
     if which_fn("copilot"):
         return "copilot"
+    if which_fn("codex"):
+        return "codex"
 
     return "claude-code"
 
