@@ -8,6 +8,25 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.9.22] - 2026-09-22
+
+Pins `@sec` (`core/agents/security.md`) to `model: opus` following the Claude
+Opus 5.5 launch (#331): `@sec` is the real pre-merge gate reviewing
+attacker-influenced diffs, and the stronger reasoning and prompt-injection
+resistance justify the 2x per-token cost on that one role. Every other
+specialist (`@dev`/`@sre`/`@design`/`@rev`/`@research`) stays on `sonnet`,
+and `bulk-reader` stays on `haiku` — the #69 "sonnet by default" rule in
+`core/skills/tech-lead/SKILL.md` is superseded with a per-role pinned
+exception, not silently dropped or flipped wholesale.
+
+Checked the non-Claude-Code harnesses' compile pipeline: neither Antigravity
+nor Copilot maps the `model:` agent frontmatter field at all today (dispatch
+picks a model through its own harness-native mechanism — Antigravity's
+Gemini flash/pro/inherit tiers chosen in the tech-lead skill's dispatch
+instructions, Copilot's `task` tool with no model parameter), so the
+compiled `model: opus` line ships inert on both; no mapping change was
+needed there.
+
 ## [26.9.18] - 2026-09-18
 
 Ships the bulk-reader execution layer the Spotify token study was built around

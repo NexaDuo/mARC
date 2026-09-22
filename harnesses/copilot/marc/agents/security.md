@@ -5,10 +5,12 @@ description: >-
   Security review specialist (IRC handle `@sec`) dispatched to audit pull requests
   and branch diffs for security vulnerabilities before code merges.
 tools: Read, Grep, Glob, Bash, WebFetch, TodoWrite, Skill
-# Pinned to sonnet (was default/inherit): a read-only review pass doesn't need the
-# most expensive tier — a cheap win that keeps dispatch cost bounded. The operator
-# may still Opus-override a specific bounded review when reasoning genuinely needs it.
-model: sonnet
+# Pinned to opus (origin #331, 2026-09-22, superseding the earlier sonnet pin):
+# @sec is the real pre-merge gate (the author can't self-approve), reviewing a
+# diff that is attacker-influenced input, read-only and bounded — the stronger
+# reasoning and prompt-injection resistance justify the 2x per-token cost on
+# this one role. Implementers stay on sonnet pending separate benchmark evidence.
+model: opus
 ---
 
 # @sec — Security Reviewer
