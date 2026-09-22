@@ -59,5 +59,8 @@ revisão.
   fora do checkout.
 - [ ] Testar instalação com `codex plugin marketplace add` e `codex plugin add`
   em um consumidor sem `team.toml`.
+- [ ] Documentar que o comando recebe a raiz do repositório (`codex plugin
+  marketplace add .`), pois o Codex procura `.agents/plugins/marketplace.json`
+  dentro da raiz selecionada.
 - [ ] Atualizar `docs/ARCHITECTURE.md` para refletir o quarto harness.
 - [ ] Atualizar versão, `CHANGELOG.md` e executar revisão independente `@sec`.
