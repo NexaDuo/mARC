@@ -65,15 +65,19 @@ copilot plugin install marc@nexaduo
 
 ### OpenAI Codex
 
-Run these commands in your terminal to add the local marketplace, install the plugin, and start:
+From the repository root, run these commands to register the local marketplace,
+install the plugin, and start Codex:
 
 ```bash
-codex plugin marketplace add ./.agents/plugins
-codex plugin install marc@nexaduo-codex
+codex plugin marketplace add .
+codex plugin install marc@nexaduo
 codex
 ```
 
-Then invoke `/marc:tech-lead` in Codex. The Codex harness is installed from this repository's local marketplace because Codex plugin sources are local directories.
+Then invoke `/marc:tech-lead` in Codex. The marketplace file lives at
+`.agents/plugins/marketplace.json`; the selected marketplace root must therefore
+be the repository root, not the `.agents/plugins` subdirectory. Codex installs
+the local plugin under the `marc@nexaduo` identifier.
 
 ## The metaphor: one channel, one op, a bench of specialists
 

@@ -126,8 +126,9 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "rev": "codex",
         "review": "codex",
         "research": "codex",
-        # Keep this explicit until Codex's tool-level isolation is verified.
-        "bulk-reader": "codex",
+        # Bulk-reader must use the only harness with a verified read-only
+        # tool boundary until Codex isolation is proven empirically.
+        "bulk-reader": "claude-code",
     },
 }
 

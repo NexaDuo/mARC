@@ -110,6 +110,21 @@ def validate_hook_schema(harness: str, dialect: str, hooks_obj: dict) -> None:
             isinstance(hooks_obj, dict) and "hooks" in hooks_obj,
             f"{harness}: claude-code hooks.json has top-level 'hooks' key",
         )
+    elif dialect == "codex":
+        check(
+            isinstance(hooks_obj, dict) and "hooks" in hooks_obj,
+            f"{harness}: codex hooks.json has top-level 'hooks' key",
+        )
+        for event_name, entries in hooks_obj.get("hooks", {}).items():
+            check(isinstance(entries, list), f"{harness}: codex event '{event_name}' is a list")
+            for entry in entries:
+                check(
+                    isinstance(entry, dict) and "matcher" in entry and isinstance(entry.get("hooks"), list),
+                    f"{harness}: codex event '{event_name}' entry has matcher and hooks list",
+                )
+        session_entries = hooks_obj.get("hooks", {}).get("SessionStart", [])
+        compact = [e for e in session_entries if isinstance(e, dict) and e.get("matcher") == "compact"]
+        check(bool(compact), f"{harness}: codex SessionStart preserves compact matcher")
     elif dialect == "copilot":
         check(
             isinstance(hooks_obj, dict) and hooks_obj.get("version") == 1 and "hooks" in hooks_obj,

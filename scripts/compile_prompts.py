@@ -279,8 +279,9 @@ def render_codex_hooks(selected_hooks, config):
     for hook in selected_hooks:
         event_name = _CODEX_EVENT_MAP[hook["event"]]
         command = _build_command(hook, config)
+        matcher = _CC_MATCHER_MAP.get(hook["event"], "*")
         out["hooks"].setdefault(event_name, []).append({
-            "matcher": "*",
+            "matcher": matcher,
             "hooks": [{"type": "command", "command": command}],
         })
     return out

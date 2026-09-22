@@ -118,6 +118,7 @@ def test_default_hybrid_matrix() -> None:
             "research": "antigravity",
             "sre": "claude-code",
             "design": "claude-code",
+            "bulk-reader": "claude-code",
         },
         "antigravity": {
             "dev": "claude-code",
@@ -129,6 +130,7 @@ def test_default_hybrid_matrix() -> None:
             "research": "antigravity",
             "sre": "antigravity",
             "design": "antigravity",
+            "bulk-reader": "claude-code",
         },
         "copilot": {
             "dev": "claude-code",
@@ -140,6 +142,7 @@ def test_default_hybrid_matrix() -> None:
             "research": "antigravity",
             "sre": "copilot",
             "design": "copilot",
+            "bulk-reader": "claude-code",
         },
         "codex": {
             "dev": "codex",
@@ -151,6 +154,7 @@ def test_default_hybrid_matrix() -> None:
             "research": "codex",
             "sre": "codex",
             "design": "codex",
+            "bulk-reader": "claude-code",
         },
     }
 
