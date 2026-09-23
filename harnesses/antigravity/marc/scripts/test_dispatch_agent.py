@@ -33,13 +33,16 @@ from dispatch_agent import (  # noqa: E402
     CANONICAL_ROLES,
     DEFAULT_HYBRID_MATRIX,
     HARNESS_BINARIES,
+    NON_ENFORCING_HARNESSES,
     READ_ONLY_ROLES,
     ROLE_TO_AGENT,
     ReadOnlyRoutingError,
+    UnknownRoleError,
     build_harness_command,
     detect_native_harness,
     dispatch,
     main as dispatch_main,
+    normalize_role,
     parse_toml,
     resolve_route,
     resolve_target_harness,
@@ -342,18 +345,27 @@ def test_cli_availability_and_fallback() -> None:
     check(fallback is True, "fallback flag is True")
     check(reason is not None and "claude" in reason, f"fallback reason mentions claude ({reason})")
 
-    # Scenario 3: On copilot host, default matrix routes 'research' -> claude-code (#323).
-    # But only 'copilot' CLI is available. Falls back to host harness (copilot).
+    # Scenario 3: On copilot host, default matrix routes 'design' -> copilot, but only
+    # 'claude' is on PATH. Non-read-only role falls back to an available harness.
     env_copilot = {"COPILOT_PLUGIN_DATA": "/data"}
     harness, fallback, reason = resolve_route(
-        role="research",
+        role="design",
         requested_harness="auto",
         env=env_copilot,
-        which_fn=which_only_copilot,
+        which_fn=which_only_claude,
     )
-    check(harness == "copilot", f"matrix research fallback on copilot host resolved to copilot (got {harness})")
+    check(harness == "claude-code", f"matrix design fallback on copilot host resolved to claude-code (got {harness})")
     check(fallback is True, "fallback flag is True")
-    check(reason is not None and "claude" in reason, f"fallback reason mentions claude ({reason})")
+    check(reason is not None and "copilot" in reason, f"fallback reason mentions copilot ({reason})")
+
+    # Scenario 3b: read-only 'research' on a copilot host with only 'copilot' on PATH
+    # no longer falls back to copilot (it does not apply agent definitions, #323).
+    try:
+        resolve_route(role="research", requested_harness="auto", env=env_copilot,
+                      which_fn=which_only_copilot)
+        check(False, "read-only research on copilot-only host must fail closed")
+    except ReadOnlyRoutingError as e:
+        check("#323" in str(e), f"read-only research on copilot-only host fails closed ({e})")
 
     # Scenario 4: User explicitly requests 'copilot', but copilot is not on PATH.
     # Native host is claude-code. Falls back to claude-code.
@@ -569,13 +581,65 @@ def test_read_only_roles_fail_closed() -> None:
         check(exc is None and res["harness"] == "claude-code" and res["command"][0] == "claude",
               f"dispatch(rev, --harness antigravity) builds a claude command ({res and res['command'][:1]})")
 
-    # 4. Host=copilot, claude missing: fall back to the non-agy host, not to agy.
-    (h, fb, reason), err, exc = _capture_stderr(
+    # 4. Host=copilot, claude missing: copilot does not apply agent definitions
+    #    either, so a read-only role fails closed rather than landing on copilot or agy.
+    _, err, exc = _capture_stderr(
         resolve_route, "rev", "antigravity", None, env_copilot,
         lambda b: f"/usr/bin/{b}" if b in ("copilot", "agy") else None,
     )
-    check(exc is None and h == "copilot" and fb,
-          f"read-only fallback skips agy and lands on non-agy host copilot (got {h})")
+    check(isinstance(exc, ReadOnlyRoutingError),
+          f"read-only role with only copilot/agy available fails closed ({exc!r})")
+
+    # 4b. Copilot is non-enforcing: explicit --harness copilot, a team.toml route to
+    #     copilot, and native mode on a copilot host all re-route read-only roles.
+    check("copilot" in NON_ENFORCING_HARNESSES, "copilot is listed in NON_ENFORCING_HARNESSES")
+    for alias in read_only_aliases:
+        (h, fb, reason), err, exc = _capture_stderr(
+            resolve_route, alias, "copilot", None, env_cc, always_which,
+        )
+        check(exc is None and h == "claude-code" and "#323" in err and "Re-routing" in err,
+              f"explicit --harness copilot for '{alias}' re-routed to claude-code (got {h})")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        toml = Path(tmpdir) / "team.toml"
+        toml.write_text(
+            '[orchestration]\nmode = "hybrid"\n\n[orchestration.routes]\n'
+            'rev = "copilot"\nresearch = "copilot"\nsec = "copilot"\n',
+            encoding="utf-8",
+        )
+        for role in ("rev", "research", "sec"):
+            (h, fb, reason), err, exc = _capture_stderr(
+                resolve_route, role, "auto", toml, env_cc, always_which,
+            )
+            check(exc is None and h == "claude-code" and "#323" in err,
+                  f"team.toml route copilot for '{role}' re-routed to claude-code (got {h})")
+        native = Path(tmpdir) / "native.toml"
+        native.write_text('[orchestration]\nmode = "native"\n', encoding="utf-8")
+        for role in ("rev", "bulk-reader"):
+            (h, fb, reason), err, exc = _capture_stderr(
+                resolve_route, role, "auto", native, env_copilot, always_which,
+            )
+            check(exc is None and h == "claude-code",
+                  f"native mode on copilot host re-routes '{role}' to claude-code (got {h})")
+
+    # 4c. JSON policy fields separate the #323 override from a missing-CLI fallback.
+    res, _, exc = _capture_stderr(
+        dispatch, "rev", "x", "antigravity", 300.0, True, None, env_cc, always_which,
+    )
+    check(exc is None and res["policy_reroute"] is True and "#323" in (res["policy_reason"] or "")
+          and res["fallback"] is True,
+          f"policy re-route: policy_reroute=True, fallback kept True ({res and res.get('policy_reroute')})")
+    res, _, exc = _capture_stderr(
+        dispatch, "sre", "x", "antigravity", 300.0, True, None, env_cc,
+        lambda b: "/usr/bin/claude" if b == "claude" else None,
+    )
+    check(exc is None and res["fallback"] is True and res["policy_reroute"] is False
+          and res["policy_reason"] is None,
+          f"CLI-missing fallback: fallback=True, policy_reroute=False ({res and res.get('policy_reroute')})")
+    res, _, exc = _capture_stderr(
+        dispatch, "dev", "x", "claude-code", 300.0, True, None, env_cc, always_which,
+    )
+    check(exc is None and res["fallback"] is False and res["policy_reroute"] is False,
+          "no deviation: fallback=False, policy_reroute=False")
 
     # 5. No enforcing harness available (agy host, only agy on PATH): fail closed.
     for alias in ("rev", "research", "sec"):
@@ -621,12 +685,66 @@ def test_read_only_roles_fail_closed() -> None:
     )
     check(exc is None and h == "antigravity" and not fb, f"non-read-only 'sre' on agy host stays on agy (got {h})")
     warn_lines = [ln for ln in err.splitlines() if "#323" in ln]
-    check(len(warn_lines) == 1 and "does not load mARC agent definitions" in warn_lines[0],
+    check(len(warn_lines) == 1 and "does not apply mARC agent definitions" in warn_lines[0],
           f"non-read-only on agy emits one #323 warning line ({err.strip()!r})")
+
+    # Same one-line warning for a non-read-only role on copilot.
+    (h, fb, _), err, exc = _capture_stderr(
+        resolve_target_harness, "copilot", "design", "auto", None, None, always_which,
+    )
+    warn_lines = [ln for ln in err.splitlines() if "#323" in ln]
+    check(exc is None and h == "copilot" and len(warn_lines) == 1
+          and "'copilot' headless dispatch does not apply mARC agent definitions" in warn_lines[0],
+          f"non-read-only on copilot emits one #323 warning line ({err.strip()!r})")
 
     # And no such warning when nothing goes to agy.
     _, err, _ = _capture_stderr(resolve_target_harness, "claude-code", "dev", "auto", None, None, always_which)
     check("#323" not in err, "no #323 warning for claude-code dispatch")
+
+
+def test_role_normalization_fail_closed() -> None:
+    """Regression for #323 review: near-miss role spellings can't bypass the guard."""
+    print("\n--- Test: role normalization and unknown-role rejection (#323) ---")
+    always_which = lambda b: f"/usr/bin/{b}"
+    env_agy = {"ANTIGRAVITY_CONVERSATION_ID": "conv-123"}
+
+    cases = {"Rev": "rev", "REV": "rev", " rev": "rev", "@rev": "rev", "rev ": "rev",
+             "Research": "research", "REVIEW": "review", "@Security": "security"}
+    for raw, expected in cases.items():
+        check(normalize_role(raw) == expected, f"normalize_role({raw!r}) == {expected!r}")
+
+    # On an agy host (where sre/design would stay on agy), every spelling of a
+    # read-only role still resolves to claude-code, both auto and explicit agy.
+    for raw in ("Rev", "REV", " rev", "@rev", "Research", "REVIEW"):
+        for requested in ("auto", "antigravity"):
+            (h, _, _), _, exc = _capture_stderr(
+                resolve_route, raw, requested, None, env_agy, always_which,
+            )
+            check(exc is None and h == "claude-code",
+                  f"role {raw!r} ({requested}) on agy host -> claude-code (got {h}, {exc!r})")
+        res, _, exc = _capture_stderr(
+            dispatch, raw, "x", "antigravity", 300.0, True, None, env_agy, always_which,
+        )
+        check(exc is None and res["command"][:1] == ["claude"],
+              f"dispatch({raw!r}, --harness antigravity) builds a claude command")
+
+    # Unknown roles: rejected, exit 2, no subprocess started.
+    for raw in ("reviewer", "foo", "", "@", "re v"):
+        _, _, exc = _capture_stderr(resolve_target_harness, "claude-code", raw, "auto", None, None, always_which)
+        check(isinstance(exc, UnknownRoleError), f"resolve_target_harness rejects unknown role {raw!r}")
+        runner = MagicMock()
+        res, err, exc = _capture_stderr(
+            dispatch, raw, "x", "auto", 300.0, False, None, env_agy, always_which, runner,
+        )
+        check(exc is None and res["exit_code"] == 2 and res["success"] is False and res["command"] == [],
+              f"dispatch rejects unknown role {raw!r} with exit 2 (got {res and res['exit_code']})")
+        check(runner.call_count == 0, f"no subprocess for unknown role {raw!r}")
+        check("unknown role" in err, f"stderr names the unknown role {raw!r}")
+
+    code, err, exc = _capture_stderr(
+        dispatch_main, ["--role", "reviewer", "--prompt", "x", "--dry-run", "--harness", "claude-code"],
+    )
+    check(exc is None and code == 2, f"CLI main() exits 2 for unknown role (got {code}, {exc!r})")
 
 
 def main() -> int:
@@ -639,6 +757,7 @@ def main() -> int:
     test_timeout_handling()
     test_json_and_cli_interface()
     test_read_only_roles_fail_closed()
+    test_role_normalization_fail_closed()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")

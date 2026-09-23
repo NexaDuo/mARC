@@ -159,14 +159,14 @@ enabled = false
 #   - Antigravity host: dev/sec/rev/research -> claude-code, sre/design -> antigravity
 #   - Copilot host:     dev/sec/rev/research -> claude-code, sre/design -> copilot
 # If the target harness CLI binary is not installed on PATH, dispatch gracefully falls back to the native host harness.
-# Read-only roles (rev/research/sec) never run on antigravity (#323): agy headless does not load
-# mARC agent definitions, so a route sending them there is re-routed to claude-code with a warning,
-# and dispatch exits non-zero if no harness that applies the definition is available.
+# Read-only roles (rev/research/sec) never run on antigravity or copilot (#323): neither applies
+# mARC agent definitions in headless dispatch, so a route sending them there is re-routed to
+# claude-code with a warning, and dispatch exits 2 if `claude` is not on PATH.
 mode = "hybrid"
 
 [orchestration.routes]
 # Specialist-to-harness routing table. Explicit entries override the default hybrid matrix
-# (except that read-only roles are never sent to antigravity, see above).
+# (except that read-only roles are never sent to antigravity or copilot, see above).
 # Supported harnesses: "claude-code", "antigravity", "copilot", "native", "auto"
 dev = "claude-code"
 sre = "claude-code"
