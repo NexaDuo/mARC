@@ -20,6 +20,15 @@ Routing resolution:
     - Priority 3: Embedded default hybrid matrix (DEFAULT_HYBRID_MATRIX) when auto or unrouted.
     - If target CLI binary is not found on PATH: logs warning to stderr and gracefully
       falls back to host/native harness.
+    - --role is normalized (whitespace stripped, one leading '@' dropped, lowercased);
+      an unknown role is rejected with exit code 2 and nothing is dispatched (#323).
+    - Read-only roles (READ_ONLY_ROLES: rev/research/sec/bulk-reader and aliases) never
+      run on a harness that does not apply mARC agent definitions
+      (NON_ENFORCING_HARNESSES: antigravity, copilot), whatever the source of the route
+      (#323). They are re-routed to claude-code with a stderr diagnostic; if claude-code
+      is not available, dispatch fails with exit code 2 instead of running them
+      unrestricted. The JSON result's policy_reroute/policy_reason fields mark the
+      policy override separately from a missing-CLI fallback.
 """
 from __future__ import annotations
 
@@ -70,15 +79,65 @@ HARNESS_BINARIES: Dict[str, str] = {
     "copilot": "copilot",
 }
 
+# Read-only roles (canonical names, see CANONICAL_ROLES): their agent definitions
+# declare no Write/Edit tool, and the review/security gate relies on that. Issue
+# #323: in headless `-p` mode `agy --agent <name>` does not load the named agent
+# (it silently falls back to the default agent with every tool), so these roles
+# must never be dispatched to antigravity. Aliases resolve through CANONICAL_ROLES.
+READ_ONLY_ROLES = frozenset({"rev", "research", "sec", "bulk-reader"})
+
+# Harnesses whose headless dispatch path does NOT apply mARC agent definitions
+# (persona, model pin, `tools:` restriction). Issue #323: agy headless ignores
+# `--agent` (measured on agy 1.2.9); copilot is invoked as `copilot --prompt`
+# with no agent selection at all (see build_harness_command).
+NON_ENFORCING_HARNESSES = frozenset({"antigravity", "copilot"})
+
+# Preferred harness for read-only roles: claude-code resolves `--agent` and
+# enforces `tools:` even under --dangerously-skip-permissions (measured, #320/#323).
+READ_ONLY_PREFERRED_HARNESS = "claude-code"
+
+
+class ReadOnlyRoutingError(RuntimeError):
+    """No harness that applies agent definitions is available for a read-only role (#323)."""
+
+
+class UnknownRoleError(ValueError):
+    """The requested role is not a known mARC specialist role or alias (#323)."""
+
+
+def normalize_role(role: str) -> str:
+    """Normalize a requested role and fail closed on unknown names (#323).
+
+    Strips surrounding whitespace, drops one leading '@' (channel handle form),
+    lowercases, then requires the result to be a known role or alias. A near-miss
+    spelling of a read-only role (e.g. 'REV', '@rev') must never bypass the
+    read-only routing guard, and an unknown role has no agent definition on any
+    harness, so it is rejected instead of dispatched.
+    """
+    norm = (role or "").strip()
+    if norm.startswith("@"):
+        norm = norm[1:]
+    norm = norm.lower()
+    if norm not in CANONICAL_ROLES:
+        known = ", ".join(sorted(CANONICAL_ROLES))
+        raise UnknownRoleError(
+            f"unknown role {role!r}; expected one of: {known}. Refusing to dispatch (issue #323)."
+        )
+    return norm
+
+
 DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
+    # rev/review/research route to claude-code in EVERY host row (issue #323):
+    # agy headless ignores `--agent`, so routing them to antigravity ran the
+    # unrestricted default agent under the reviewer's name.
     "claude-code": {
         "dev": "claude-code",
         "engineer": "claude-code",
         "sec": "claude-code",
         "security": "claude-code",
-        "rev": "antigravity",
-        "review": "antigravity",
-        "research": "antigravity",
+        "rev": "claude-code",
+        "review": "claude-code",
+        "research": "claude-code",
         "sre": "claude-code",
         "design": "claude-code",
         # Pinned to claude-code regardless of host (issue #320/#323 review):
@@ -96,9 +155,9 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "engineer": "claude-code",
         "sec": "claude-code",
         "security": "claude-code",
-        "rev": "antigravity",
-        "review": "antigravity",
-        "research": "antigravity",
+        "rev": "claude-code",
+        "review": "claude-code",
+        "research": "claude-code",
         "sre": "antigravity",
         "design": "antigravity",
         "bulk-reader": "claude-code",
@@ -108,9 +167,9 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "engineer": "claude-code",
         "sec": "claude-code",
         "security": "claude-code",
-        "rev": "antigravity",
-        "review": "antigravity",
-        "research": "antigravity",
+        "rev": "claude-code",
+        "review": "claude-code",
+        "research": "claude-code",
         "sre": "copilot",
         "design": "copilot",
         "bulk-reader": "claude-code",
@@ -211,10 +270,15 @@ def detect_native_harness(
 
 def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
     """Build CLI execution command for target harness."""
-    mapped_agent = ROLE_TO_AGENT.get(role, role)
+    role = normalize_role(role)
+    mapped_agent = ROLE_TO_AGENT[role]
     if harness == "claude-code":
         return ["claude", "--dangerously-skip-permissions", "--agent", mapped_agent, "-p", prompt]
     elif harness == "antigravity":
+        # --dangerously-skip-permissions stays unconditional here for now; whether
+        # it should become opt-in per call site is a separate decision (#323).
+        # Note agy headless does not load `--agent` either (#323), so this flag
+        # applies to the stock default agent, not the named mARC specialist.
         return ["agy", "--dangerously-skip-permissions", "--agent", mapped_agent, "-p", prompt]
     elif harness == "copilot":
         return ["copilot", "--prompt", prompt]
@@ -230,6 +294,25 @@ def resolve_target_harness(
     toml_mode: Optional[str] = None,
     cli_checker: Optional[Callable[[str], Any]] = None,
 ) -> Tuple[str, bool, Optional[str]]:
+    """Backward-compatible tuple form of resolve_target_harness_detailed (origin: #241).
+
+    Returns:
+        (resolved_harness, fallback_occurred, fallback_reason)
+    """
+    d = resolve_target_harness_detailed(
+        host_harness, role, explicit_harness, toml_routes, toml_mode, cli_checker,
+    )
+    return d["harness"], d["fallback"], d["fallback_reason"]
+
+
+def resolve_target_harness_detailed(
+    host_harness: str,
+    role: str,
+    explicit_harness: Optional[str] = "auto",
+    toml_routes: Optional[Dict[str, str]] = None,
+    toml_mode: Optional[str] = None,
+    cli_checker: Optional[Callable[[str], Any]] = None,
+) -> Dict[str, Any]:
     """Resolve target harness based on priority hierarchy and check CLI availability (origin: #241).
 
     Priorities:
@@ -240,10 +323,21 @@ def resolve_target_harness(
     Fallback:
         If preferred target CLI is not available on PATH, gracefully falls back to host_harness (native).
 
-    Returns:
-        (resolved_harness, fallback_occurred, fallback_reason)
+    Read-only roles (#323) never resolve to a NON_ENFORCING_HARNESSES entry:
+    they are re-routed to claude-code, and ReadOnlyRoutingError is raised when
+    no enforcing harness is available. Unknown roles raise UnknownRoleError.
+
+    Returns a dict:
+        harness          resolved harness
+        fallback         True on any deviation from the requested route (CLI missing
+                         OR #323 policy re-route); kept for backward compatibility
+        fallback_reason  combined human-readable reason (or None)
+        policy_reroute   True only when the #323 read-only policy overrode the route
+        policy_reason    the #323 policy reason (or None)
+        cli_fallback     True only when a missing CLI binary forced a fallback
     """
-    canonical_role = CANONICAL_ROLES.get(role, role)
+    role = normalize_role(role)
+    canonical_role = CANONICAL_ROLES[role]
 
     # Priority 1: Explicit --harness argument
     if explicit_harness and explicit_harness != "auto":
@@ -269,6 +363,22 @@ def resolve_target_harness(
     if target_harness not in HARNESS_BINARIES:
         target_harness = "claude-code"
 
+    # Fail closed for read-only roles (#323): no source (explicit --harness,
+    # team.toml route, native mode, matrix) may land them on a harness that
+    # does not apply the agent definition.
+    read_only = canonical_role in READ_ONLY_ROLES
+    reroute_reason: Optional[str] = None
+    if read_only and target_harness in NON_ENFORCING_HARNESSES:
+        reroute_reason = (
+            f"role '{role}' is read-only but harness '{target_harness}' does not apply mARC "
+            f"agent definitions in headless dispatch (issue #323)"
+        )
+        sys.stderr.write(
+            f"[mARC dispatch] Warning: {reroute_reason}. "
+            f"Re-routing to '{READ_ONLY_PREFERRED_HARNESS}'.\n"
+        )
+        target_harness = READ_ONLY_PREFERRED_HARNESS
+
     def _is_available(h_or_b: str) -> bool:
         b = HARNESS_BINARIES.get(h_or_b, h_or_b)
         if cli_checker is None:
@@ -287,18 +397,60 @@ def resolve_target_harness(
     # Check target CLI binary availability
     expected_bin = HARNESS_BINARIES.get(target_harness, target_harness)
     if not _is_available(target_harness):
-        fallback_harness = host_harness
-        if not _is_available(fallback_harness):
-            for h in HARNESS_BINARIES:
-                if _is_available(h):
-                    fallback_harness = h
-                    break
-
         fallback_reason = f"CLI binary '{expected_bin}' for harness '{target_harness}' not found on PATH"
-        sys.stderr.write(f"[mARC dispatch] Warning: {fallback_reason}. Falling back to '{fallback_harness}'.\n")
-        return fallback_harness, True, fallback_reason
+        if read_only:
+            # Only fall back to a harness that applies agent definitions; never
+            # to a NON_ENFORCING_HARNESSES entry, even when it is the host (#323).
+            candidates = [
+                h for h in (READ_ONLY_PREFERRED_HARNESS, host_harness)
+                if h not in NON_ENFORCING_HARNESSES
+            ]
+            ro_fallback = next((h for h in candidates if _is_available(h)), None)
+            if ro_fallback is None:
+                raise ReadOnlyRoutingError(
+                    f"{fallback_reason}, and no harness that enforces mARC agent definitions "
+                    f"is available for read-only role '{role}'. Refusing to dispatch it "
+                    f"unrestricted (issue #323)."
+                )
+            fallback_harness = ro_fallback
+        else:
+            fallback_harness = host_harness
+            if not _is_available(fallback_harness):
+                for h in HARNESS_BINARIES:
+                    if _is_available(h):
+                        fallback_harness = h
+                        break
 
-    return target_harness, False, None
+        sys.stderr.write(f"[mARC dispatch] Warning: {fallback_reason}. Falling back to '{fallback_harness}'.\n")
+        _warn_if_unenforced(fallback_harness)
+        combined = f"{reroute_reason}; {fallback_reason}" if reroute_reason else fallback_reason
+        return {
+            "harness": fallback_harness,
+            "fallback": True,
+            "fallback_reason": combined,
+            "policy_reroute": reroute_reason is not None,
+            "policy_reason": reroute_reason,
+            "cli_fallback": True,
+        }
+
+    _warn_if_unenforced(target_harness)
+    return {
+        "harness": target_harness,
+        "fallback": reroute_reason is not None,
+        "fallback_reason": reroute_reason,
+        "policy_reroute": reroute_reason is not None,
+        "policy_reason": reroute_reason,
+        "cli_fallback": False,
+    }
+
+
+def _warn_if_unenforced(harness: str) -> None:
+    """One-line stderr warning when dispatching to a harness that ignores agent definitions."""
+    if harness in NON_ENFORCING_HARNESSES:
+        sys.stderr.write(
+            f"[mARC dispatch] Warning: '{harness}' headless dispatch does not apply mARC agent "
+            f"definitions (persona/model/tools not applied, issue #323).\n"
+        )
 
 
 def resolve_route(
@@ -310,10 +462,23 @@ def resolve_route(
 ) -> Tuple[str, bool, Optional[str]]:
     """Resolve target harness and apply fallback if CLI binary is unavailable.
 
-    Delegates to resolve_target_harness with host detection and team.toml config.
-
     Returns:
         (resolved_harness, fallback_occurred, fallback_reason)
+    """
+    d = resolve_route_detailed(role, requested_harness, team_toml_path, env, which_fn)
+    return d["harness"], d["fallback"], d["fallback_reason"]
+
+
+def resolve_route_detailed(
+    role: str,
+    requested_harness: str = "auto",
+    team_toml_path: Optional[Path] = None,
+    env: Optional[Dict[str, str]] = None,
+    which_fn: Callable[[str], Optional[str]] = shutil.which,
+) -> Dict[str, Any]:
+    """Like resolve_route, but returns resolve_target_harness_detailed's dict.
+
+    Delegates to resolve_target_harness_detailed with host detection and team.toml config.
     """
     host_harness = detect_native_harness(env=env, which_fn=which_fn)
     config = parse_toml(team_toml_path)
@@ -321,7 +486,7 @@ def resolve_route(
     toml_mode = orchestration.get("mode")
     toml_routes = orchestration.get("routes")
 
-    return resolve_target_harness(
+    return resolve_target_harness_detailed(
         host_harness=host_harness,
         role=role,
         explicit_harness=requested_harness,
@@ -344,26 +509,58 @@ def dispatch(
 ) -> Dict[str, Any]:
     """Resolve and dispatch subagent across harnesses."""
     toml_path = find_team_toml(team_toml)
-    resolved_harness, fallback, fallback_reason = resolve_route(
-        role=role,
-        requested_harness=harness,
-        team_toml_path=toml_path,
-        env=env,
-        which_fn=which_fn,
-    )
+    try:
+        role = normalize_role(role)
+        route = resolve_route_detailed(
+            role=role,
+            requested_harness=harness,
+            team_toml_path=toml_path,
+            env=env,
+            which_fn=which_fn,
+        )
+    except (ReadOnlyRoutingError, UnknownRoleError) as e:
+        # Fail closed (#323): never dispatch a read-only role unrestricted, and
+        # never dispatch an unknown role.
+        err_msg = f"[mARC dispatch] Error: {e}"
+        sys.stderr.write(err_msg + "\n")
+        return {
+            "role": role,
+            "mapped_agent": ROLE_TO_AGENT.get(role),
+            "requested_harness": harness,
+            "harness": None,
+            "command": [],
+            "command_str": "",
+            "fallback": False,
+            "fallback_reason": None,
+            "policy_reroute": False,
+            "policy_reason": None,
+            "dry_run": dry_run,
+            "exit_code": 2,
+            "stdout": "",
+            "stderr": err_msg,
+            "success": False,
+            "error": str(e),
+            "duration_sec": 0.0,
+        }
 
+    resolved_harness = route["harness"]
     cmd = build_harness_command(resolved_harness, role, prompt)
     cmd_str = shlex.join(cmd)
 
     result: Dict[str, Any] = {
         "role": role,
-        "mapped_agent": ROLE_TO_AGENT.get(role, role),
+        "mapped_agent": ROLE_TO_AGENT[role],
         "requested_harness": harness,
         "harness": resolved_harness,
         "command": cmd,
         "command_str": cmd_str,
-        "fallback": fallback,
-        "fallback_reason": fallback_reason,
+        # `fallback` keeps its original meaning for existing consumers (any
+        # deviation from the requested route); `policy_reroute`/`policy_reason`
+        # isolate the #323 read-only override from a missing-CLI fallback.
+        "fallback": route["fallback"],
+        "fallback_reason": route["fallback_reason"],
+        "policy_reroute": route["policy_reroute"],
+        "policy_reason": route["policy_reason"],
         "dry_run": dry_run,
     }
 

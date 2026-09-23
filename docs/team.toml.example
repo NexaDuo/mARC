@@ -150,26 +150,30 @@ enabled = false
 # bulk_reader = true
 # bulk_reader_timeout = 20
 
-# --- Cross-harness orchestration & routing (optional, origin: #239, #241) ---
+# --- Cross-harness orchestration & routing (optional, origin: #239, #241, #323) ---
 [orchestration]
 # Dispatch mode: "native" (default, dispatch within current harness) or "hybrid" (route per specialist role).
 # When mode is "hybrid" (or routes are omitted/set to "auto"), dispatch_agent.py applies
 # the embedded default hybrid specialization matrix:
-#   - Claude Code host: dev/sec/sre/design -> claude-code, rev/research -> antigravity
-#   - Antigravity host: dev/sec -> claude-code, rev/research/sre/design -> antigravity
-#   - Copilot host:     dev/sec -> claude-code, rev/research -> antigravity, sre/design -> copilot
+#   - Claude Code host: dev/sec/rev/research/sre/design -> claude-code
+#   - Antigravity host: dev/sec/rev/research -> claude-code, sre/design -> antigravity
+#   - Copilot host:     dev/sec/rev/research -> claude-code, sre/design -> copilot
 # If the target harness CLI binary is not installed on PATH, dispatch gracefully falls back to the native host harness.
+# Read-only roles (rev/research/sec) never run on antigravity or copilot (#323): neither applies
+# mARC agent definitions in headless dispatch, so a route sending them there is re-routed to
+# claude-code with a warning, and dispatch exits 2 if `claude` is not on PATH.
 mode = "hybrid"
 
 [orchestration.routes]
-# Specialist-to-harness routing table. Explicit entries override the default hybrid matrix.
+# Specialist-to-harness routing table. Explicit entries override the default hybrid matrix
+# (except that read-only roles are never sent to antigravity or copilot, see above).
 # Supported harnesses: "claude-code", "antigravity", "copilot", "native", "auto"
 dev = "claude-code"
 sre = "claude-code"
 design = "antigravity"
 sec = "claude-code"
 rev = "claude-code"
-research = "antigravity"
+research = "claude-code"
 
 # --- Release-phase facts (what "done" requires in THIS repo) ---
 [release]
