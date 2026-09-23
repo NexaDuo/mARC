@@ -12,6 +12,7 @@ Feeds `dispatch_agent.py` synthetic fixtures and asserts:
   * CLI availability checking and graceful fallback to host harness
   * Timeout handling and error reporting
   * Dry-run mode and JSON serialization contract
+  * Read-only roles never route to antigravity; fail closed when no enforcing harness (#323)
 """
 from __future__ import annotations
 
@@ -32,7 +33,9 @@ from dispatch_agent import (  # noqa: E402
     CANONICAL_ROLES,
     DEFAULT_HYBRID_MATRIX,
     HARNESS_BINARIES,
+    READ_ONLY_ROLES,
     ROLE_TO_AGENT,
+    ReadOnlyRoutingError,
     build_harness_command,
     detect_native_harness,
     dispatch,
@@ -107,9 +110,9 @@ def test_default_hybrid_matrix() -> None:
             "engineer": "claude-code",
             "sec": "claude-code",
             "security": "claude-code",
-            "rev": "antigravity",
-            "review": "antigravity",
-            "research": "antigravity",
+            "rev": "claude-code",
+            "review": "claude-code",
+            "research": "claude-code",
             "sre": "claude-code",
             "design": "claude-code",
         },
@@ -118,9 +121,9 @@ def test_default_hybrid_matrix() -> None:
             "engineer": "claude-code",
             "sec": "claude-code",
             "security": "claude-code",
-            "rev": "antigravity",
-            "review": "antigravity",
-            "research": "antigravity",
+            "rev": "claude-code",
+            "review": "claude-code",
+            "research": "claude-code",
             "sre": "antigravity",
             "design": "antigravity",
         },
@@ -129,9 +132,9 @@ def test_default_hybrid_matrix() -> None:
             "engineer": "claude-code",
             "sec": "claude-code",
             "security": "claude-code",
-            "rev": "antigravity",
-            "review": "antigravity",
-            "research": "antigravity",
+            "rev": "claude-code",
+            "review": "claude-code",
+            "research": "claude-code",
             "sre": "copilot",
             "design": "copilot",
         },
@@ -197,9 +200,9 @@ sec = "copilot"
         check(harness == "antigravity" and not fallback, f"hybrid user route 'sre' -> antigravity (got {harness})")
 
         # Unrouted role in hybrid mode falls back to DEFAULT_HYBRID_MATRIX
-        # On claude-code host: 'rev' -> antigravity, 'design' -> claude-code
+        # On claude-code host: 'rev' -> claude-code (#323), 'design' -> claude-code
         harness, fallback, reason = resolve_route("rev", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
-        check(harness == "antigravity" and not fallback, f"hybrid unrouted 'rev' on claude-code -> default matrix antigravity (got {harness})")
+        check(harness == "claude-code" and not fallback, f"hybrid unrouted 'rev' on claude-code -> default matrix claude-code (got {harness})")
 
         harness, fallback, reason = resolve_route("design", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
         check(harness == "claude-code" and not fallback, f"hybrid unrouted 'design' on claude-code -> default matrix claude-code (got {harness})")
@@ -239,10 +242,10 @@ rev = "antigravity"
         check(harness == "claude-code", f"empty team.toml (claude-code host) for dev -> claude-code (got {harness})")
 
         harness, fallback, reason = resolve_route("rev", "auto", empty_toml, env=dummy_env_cc, which_fn=always_which)
-        check(harness == "antigravity", f"empty team.toml (claude-code host) for rev -> antigravity (got {harness})")
+        check(harness == "claude-code", f"empty team.toml (claude-code host) for rev -> claude-code (got {harness})")
 
         harness, fallback, reason = resolve_route("research", "auto", empty_toml, env=dummy_env_cc, which_fn=always_which)
-        check(harness == "antigravity", f"empty team.toml (claude-code host) for research -> antigravity (got {harness})")
+        check(harness == "claude-code", f"empty team.toml (claude-code host) for research -> claude-code (got {harness})")
 
         # Antigravity host
         harness, fallback, reason = resolve_route("dev", "auto", empty_toml, env=dummy_env_agy, which_fn=always_which)
@@ -256,7 +259,7 @@ rev = "antigravity"
         check(harness == "claude-code", f"empty team.toml (copilot host) for dev -> claude-code (got {harness})")
 
         harness, fallback, reason = resolve_route("rev", "auto", empty_toml, env=dummy_env_copilot, which_fn=always_which)
-        check(harness == "antigravity", f"empty team.toml (copilot host) for rev -> antigravity (got {harness})")
+        check(harness == "claude-code", f"empty team.toml (copilot host) for rev -> claude-code (got {harness})")
 
         harness, fallback, reason = resolve_route("sre", "auto", empty_toml, env=dummy_env_copilot, which_fn=always_which)
         check(harness == "copilot", f"empty team.toml (copilot host) for sre -> copilot (got {harness})")
@@ -312,16 +315,17 @@ def test_cli_availability_and_fallback() -> None:
     def which_only_copilot(b):
         return "/usr/bin/copilot" if b == "copilot" else None
 
-    # Scenario 1: On claude-code host, default matrix routes 'rev' -> antigravity ('agy').
+    # Scenario 1: On claude-code host, 'sre' is explicitly requested on antigravity ('agy').
     # But only 'claude' CLI is available. Falls back to host harness (claude-code).
+    # (Read-only roles no longer route to agy at all, #323.)
     env_cc = {"CLAUDE_PLUGIN_ROOT": "/plugin"}
     harness, fallback, reason = resolve_route(
-        role="rev",
-        requested_harness="auto",
+        role="sre",
+        requested_harness="antigravity",
         env=env_cc,
         which_fn=which_only_claude,
     )
-    check(harness == "claude-code", f"matrix rev fallback resolved to claude-code (got {harness})")
+    check(harness == "claude-code", f"explicit agy sre fallback resolved to claude-code (got {harness})")
     check(fallback is True, "fallback flag is True")
     check(reason is not None and "agy" in reason, f"fallback reason mentions agy ({reason})")
 
@@ -338,7 +342,7 @@ def test_cli_availability_and_fallback() -> None:
     check(fallback is True, "fallback flag is True")
     check(reason is not None and "claude" in reason, f"fallback reason mentions claude ({reason})")
 
-    # Scenario 3: On copilot host, default matrix routes 'research' -> antigravity ('agy').
+    # Scenario 3: On copilot host, default matrix routes 'research' -> claude-code (#323).
     # But only 'copilot' CLI is available. Falls back to host harness (copilot).
     env_copilot = {"COPILOT_PLUGIN_DATA": "/data"}
     harness, fallback, reason = resolve_route(
@@ -349,7 +353,7 @@ def test_cli_availability_and_fallback() -> None:
     )
     check(harness == "copilot", f"matrix research fallback on copilot host resolved to copilot (got {harness})")
     check(fallback is True, "fallback flag is True")
-    check(reason is not None and "agy" in reason, f"fallback reason mentions agy ({reason})")
+    check(reason is not None and "claude" in reason, f"fallback reason mentions claude ({reason})")
 
     # Scenario 4: User explicitly requests 'copilot', but copilot is not on PATH.
     # Native host is claude-code. Falls back to claude-code.
@@ -365,9 +369,9 @@ def test_cli_availability_and_fallback() -> None:
 
     # Verify command builder generates fallback command in dispatch()
     res = dispatch(
-        role="rev",
-        prompt="Review PR #123",
-        harness="auto",
+        role="sre",
+        prompt="Check deploy for PR #123",
+        harness="antigravity",
         dry_run=True,
         env=env_cc,
         which_fn=which_only_claude,
@@ -467,6 +471,164 @@ def test_json_and_cli_interface() -> None:
         check(False, f"CLI did not emit valid JSON: {e}")
 
 
+def _capture_stderr(fn, *args, **kwargs):
+    """Run fn and return (result, stderr_text, exception_or_None)."""
+    buf = io.StringIO()
+    old = sys.stderr
+    sys.stderr = buf
+    exc = None
+    result = None
+    try:
+        result = fn(*args, **kwargs)
+    except Exception as e:  # noqa: BLE001 — surfaced to the caller for assertions
+        exc = e
+    finally:
+        sys.stderr = old
+    return result, buf.getvalue(), exc
+
+
+def test_read_only_roles_fail_closed() -> None:
+    """Regression for #323: read-only roles never dispatch to antigravity."""
+    print("\n--- Test: read-only roles never route to antigravity (#323) ---")
+    always_which = lambda b: f"/usr/bin/{b}"
+
+    def which_only_agy(b):
+        return "/usr/bin/agy" if b == "agy" else None
+
+    def which_only_copilot(b):
+        return "/usr/bin/copilot" if b == "copilot" else None
+
+    env_cc = {"CLAUDE_PLUGIN_ROOT": "/plugin"}
+    env_agy = {"ANTIGRAVITY_CONVERSATION_ID": "conv-123"}
+    env_copilot = {"COPILOT_PLUGIN_DATA": "/data"}
+
+    # The constant names the canonical read-only set; aliases resolve into it.
+    check(
+        {"rev", "research", "sec", "bulk-reader"} <= set(READ_ONLY_ROLES),
+        f"READ_ONLY_ROLES covers rev/research/sec/bulk-reader ({sorted(READ_ONLY_ROLES)})",
+    )
+    read_only_aliases = [r for r in CANONICAL_ROLES if CANONICAL_ROLES[r] in READ_ONLY_ROLES]
+    for alias in ("rev", "review", "research", "sec", "security", "bulk-reader"):
+        check(alias in read_only_aliases, f"'{alias}' resolves to a read-only role")
+
+    # 1. The matrix routes every read-only role/alias to claude-code in EVERY host row,
+    #    both in the data and through the real routing function.
+    for host in DEFAULT_HYBRID_MATRIX:
+        for alias in read_only_aliases:
+            check(
+                DEFAULT_HYBRID_MATRIX[host].get(alias) == "claude-code",
+                f"DEFAULT_HYBRID_MATRIX['{host}']['{alias}'] == 'claude-code'",
+            )
+            (h, fb, _), _, exc = _capture_stderr(
+                resolve_target_harness, host, alias, "auto", None, None, always_which,
+            )
+            check(exc is None and h == "claude-code" and not fb,
+                  f"auto route for read-only '{alias}' on host '{host}' -> claude-code (got {h})")
+
+    # 2. Explicit --harness antigravity for a read-only role is re-routed, with a #323 diagnostic.
+    for alias in read_only_aliases:
+        (h, fb, reason), err, exc = _capture_stderr(
+            resolve_route, alias, "antigravity", None, env_cc, always_which,
+        )
+        check(exc is None and h == "claude-code",
+              f"explicit --harness antigravity for '{alias}' re-routed to claude-code (got {h})")
+        check(fb is True and reason is not None and "#323" in reason,
+              f"re-route of '{alias}' flagged with #323 reason ({reason})")
+        check("#323" in err and "Re-routing" in err,
+              f"stderr diagnostic cites #323 for '{alias}' ({err.strip()!r})")
+
+    # 3. team.toml route to antigravity for a read-only role is re-routed too.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        toml = Path(tmpdir) / "team.toml"
+        toml.write_text(
+            '[orchestration]\nmode = "hybrid"\n\n[orchestration.routes]\n'
+            'rev = "antigravity"\nresearch = "antigravity"\nsec = "antigravity"\n'
+            'sre = "antigravity"\n',
+            encoding="utf-8",
+        )
+        for role in ("rev", "review", "research", "sec", "security"):
+            (h, fb, reason), err, exc = _capture_stderr(
+                resolve_route, role, "auto", toml, env_cc, always_which,
+            )
+            check(exc is None and h == "claude-code" and "#323" in err,
+                  f"team.toml route antigravity for '{role}' re-routed to claude-code (got {h})")
+
+        # Native mode on an antigravity host would also land rev on agy: re-routed.
+        native = Path(tmpdir) / "native.toml"
+        native.write_text('[orchestration]\nmode = "native"\n', encoding="utf-8")
+        (h, fb, reason), err, exc = _capture_stderr(
+            resolve_route, "rev", "auto", native, env_agy, always_which,
+        )
+        check(exc is None and h == "claude-code",
+              f"native mode on agy host re-routes 'rev' to claude-code (got {h})")
+
+        # The full dispatch() path produces a claude command, never agy.
+        res, err, exc = _capture_stderr(
+            dispatch, "rev", "Review PR #1", "antigravity", 300.0, True, str(toml), env_cc, always_which,
+        )
+        check(exc is None and res["harness"] == "claude-code" and res["command"][0] == "claude",
+              f"dispatch(rev, --harness antigravity) builds a claude command ({res and res['command'][:1]})")
+
+    # 4. Host=copilot, claude missing: fall back to the non-agy host, not to agy.
+    (h, fb, reason), err, exc = _capture_stderr(
+        resolve_route, "rev", "antigravity", None, env_copilot,
+        lambda b: f"/usr/bin/{b}" if b in ("copilot", "agy") else None,
+    )
+    check(exc is None and h == "copilot" and fb,
+          f"read-only fallback skips agy and lands on non-agy host copilot (got {h})")
+
+    # 5. No enforcing harness available (agy host, only agy on PATH): fail closed.
+    for alias in ("rev", "research", "sec"):
+        _, err, exc = _capture_stderr(resolve_route, alias, "auto", None, env_agy, which_only_agy)
+        check(isinstance(exc, ReadOnlyRoutingError) and "#323" in str(exc),
+              f"no enforcing harness for '{alias}' raises ReadOnlyRoutingError ({exc!r})")
+
+    runner = MagicMock()
+    res, err, exc = _capture_stderr(
+        dispatch, "rev", "Review PR #1", "auto", 300.0, False, None, env_agy, which_only_agy, runner,
+    )
+    check(exc is None and res["exit_code"] != 0 and res["success"] is False,
+          f"dispatch fails closed with non-zero exit (got {res and res['exit_code']})")
+    check(runner.call_count == 0, "no subprocess launched when failing closed")
+    check("#323" in err, "fail-closed error on stderr cites #323")
+
+    # main() (the CLI entrypoint) returns non-zero too.
+    old_env = dict(os.environ)
+    old_path = os.environ.get("PATH", "")
+    with tempfile.TemporaryDirectory() as bindir:
+        fake_agy = Path(bindir) / "agy"
+        fake_agy.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_agy.chmod(0o755)
+        try:
+            for k in ("CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "COPILOT_PLUGIN_DATA",
+                      "COPILOT_PROJECT_DIR"):
+                os.environ.pop(k, None)
+            os.environ["ANTIGRAVITY_CONVERSATION_ID"] = "conv-123"
+            os.environ["PATH"] = bindir
+            code, err, exc = _capture_stderr(
+                dispatch_main, ["--role", "research", "--prompt", "x", "--dry-run",
+                                "--team-toml", os.path.join(bindir, "missing.toml")],
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+            os.environ["PATH"] = old_path
+    check(exc is None and code == 2, f"CLI main() exits 2 when no enforcing harness (got {code}, {exc!r})")
+
+    # 6. Non-read-only role on agy: still routed there, with a one-line #323 warning.
+    (h, fb, _), err, exc = _capture_stderr(
+        resolve_target_harness, "antigravity", "sre", "auto", None, None, always_which,
+    )
+    check(exc is None and h == "antigravity" and not fb, f"non-read-only 'sre' on agy host stays on agy (got {h})")
+    warn_lines = [ln for ln in err.splitlines() if "#323" in ln]
+    check(len(warn_lines) == 1 and "does not load mARC agent definitions" in warn_lines[0],
+          f"non-read-only on agy emits one #323 warning line ({err.strip()!r})")
+
+    # And no such warning when nothing goes to agy.
+    _, err, _ = _capture_stderr(resolve_target_harness, "claude-code", "dev", "auto", None, None, always_which)
+    check("#323" not in err, "no #323 warning for claude-code dispatch")
+
+
 def main() -> int:
     test_command_generation()
     test_default_hybrid_matrix()
@@ -476,6 +638,7 @@ def main() -> int:
     test_dry_run_and_execution()
     test_timeout_handling()
     test_json_and_cli_interface()
+    test_read_only_roles_fail_closed()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")

@@ -328,7 +328,7 @@ Include in each prompt: issue number + URL, full acceptance criteria, affected
 files, constraints.
 
 #### Cross-harness dispatch & poly-model routing (optional)
-When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is desired), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses. By default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec` to `claude-code`, `@rev`/`@research` to `antigravity`, and `@sre`/`@design` to the native host harness:
+When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is desired), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses. By default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness. Read-only roles (`@rev`/`@research`/`@sec`) are never dispatched to `antigravity`, since `agy` headless does not load mARC agent definitions (#323):
 ```bash
 python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/dispatch_agent.py" \
   --role "<dev|sre|design|sec|rev|research>" \
@@ -345,15 +345,21 @@ cheapest lever on token budget:
   is unavailable, dispatch automatically falls back to native/available harness
   with a diagnostic warning — routing preferences never block task execution.
   (origin: #239 · 2026-09-06)
-- **Default hybrid specialization matrix routes specialists by capability and falls back gracefully.**
-  When routing is `auto` or unconfigured in `team.toml`, `dispatch_agent.py` applies
-  the default hybrid specialization matrix: `@dev` and `@sec` route to `claude-code`,
-  `@rev` and `@research` route to `antigravity` (large-context review/survey), and
-  `@sre`/`@design` route to the native host harness (`claude-code` on Claude Code,
-  `antigravity` on Antigravity, `copilot` on Copilot). If a target CLI binary is
-  not found on PATH, dispatch automatically and gracefully falls back to the native
-  host harness with a diagnostic warning, guaranteeing non-blocking execution.
-  (origin: #241 · 2026-09-06)
+- **Default hybrid specialization matrix routes specialists by capability; read-only
+  roles never go to `antigravity` — superseded from "`@rev`/`@research` route to
+  `antigravity`".** (origin: #241 · 2026-09-06, superseded — `@rev`/`@research` were
+  routed to `antigravity` for large-context review/survey) When routing is `auto` or
+  unconfigured in `team.toml`, `dispatch_agent.py` routes `@dev`, `@sec`, `@rev` and
+  `@research` to `claude-code` from every host, and `@sre`/`@design` to the native
+  host harness (`claude-code` on Claude Code, `antigravity` on Antigravity, `copilot`
+  on Copilot). `agy` headless ignores `--agent` and runs its default agent with all
+  tools, so read-only roles (`READ_ONLY_ROLES`) fail closed: an explicit or
+  `team.toml` route to `antigravity` is re-routed to `claude-code` with a warning,
+  and with no enforcing harness available dispatch exits non-zero. Other roles still
+  sent to `antigravity` get a one-line warning that their definition is not applied.
+  If a target CLI is missing from PATH, dispatch falls back to the native host with a
+  diagnostic warning (never to `antigravity` for read-only roles).
+  (origin: #323 · 2026-09-23)
 - **`opus` is the specialist default; `haiku` is for mechanical/bulk work —
   superseded from the earlier "sonnet by default" rule.** (origin: #69 ·
   2026-07-10, superseded — `sonnet` by default was the original rule; origin:

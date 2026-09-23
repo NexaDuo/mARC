@@ -8,6 +8,35 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.9.23] - 2026-09-23
+
+Security fix (#323): `dispatch_agent.py` no longer routes read-only roles to
+Antigravity. Research on agy 1.2.9 showed that in headless `-p` mode
+`agy --agent <name>` never loads the named agent. It logs `Agent "<name>" not
+found, falling back to default`, exits 0, and runs the stock default agent with
+every tool. So `@rev`/`@research` dispatched there ran as an unrestricted agent
+under the reviewer's name (no persona, no model pin, no tool restriction), and
+no headless agy primitive (`--sandbox`, `--mode plan`, frontmatter) gives a real
+per-agent capability boundary.
+
+- `DEFAULT_HYBRID_MATRIX` now routes `rev`/`review`/`research` to `claude-code`
+  in every host row (Claude Code, Antigravity, Copilot).
+- New `READ_ONLY_ROLES` constant (`rev`, `research`, `sec`, `bulk-reader`, plus
+  aliases). These roles fail closed: an explicit `--harness antigravity`, a
+  `team.toml` `[orchestration.routes]` entry, or native mode on an Antigravity
+  host is re-routed to `claude-code` (or a non-Antigravity host) with a stderr
+  diagnostic citing #323. If no such harness is available, dispatch exits 2
+  instead of running the role unrestricted.
+- Non-read-only roles still routed to Antigravity (`@sre`/`@design` on an
+  Antigravity host) get a one-line stderr warning that their agent definition
+  is not applied. Their routing is unchanged.
+- `core/skills/tech-lead/SKILL.md`'s governed routing rule is superseded
+  (origin #241 kept with a superseded note, new tag
+  `(origin: #323 · 2026-09-23)`); `docs/team.toml.example` updated to match.
+
+The unconditional `--dangerously-skip-permissions` on the agy path is unchanged
+here (separate decision, now annotated in code).
+
 ## [26.9.22.1] - 2026-09-22
 
 Extends #331's per-role `@sec` opus pin to the rest of the specialist bench
