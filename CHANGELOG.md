@@ -8,6 +8,12 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.10.3] - 2026-10-03
+
+### Fixed
+
+- Security: Withdrawal operator comparison is explicitly case-folded to match existing tie-break logic. Both `## @sec review` and `## @rev review` markers now strictly require `OWNER`, `MEMBER`, or `COLLABORATOR` association, and must include a correlated `reviewer: <harness>/<dispatch-id>` line plus the `HEAD SHA` to prevent forgery from compromised untrusted accounts (#216).
+
 ## [26.10.2] - 2026-10-02
 
 ### Fixed

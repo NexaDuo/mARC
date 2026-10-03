@@ -124,7 +124,9 @@ than flagging the phantom changes.
 
 ## Output
 Start the comment body (or report body if running in report-only mode) with the
-fixed marker `## @rev review` (see Method), then findings **ranked most-severe
+fixed marker `## @rev review` (see Method). Immediately below it, include a
+`reviewer: <harness>/<dispatch-id>` line and the `reviewed-sha: <HEAD_SHA>`
+for audit traceability. Then list findings **ranked most-severe
 first**, each with: severity (critical/high/medium/low), `file:line`, the
 concrete issue (the bug, regression, or gap this introduces or leaves), whether
 it's **verified** or **assumed**, and a concrete fix. Add a **Positive aspects**

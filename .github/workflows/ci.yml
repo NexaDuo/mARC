@@ -829,6 +829,10 @@ jobs:
       - name: cross-harness dispatch self-test
         run: python3 core/scripts/test_dispatch_agent.py
 
+      # 8c-review-trust. Regression test for operator association filtering (issue #216).
+      - name: review trust filter self-test
+        run: bash core/scripts/test_review_trust.sh
+
       # 8c-read-guard. read-guard.sh bulk-reader delegation self-test (issue
       #     #320). Drives the real read-guard.sh as a subprocess against
       #     scratch team.toml/target files and stubbed 'claude'/'ps' binaries.

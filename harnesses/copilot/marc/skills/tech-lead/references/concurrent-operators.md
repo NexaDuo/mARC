@@ -89,7 +89,7 @@ whole coordination protocol; there is no locking layer, by design.
   withdraws. **A `## @techlead withdraw` comment only retires a claim if it
   passes the same author-association check as a claim (`OWNER`/`MEMBER`/
   `COLLABORATOR`, field name per command as specified above) AND its
-  `operator:` value matches the claim it targets exactly.** A withdrawal that
+  `operator:` value matches the claim it targets (case-insensitively).** A withdrawal that
   fails either test is not a withdrawal — ignore it as noise, and if it looks
   deliberate (a plausible `operator:` value, posted shortly after a real
   claim, from a failing or absent association), treat it the same as a
