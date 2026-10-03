@@ -12,6 +12,9 @@ date whose `YY.M.D` is already taken.
 
 ### Fixed
 
+- Refresh the reviewed Antigravity installer checksum and fail immediately on HTTP
+  download errors, restoring the cross-repo CI bootstrap integrity gate.
+
 - Disable Codex read-guard until real hook payload/deny contracts are validated.
   Preserve #323's enforced-agent boundary: all read-only roles, including aliases
   and bulk-reader, route to Claude Code; no Codex fallback or unsafe override.

@@ -1039,9 +1039,9 @@ jobs:
           echo "Bootstrapping Antigravity CLI binary (pinned sha256, unprivileged)..."
           # SHA256 checksum of https://antigravity.google/cli/install.sh
           # Bump instructions: curl -sSL https://antigravity.google/cli/install.sh | sha256sum
-          AGY_INSTALLER_SHA256="ee1ea43ce4e9e56356c4ab6dad907ef357ae4bdfcaadb682735909fb57c9c640"
+          AGY_INSTALLER_SHA256="62966c07365423bd4dc209355060744058fb30d60f5323e2d360e39de64e5042"
           INSTALLER_SCRIPT="$(mktemp)"
-          curl -sSLo "$INSTALLER_SCRIPT" https://antigravity.google/cli/install.sh
+          curl -fLsS -o "$INSTALLER_SCRIPT" https://antigravity.google/cli/install.sh
           echo "${AGY_INSTALLER_SHA256}  ${INSTALLER_SCRIPT}" | sha256sum -c -
           bash "$INSTALLER_SCRIPT"
           rm -f "$INSTALLER_SCRIPT"
