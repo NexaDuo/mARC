@@ -1034,7 +1034,8 @@ jobs:
           echo "Bootstrapping latest Antigravity CLI binary (unprivileged)..."
           INSTALLER_SCRIPT="$(mktemp)"
           trap 'rm -f "$INSTALLER_SCRIPT"' EXIT
-          curl --proto '=https' --proto-redir '=https' -fLsS -o "$INSTALLER_SCRIPT" https://antigravity.google/cli/install.sh
+          curl --proto '=https' --proto-redir '=https' -fLsS --compressed -o "$INSTALLER_SCRIPT" https://antigravity.google/cli/install.sh
+          file "$INSTALLER_SCRIPT"
           sha256sum "$INSTALLER_SCRIPT"
           bash "$INSTALLER_SCRIPT"
 
