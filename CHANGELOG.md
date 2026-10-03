@@ -8,6 +8,89 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.9.23] - 2026-09-23
+
+Security fix (#323): `dispatch_agent.py` no longer routes read-only roles to
+Antigravity. Research on agy 1.2.9 showed that in headless `-p` mode
+`agy --agent <name>` never loads the named agent. It logs `Agent "<name>" not
+found, falling back to default`, exits 0, and runs the stock default agent with
+every tool. So `@rev`/`@research` dispatched there ran as an unrestricted agent
+under the reviewer's name (no persona, no model pin, no tool restriction), and
+no headless agy primitive (`--sandbox`, `--mode plan`, frontmatter) gives a real
+per-agent capability boundary.
+
+- `DEFAULT_HYBRID_MATRIX` now routes `rev`/`review`/`research` to `claude-code`
+  in every host row (Claude Code, Antigravity, Copilot).
+- New `READ_ONLY_ROLES` constant (`rev`, `research`, `sec`, `bulk-reader`, plus
+  aliases) and `NON_ENFORCING_HARNESSES` (`antigravity`, plus `copilot`, which is
+  invoked as `copilot --prompt` with no agent selection). Read-only roles fail
+  closed: an explicit `--harness`, a `team.toml` `[orchestration.routes]` entry,
+  or native mode that would land them on either harness is re-routed to
+  `claude-code` with a stderr diagnostic citing #323. If `claude` is not on
+  PATH, dispatch exits 2 instead of running the role unrestricted.
+- `--role` is normalized (whitespace stripped, one leading `@` dropped,
+  lowercased) before any lookup, so `REV`, `@rev` or ` rev` can't slip past the
+  guard. Unknown roles are rejected with exit 2 and nothing is dispatched.
+- The JSON result gains `policy_reroute`/`policy_reason`, which mark a #323
+  policy override separately from a missing-CLI fallback. `fallback` keeps its
+  old meaning (any deviation from the requested route).
+- Non-read-only roles still routed to Antigravity or Copilot (`@sre`/`@design`
+  on those hosts) get a one-line stderr warning that their agent definition is
+  not applied. Their routing is unchanged.
+- `core/skills/tech-lead/SKILL.md`: the governed #241 routing rule and the #239
+  "routing never blocks" rule are superseded (origins kept with superseded
+  notes, new tag `(origin: #323 · 2026-09-23)`). `docs/team.toml.example`
+  updated to match.
+
+The unconditional `--dangerously-skip-permissions` on the agy path is unchanged
+here (separate decision, now annotated in code). No `--` end-of-options
+separator was added before the prompt: neither `claude --help`, the Claude Code
+CLI reference, nor `agy --help` documents it.
+
+## [26.9.22.1] - 2026-09-22
+
+Extends #331's per-role `@sec` opus pin to the rest of the specialist bench
+(#334/#335): `@dev`, `@sre`, `@design`, `@rev`, and `@research`
+(`core/agents/{engineer,sre,design,review,research}.md`) all move to
+`model: opus`. `bulk-reader` stays on `haiku` (one-shot, tool-minimal
+summarization; no reasoning depth needed).
+
+Evidence: Vals.ai (independent, same harness, verified 2026-09-22) —
+Terminal-Bench 4.0: Opus 5.5 61.62% vs Sonnet 5 8.08% (Sonnet cost
+$21.37/task); Vals Index: Fable 5.1 68.83%, Opus 5.5 66.16%, Sonnet 5 59.61%,
+Haiku 4.5 22.90%, cost/test Opus $19.22 vs Sonnet $17.61. Pricing per MTok
+(claude.com/pricing): Opus 5.5 $4/$20, Sonnet 5 $2/$10, Haiku 4.5 $1/$5. The
+earlier "cheaper tier by default" tradeoff behind #69's `sonnet`-by-default
+rule no longer holds at these prices, so `core/skills/tech-lead/SKILL.md`'s
+governed rule is superseded explicitly (origins #69 and #331 kept with a
+superseded note, new tag `(origin: #335 · 2026-09-22)`): `opus` is now the
+specialist default, `haiku` covers mechanical/bulk work, and downgrading a
+specific bounded dispatch to `sonnet`/`haiku` remains the operator's cost
+lever.
+
+As with #331/#333, `model:` frontmatter stays inert on Antigravity and
+Copilot (both pick a model through their own harness-native mechanism, not
+this field) — no compile-pipeline mapping change was needed.
+
+## [26.9.22] - 2026-09-22
+
+Pins `@sec` (`core/agents/security.md`) to `model: opus` following the Claude
+Opus 5.5 launch (#331): `@sec` is the real pre-merge gate reviewing
+attacker-influenced diffs, and the stronger reasoning and prompt-injection
+resistance justify the 2x per-token cost on that one role. Every other
+specialist (`@dev`/`@sre`/`@design`/`@rev`/`@research`) stays on `sonnet`,
+and `bulk-reader` stays on `haiku` — the #69 "sonnet by default" rule in
+`core/skills/tech-lead/SKILL.md` is superseded with a per-role pinned
+exception, not silently dropped or flipped wholesale.
+
+Checked the non-Claude-Code harnesses' compile pipeline: neither Antigravity
+nor Copilot maps the `model:` agent frontmatter field at all today (dispatch
+picks a model through its own harness-native mechanism — Antigravity's
+Gemini flash/pro/inherit tiers chosen in the tech-lead skill's dispatch
+instructions, Copilot's `task` tool with no model parameter), so the
+compiled `model: opus` line ships inert on both; no mapping change was
+needed there.
+
 ## [26.9.21] - 2026-09-21
 
 ### Added

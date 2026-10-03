@@ -6,10 +6,13 @@ description: >-
   pipeline management, infrastructure health audits, incident response, backups, and
   cost optimization.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, TodoWrite
-# Pinned to sonnet (was inherit): specialists run long autonomous tool-loops with
-# fat re-read context, so the default (often Opus) multiplied worst-case token spend.
-# The operator may still Opus-override a specific bounded item when reasoning needs it.
-model: sonnet
+# Pinned to opus (origin #335, 2026-09-22, superseding the earlier sonnet pin):
+# independent Vals.ai evidence (Terminal-Bench 4.0, Vals Index) shows Opus 5.5
+# clears Sonnet 5 by a wide margin on agentic coding tasks at a comparable
+# cost/test, so the earlier "cheaper tier by default" tradeoff no longer holds.
+# The operator can still downgrade a specific bounded dispatch to sonnet/haiku
+# as a cost lever.
+model: opus
 ---
 
 # @sre — SRE Specialist
