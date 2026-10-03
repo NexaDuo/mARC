@@ -21,7 +21,7 @@ files, constraints.
 
 #### Cross-harness dispatch & poly-model routing (optional)
 When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is explicitly requested), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses **instead of using your native dispatch tool**. Codex writer roles default to Codex; read-only roles routed via this script always require Claude Code. On other hosts, by default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness.
-**Note:** When using `dispatch_agent.py`, read-only roles (`@rev`/`@research`/`@sec`) are never dispatched to `antigravity` or `copilot` because their headless CLI modes (`agy -p`, `copilot --prompt`) do not restrict tools (#323). This restriction applies ONLY to the CLI wrapper — when using your native tool (e.g. `invoke_subagent`), you can and should dispatch read-only roles directly, as the native tool enforces the boundaries.
+**Note:** When using `dispatch_agent.py`, read-only roles (`@rev`/`@research`/`@sec`) are never dispatched to `antigravity` or `copilot` because their headless CLI modes (`agy -p`, `copilot --prompt`) do not restrict tools (#323). This restriction applies ONLY to the CLI wrapper — when dispatching read-only roles natively, strictly follow your primary dispatch instructions above to ensure tool boundaries are safely enforced.
 ```bash
 python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/dispatch_agent.py" \
   --role "<dev|sre|design|sec|rev|research>" \
