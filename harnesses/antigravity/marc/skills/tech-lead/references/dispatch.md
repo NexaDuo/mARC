@@ -1,13 +1,13 @@
 ### 4. Dispatch (automatic, in the background)
 Once an item is on the board, immediately ping the right specialist in the channel — do not wait for the user's confirmation. Use the invoke_subagent tool to spawn the specialist. Set the following fields:
-- `TypeName`: `self` for developer, sre, and design tasks. For read-only roles (`@sec`, `@rev`, `@research`), you MUST use `define_subagent` to create a restricted subagent type with `enable_write_tools: false`, and then pass that custom TypeName.
+- `TypeName`: `research` for read-only research tasks, or `self` for developer, sre, and design tasks. For read-only reviewers (`@sec`, `@rev`), you MUST use `define_subagent` to create a restricted subagent type with `enable_write_tools: false`, and then pass that custom TypeName.
 - `Role`: the specialist's role (e.g. `engineer` for @dev, `sre` for @sre, `design` for @design, `security` for @sec, `review` for @rev, `research` for @research).
 - `Prompt`: the detailed prompt for the specialist (include issue number + URL, acceptance criteria, affected files, constraints). For `security` (@sec) dispatches, the prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @sec review`, so a later reader (or a grep) can verify a review actually happened without trusting a paraphrase. (origin: #105 · 2026-07-16) For `review` (@rev) dispatches — the second mandatory pre-merge gate alongside @sec, reviewing correctness rather than security — require the deliverable start with the fixed marker `## @rev review`. (origin: #125 · 2026-07-16) For `research` (@research) dispatches — read-only evidence brief on the motivating issue, no code, no PRs.
 - `Workspace`: `share` for parallel mutating tasks to isolate changes without duplicating storage (or `inherit` for read-only tasks).
 - `Model`: Gemini model tier selection — use `flash` for `@research` (fast document lookups and web evidence gathering), and `pro` or `inherit` for `@dev`, `@sec`, `@rev`, `@sre` (deep reasoning, code generation, and reviews).
 
 **Dynamic specialization & ongoing coordination:**
-- For custom or specialized tasks requiring strict tool boundaries, dynamically define subagents using `define_subagent` (e.g. set `enable_write_tools: false` to enforce read-only tool access for reviewer/researcher roles).
+- As mandated above, use `define_subagent` to dynamically define and enforce read-only tool access for reviewer roles (or any other custom specialized tasks).
 - Use `send_message` for ongoing agent-to-agent coordination, sending follow-up instructions, or checking progress with active or idle subagents rather than spawning redundant subagents.
 
 **Dispatch in the background by default — never block the channel on a specialist.** The invoke_subagent tool spawns the subagent concurrently. You are re-invoked (notified) when a background agent finishes. Specialists' work can be slow, so you must stay responsive to the user while work runs. Concretely:
@@ -19,8 +19,8 @@ Include in each prompt: issue number + URL, full acceptance criteria, affected
 files, constraints.
 
 #### Cross-harness dispatch & poly-model routing (optional)
-When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is explicitly requested), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses **instead of using your native dispatch tool**. Codex writer roles default to Codex; read-only roles routed via this script always require Claude Code. On other hosts, by default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness.
-**Note:** When using `dispatch_agent.py`, read-only roles (`@rev`/`@research`/`@sec`) are never dispatched to `antigravity` or `copilot` because their headless CLI modes (`agy -p`, `copilot --prompt`) do not restrict tools (#323). This restriction applies ONLY to the CLI wrapper — when dispatching read-only roles natively, strictly follow your primary dispatch instructions above to ensure tool boundaries are safely enforced.
+When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is explicitly requested), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses. Codex writer roles default to Codex; read-only roles routed via this script always require Claude Code. On other hosts, by default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness.
+**Note:** When using `dispatch_agent.py`, read-only roles (`@rev`/`@research`/`@sec`) are never dispatched to `antigravity`, `copilot`, or `codex`, since none of these apply mARC agent definitions headless (#323). This restriction applies ONLY to the CLI wrapper — when dispatching read-only roles natively, strictly follow your primary dispatch instructions above to ensure tool boundaries are safely enforced.
 ```bash
 python3 "${AGY_PLUGIN_ROOT:-.}/scripts/dispatch_agent.py" \
   --role "<dev|sre|design|sec|rev|research>" \

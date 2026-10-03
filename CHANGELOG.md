@@ -8,6 +8,11 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.10.3] - 2026-10-03
+### Fixed
+- Fixed contradictory read-only routing instructions for Antigravity native dispatch (#340)
+
+
 ## [26.10.2] - 2026-10-02
 
 ### Fixed
