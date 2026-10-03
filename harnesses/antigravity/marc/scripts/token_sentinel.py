@@ -587,7 +587,11 @@ def main(argv=None) -> int:
                          "retired at #181)")
     ap.add_argument("--hook", action="store_true",
                     help="run as a warn-only PostToolUse hook (reads hook JSON on stdin; always exits 0)")
+    from telemetry_runtime import add_harness_argument, unsupported_harness
+    add_harness_argument(ap)
     args = ap.parse_args(argv)
+    if unsupported_harness(args.harness):
+        return 0 if args.hook else 2
 
     if args.hook:
         # Warn-only guard: swallow every unexpected failure and still exit 0.

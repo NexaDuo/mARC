@@ -52,6 +52,8 @@ from token_telemetry import (  # noqa: E402
     telemetry_path,
 )
 
+from telemetry_runtime import add_harness_argument, unsupported_harness
+
 
 def existing_keys(path: str) -> set[tuple[str, int]]:
     """Read the target file's existing (session_id, turn_index) keys so a
@@ -135,7 +137,10 @@ def main(argv=None) -> int:
                      help="print counts without writing anything")
     ap.add_argument("--projects-root", default=None,
                      help="override ~/.claude/projects (for testing)")
+    add_harness_argument(ap)
     args = ap.parse_args(argv)
+    if unsupported_harness(args.harness):
+        return 2
 
     projects_root = args.projects_root or os.path.join(
         os.path.expanduser("~"), ".claude", "projects"

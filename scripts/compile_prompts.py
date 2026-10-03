@@ -441,6 +441,15 @@ def main():
                 dest_file = os.path.join(harness_marc_path, rel_path)
                 compile_file(source_file, dest_file, config)
 
+        # Native descriptors are source inputs too, never hand-maintained output.
+        if config.get("agent_config_source"):
+            descriptor_dir = os.path.join(core_dir, config["agent_config_source"])
+            dest_dir = os.path.join(harness_marc_path, "agents")
+            for name in sorted(os.listdir(descriptor_dir)):
+                if name.endswith(".toml"):
+                    os.makedirs(dest_dir, exist_ok=True)
+                    shutil.copy2(os.path.join(descriptor_dir, name), os.path.join(dest_dir, name))
+
         # Mirror core/scripts/ verbatim (byte-identical, no templating).
         core_scripts_dir = os.path.join(core_dir, "scripts")
         dest_scripts_dir = os.path.join(harness_marc_path, "scripts")

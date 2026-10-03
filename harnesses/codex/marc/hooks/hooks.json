@@ -28,17 +28,6 @@
           }
         ]
       }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${PLUGIN_ROOT:-$PWD}/scripts/read-guard.sh\""
-          }
-        ]
-      }
     ]
   }
 }

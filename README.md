@@ -70,7 +70,7 @@ install the plugin, and start Codex:
 
 ```bash
 codex plugin marketplace add .
-codex plugin install marc@nexaduo
+codex plugin add marc@nexaduo
 codex
 ```
 
@@ -78,6 +78,18 @@ Then invoke `/marc:tech-lead` in Codex. The marketplace file lives at
 `.agents/plugins/marketplace.json`; the selected marketplace root must therefore
 be the repository root, not the `.agents/plugins` subdirectory. Codex installs
 the local plugin under the `marc@nexaduo` identifier.
+
+Initial support is verified with CLI 0.156.1 for marketplace installation and
+bundled-helper execution from a fresh consumer without `team.toml`. Writers use
+`codex exec --worktree --sandbox workspace-write`. All read-only roles route to
+Claude Code and fail closed if unavailable: a filesystem sandbox alone does not
+prove tool restrictions. Native agent TOMLs are templates; automatic plugin-agent
+discovery is not yet verified. Startup commands are compiled, but real hook
+trust/event delivery still needs validation. Codex `read-guard` is disabled and
+telemetry/sentinel tools report **unavailable** without reading transcripts or
+writing telemetry. To intentionally process Claude data, pass
+`--harness claude-code`. Detailed tech-lead procedures load on demand from
+references to keep the initial skill prompt small.
 
 ## The metaphor: one channel, one op, a bench of specialists
 

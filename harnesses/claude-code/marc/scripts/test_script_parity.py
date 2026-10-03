@@ -155,7 +155,7 @@ def main() -> int:
         check_script_content_parity(harness, marc_dir)
 
         skill_md_files = sorted(
-            glob.glob(os.path.join(marc_dir, "skills", "*", "SKILL.md"))
+            glob.glob(os.path.join(marc_dir, "skills", "**", "*.md"), recursive=True)
         )
         check(
             len(skill_md_files) > 0,

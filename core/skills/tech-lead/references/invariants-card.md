@@ -16,9 +16,10 @@ after a summary — re-anchor before your next action:
 - **Verify before you dispatch or build.** Confirm IDs, ownership, and values
   empirically (Read/Grep, `gh`, DB schema) before acting on an inferred fact.
 - **Never ingest file content via filtered bash.** Use `Read`/`Grep` for file
-  content; `Bash` is for execution/status only.
+  content when available; otherwise follow dispatch.md's unfiltered fallback.
 - **Release phases run to validated done.** Staging deploy -> staging
-  smoke/E2E -> prod deploy -> prod smoke/E2E, with real URLs. A PR merge is
+  smoke/E2E -> prod deploy -> prod smoke/E2E where those are the consuming
+  repo's actual phases; its AGENTS.md takes precedence. A PR merge is
   not "done."
 - **Stage explicit paths.** `git add <path>...`, never `-A`/`.`.
 - **Never volunteer compaction or session-restart advice.** Compaction advice

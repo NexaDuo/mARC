@@ -70,6 +70,9 @@ TELEMETRY_FILENAME = "token-telemetry.jsonl"
 _TOML_KEY_RE_TEMPLATE = r'^[ \t]*{key}[ \t]*=[ \t]*"?([^"#\n]*)"?'
 
 
+from telemetry_runtime import add_harness_argument, unsupported_harness
+
+
 def toml_get(text: str, key: str) -> str | None:
     pattern = re.compile(_TOML_KEY_RE_TEMPLATE.format(key=re.escape(key)), re.MULTILINE)
     m = pattern.search(text)
@@ -207,7 +210,10 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--hook", action="store_true",
                      help="run as a warn-only Stop hook (reads hook JSON on stdin; always exits 0)")
+    add_harness_argument(ap)
     args = ap.parse_args(argv)
+    if unsupported_harness(args.harness):
+        return 0 if args.hook else 2
 
     if args.hook:
         try:

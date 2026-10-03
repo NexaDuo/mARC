@@ -95,11 +95,11 @@ def test_command_generation() -> None:
         cmd = build_harness_command("copilot", r, prompt)
         check(cmd == ["copilot", "--prompt", prompt], f"copilot command for role '{r}': {cmd}")
 
-    # 4. Codex uses its native exec entry point and managed worktree.
-    for r in ["dev", "sre", "design", "sec", "rev", "research"]:
+    # 4. Codex writers use an explicit sandbox; read-only roles are routed away.
+    for r in ["dev", "sre", "design"]:
         cmd = build_harness_command("codex", r, prompt)
-        expected = ["codex", "exec", "--worktree", f"Act as the mARC {ROLE_TO_AGENT[r]} specialist. {prompt}"]
-        check(cmd == expected, f"codex command for role '{r}': {cmd}")
+        expected = ["codex", "exec", "--worktree", "--sandbox", "workspace-write", f"Act as the mARC {ROLE_TO_AGENT[r]} specialist. {prompt}"]
+        check(cmd == expected, f"codex writer command for '{r}': {cmd}")
 
     # 5. Unknown harness throws ValueError
     try:
@@ -153,11 +153,11 @@ def test_default_hybrid_matrix() -> None:
         "codex": {
             "dev": "codex",
             "engineer": "codex",
-            "sec": "codex",
-            "security": "codex",
-            "rev": "codex",
-            "review": "codex",
-            "research": "codex",
+            "sec": "claude-code",
+            "security": "claude-code",
+            "rev": "claude-code",
+            "review": "claude-code",
+            "research": "claude-code",
             "sre": "codex",
             "design": "codex",
             "bulk-reader": "claude-code",

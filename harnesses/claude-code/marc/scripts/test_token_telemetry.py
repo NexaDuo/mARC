@@ -98,7 +98,7 @@ def setup_plugin_root(base: str) -> str:
     with open(os.path.join(plugin_root, "hooks", "token-telemetry.sh"), "w",
               encoding="utf-8") as fh:
         fh.write(hook_text)
-    for name in ("token_telemetry.py", "token_sentinel.py"):
+    for name in ("token_telemetry.py", "token_sentinel.py", "telemetry_runtime.py"):
         with open(os.path.join(HERE, name), "r", encoding="utf-8") as fh:
             content = fh.read()
         with open(os.path.join(plugin_root, "scripts", name), "w", encoding="utf-8") as fh:
