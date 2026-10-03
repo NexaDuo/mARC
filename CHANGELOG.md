@@ -12,8 +12,9 @@ date whose `YY.M.D` is already taken.
 
 ### Fixed
 
-- Refresh the reviewed Antigravity installer checksum and fail immediately on HTTP
-  download errors, restoring the cross-repo CI bootstrap integrity gate.
+- Follow the latest Antigravity CLI installer without a fixed checksum or fallback
+  by maintainer choice. Require HTTPS, fail on HTTP errors, and log the downloaded
+  script digest for diagnosis.
 
 - Disable Codex read-guard until real hook payload/deny contracts are validated.
   Preserve #323's enforced-agent boundary: all read-only roles, including aliases
