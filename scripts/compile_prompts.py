@@ -203,6 +203,14 @@ _AGY_EVENT_MAP = {
     "stop": "Stop",
 }
 
+_CODEX_EVENT_MAP = {
+    "session_start": "SessionStart",
+    "session_start_compact": "SessionStart",
+    "pre_tool_use": "PreToolUse",
+    "post_tool_use": "PostToolUse",
+    "stop": "Stop",
+}
+
 
 def render_claude_code_hooks(selected_hooks, config):
     """Claude Code dialect: {"hooks": {EventName: [{"matcher", "hooks":
@@ -262,10 +270,28 @@ def render_antigravity_hooks(selected_hooks, config):
     return out
 
 
+def render_codex_hooks(selected_hooks, config):
+    """Codex uses the Claude-compatible grouped hook schema, while commands
+    resolve the Codex plugin root through PLUGIN_ROOT. Keep this renderer
+    separate so future Codex-specific fields (timeout/statusMessage) do not
+    leak into other harnesses."""
+    out = {"hooks": {}}
+    for hook in selected_hooks:
+        event_name = _CODEX_EVENT_MAP[hook["event"]]
+        command = _build_command(hook, config)
+        matcher = _CC_MATCHER_MAP.get(hook["event"], "*")
+        out["hooks"].setdefault(event_name, []).append({
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": command}],
+        })
+    return out
+
+
 _HOOK_DIALECT_RENDERERS = {
     "antigravity": render_antigravity_hooks,
     "claude-code": render_claude_code_hooks,
     "copilot": render_copilot_hooks,
+    "codex": render_codex_hooks,
 }
 
 
@@ -414,6 +440,15 @@ def main():
                 rel_path = os.path.relpath(source_file, core_dir)
                 dest_file = os.path.join(harness_marc_path, rel_path)
                 compile_file(source_file, dest_file, config)
+
+        # Native descriptors are source inputs too, never hand-maintained output.
+        if config.get("agent_config_source"):
+            descriptor_dir = os.path.join(core_dir, config["agent_config_source"])
+            dest_dir = os.path.join(harness_marc_path, "agents")
+            for name in sorted(os.listdir(descriptor_dir)):
+                if name.endswith(".toml"):
+                    os.makedirs(dest_dir, exist_ok=True)
+                    shutil.copy2(os.path.join(descriptor_dir, name), os.path.join(dest_dir, name))
 
         # Mirror core/scripts/ verbatim (byte-identical, no templating).
         core_scripts_dir = os.path.join(core_dir, "scripts")

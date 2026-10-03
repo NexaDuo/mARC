@@ -1,0 +1,5 @@
+name = "review"
+description = "mARC read-only correctness reviewer for pull requests."
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+developer_instructions = "Review the current three-dot diff for correctness, regressions, and test gaps. Do not edit. Report findings and a verdict marked ## @rev review."

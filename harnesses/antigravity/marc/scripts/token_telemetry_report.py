@@ -36,6 +36,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from token_telemetry import telemetry_path  # noqa: E402
 
+from telemetry_runtime import add_harness_argument, unsupported_harness
+
 
 def load_records(path: str) -> list[dict]:
     records: list[dict] = []
@@ -156,7 +158,10 @@ def main(argv=None) -> int:
     ap.add_argument("--path", default=None, help="override the telemetry JSONL path")
     ap.add_argument("--compare", default=None, help="post-optimization telemetry JSONL path to compare against")
     ap.add_argument("--cost-per-million", type=float, default=3.0, help="cost per million weighted tokens (default 3.0)")
+    add_harness_argument(ap)
     args = ap.parse_args(argv)
+    if unsupported_harness(args.harness):
+        return 2
 
     path = args.path or telemetry_path()
     if not os.path.isfile(path):

@@ -110,11 +110,34 @@ def validate_hook_schema(harness: str, dialect: str, hooks_obj: dict) -> None:
             isinstance(hooks_obj, dict) and "hooks" in hooks_obj,
             f"{harness}: claude-code hooks.json has top-level 'hooks' key",
         )
+    elif dialect == "codex":
+        check(
+            isinstance(hooks_obj, dict) and "hooks" in hooks_obj,
+            f"{harness}: codex hooks.json has top-level 'hooks' key",
+        )
+        for event_name, entries in hooks_obj.get("hooks", {}).items():
+            check(event_name == "SessionStart", f"{harness}: only startup hooks are wired")
+            check(isinstance(entries, list), f"{harness}: codex event '{event_name}' is a list")
+            for entry in entries:
+                check(
+                    isinstance(entry, dict) and "matcher" in entry and isinstance(entry.get("hooks"), list),
+                    f"{harness}: codex event '{event_name}' entry has matcher and hooks list",
+                )
+                for handler in entry.get("hooks", []):
+                    check(handler.get("type") == "command" and bool(handler.get("command")),
+                          f"{harness}: command handler has executable command")
+        check("read-guard" not in json.dumps(hooks_obj), f"{harness}: unverified read-guard is unwired")
+        session_entries = hooks_obj.get("hooks", {}).get("SessionStart", [])
+        compact = [e for e in session_entries if isinstance(e, dict) and e.get("matcher") == "compact"]
+        check(bool(compact), f"{harness}: codex SessionStart preserves compact matcher")
     elif dialect == "copilot":
         check(
             isinstance(hooks_obj, dict) and hooks_obj.get("version") == 1 and "hooks" in hooks_obj,
             f"{harness}: copilot hooks.json has version: 1 and 'hooks' key",
         )
+
+    else:
+        check(False, f"{harness}: unknown hook dialect {dialect!r}")
 
 
 
@@ -206,7 +229,7 @@ def check_command_env_fallbacks(harness: str, marc_dir: str, config: dict, hooks
                     for h in handlers:
                         if "command" in h:
                             commands.append((f"{hook_id}:{event_name}", h["command"]))
-    elif config.get("hook_dialect") == "claude-code":
+    elif config.get("hook_dialect") in {"claude-code", "codex"}:
         for event_name, handlers in hooks_obj.get("hooks", {}).items():
             for entry in handlers:
                 for h in entry.get("hooks", []):
@@ -217,6 +240,8 @@ def check_command_env_fallbacks(harness: str, marc_dir: str, config: dict, hooks
             for h in handlers:
                 if "bash" in h:
                     commands.append((f"{event_name}", h["bash"]))
+
+    check(bool(commands), f"{harness}: extracted commands for env validation")
 
     for label, cmd in commands:
         if "/hooks/" in cmd:

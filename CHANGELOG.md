@@ -8,6 +8,29 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.10.2] - 2026-10-02
+
+### Fixed
+
+- Follow the latest Antigravity CLI installer without a fixed checksum or fallback
+  by maintainer choice. Require HTTPS, fail on HTTP errors, and log the downloaded
+  script digest for diagnosis.
+
+- Disable Codex read-guard until real hook payload/deny contracts are validated.
+  Preserve #323's enforced-agent boundary: all read-only roles, including aliases
+  and bulk-reader, route to Claude Code; no Codex fallback or unsafe override.
+  Codex writers get an explicit workspace-write sandbox.
+- Codex sentinel/telemetry CLI tools report unavailable before transcript I/O;
+  explicit `--harness claude-code` preserves intentional use of Claude data.
+- Split the oversized tech-lead entrypoint into on-demand references, retaining
+  governed rules and origins, with a conservative 8 KB repository size gate.
+  Narrow #137/#227's tool guidance only for sessions without Read/Grep or a
+  configured filtering proxy: use an available unfiltered reader (#330).
+- Add Codex package/version/marketplace and negative safety gates, plus real
+  isolated consumer installation using pinned CLI 0.156.1 and npm lock integrity.
+  Native agent descriptors now compile from core. Correct install command to
+  `codex plugin add`. Tests do not claim hook delivery or native-agent discovery.
+
 ## [26.9.23] - 2026-09-23
 
 Security fix (#323): `dispatch_agent.py` no longer routes read-only roles to
@@ -90,6 +113,14 @@ Gemini flash/pro/inherit tiers chosen in the tech-lead skill's dispatch
 instructions, Copilot's `task` tool with no model parameter), so the
 compiled `model: opus` line ships inert on both; no mapping change was
 needed there.
+
+## [26.9.21] - 2026-09-21
+
+### Added
+
+- **OpenAI Codex harness support.** mARC now ships a Codex plugin, native agent
+  definitions, Codex hook rendering, local marketplace metadata, and dispatch
+  routing alongside the existing Claude Code, Antigravity, and Copilot harnesses.
 
 ## [26.9.18] - 2026-09-18
 

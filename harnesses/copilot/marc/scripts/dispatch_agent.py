@@ -8,7 +8,7 @@ Stdlib only (no third-party dependencies). Can be invoked directly or imported:
 CLI Options:
     --role <role>         Specialist role (dev, sre, design, sec, rev, research, engineer, security, review).
     --prompt <prompt>     Task prompt with context, acceptance criteria, and constraints.
-    --harness <harness>   Target harness (auto, native, claude-code, antigravity, copilot). Default: auto.
+    --harness <harness>   Target harness (auto, native, claude-code, antigravity, copilot, codex). Default: auto.
     --timeout <seconds>   Subprocess execution timeout in seconds. Default: 300.
     --json                Output result as JSON payload.
     --dry-run             Resolve command and print without executing.
@@ -24,7 +24,7 @@ Routing resolution:
       an unknown role is rejected with exit code 2 and nothing is dispatched (#323).
     - Read-only roles (READ_ONLY_ROLES: rev/research/sec/bulk-reader and aliases) never
       run on a harness that does not apply mARC agent definitions
-      (NON_ENFORCING_HARNESSES: antigravity, copilot), whatever the source of the route
+      (NON_ENFORCING_HARNESSES: antigravity, copilot, codex), whatever the source of the route
       (#323). They are re-routed to claude-code with a stderr diagnostic; if claude-code
       is not available, dispatch fails with exit code 2 instead of running them
       unrestricted. The JSON result's policy_reroute/policy_reason fields mark the
@@ -77,6 +77,7 @@ HARNESS_BINARIES: Dict[str, str] = {
     "claude-code": "claude",
     "antigravity": "agy",
     "copilot": "copilot",
+    "codex": "codex",
 }
 
 # Read-only roles (canonical names, see CANONICAL_ROLES): their agent definitions
@@ -89,8 +90,10 @@ READ_ONLY_ROLES = frozenset({"rev", "research", "sec", "bulk-reader"})
 # Harnesses whose headless dispatch path does NOT apply mARC agent definitions
 # (persona, model pin, `tools:` restriction). Issue #323: agy headless ignores
 # `--agent` (measured on agy 1.2.9); copilot is invoked as `copilot --prompt`
-# with no agent selection at all (see build_harness_command).
-NON_ENFORCING_HARNESSES = frozenset({"antigravity", "copilot"})
+# with no agent selection at all (see build_harness_command). Codex exec
+# likewise has no named-agent selector; filesystem sandbox alone does not prove
+# agent discovery or tool restrictions, so it remains excluded (#330).
+NON_ENFORCING_HARNESSES = frozenset({"antigravity", "copilot", "codex"})
 
 # Preferred harness for read-only roles: claude-code resolves `--agent` and
 # enforces `tools:` even under --dangerously-skip-permissions (measured, #320/#323).
@@ -172,6 +175,20 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "research": "claude-code",
         "sre": "copilot",
         "design": "copilot",
+        "bulk-reader": "claude-code",
+    },
+    "codex": {
+        "dev": "codex",
+        "engineer": "codex",
+        "sre": "codex",
+        "design": "codex",
+        "sec": "claude-code",
+        "security": "claude-code",
+        "rev": "claude-code",
+        "review": "claude-code",
+        "research": "claude-code",
+        # Bulk-reader must use the only harness with a verified read-only
+        # tool boundary until Codex isolation is proven empirically.
         "bulk-reader": "claude-code",
     },
 }
@@ -256,6 +273,8 @@ def detect_native_harness(
         return "copilot"
     if "CLAUDE_PLUGIN_ROOT" in environ or "CLAUDE_PROJECT_DIR" in environ:
         return "claude-code"
+    if "PLUGIN_ROOT" in environ or "CODEX_PROJECT_DIR" in environ:
+        return "codex"
 
     # Check available binaries in PATH
     if which_fn("claude"):
@@ -264,6 +283,8 @@ def detect_native_harness(
         return "antigravity"
     if which_fn("copilot"):
         return "copilot"
+    if which_fn("codex"):
+        return "codex"
 
     return "claude-code"
 
@@ -271,6 +292,9 @@ def detect_native_harness(
 def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
     """Build CLI execution command for target harness."""
     role = normalize_role(role)
+    if (role == "bulk-reader" and harness != "claude-code") or (
+            harness == "codex" and CANONICAL_ROLES[role] in READ_ONLY_ROLES):
+        raise ReadOnlyRoutingError("read-only role requires the verified Claude Code tool boundary (#330)")
     mapped_agent = ROLE_TO_AGENT[role]
     if harness == "claude-code":
         return ["claude", "--dangerously-skip-permissions", "--agent", mapped_agent, "-p", prompt]
@@ -282,6 +306,13 @@ def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
         return ["agy", "--dangerously-skip-permissions", "--agent", mapped_agent, "-p", prompt]
     elif harness == "copilot":
         return ["copilot", "--prompt", prompt]
+    elif harness == "codex":
+        # Codex selects configured subagents through the model's Agent tool;
+        # `-p` is a profile flag, not an agent selector. State the role in the
+        # prompt and use a managed worktree for mutating runs.
+        sandbox = "read-only" if role in READ_ONLY_ROLES else "workspace-write"
+        return ["codex", "exec", "--worktree", "--sandbox", sandbox,
+                f"Act as the mARC {mapped_agent} specialist. {prompt}"]
     else:
         raise ValueError(f"Unsupported harness: {harness!r}")
 
@@ -368,7 +399,8 @@ def resolve_target_harness_detailed(
     # does not apply the agent definition.
     read_only = canonical_role in READ_ONLY_ROLES
     reroute_reason: Optional[str] = None
-    if read_only and target_harness in NON_ENFORCING_HARNESSES:
+    if read_only and (target_harness in NON_ENFORCING_HARNESSES or
+                      (canonical_role == "bulk-reader" and target_harness != "claude-code")):
         reroute_reason = (
             f"role '{role}' is read-only but harness '{target_harness}' does not apply mARC "
             f"agent definitions in headless dispatch (issue #323)"
@@ -404,6 +436,7 @@ def resolve_target_harness_detailed(
             candidates = [
                 h for h in (READ_ONLY_PREFERRED_HARNESS, host_harness)
                 if h not in NON_ENFORCING_HARNESSES
+                and (canonical_role != "bulk-reader" or h == "claude-code")
             ]
             ro_fallback = next((h for h in candidates if _is_available(h)), None)
             if ro_fallback is None:
@@ -637,8 +670,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument(
         "--harness",
         default="auto",
-        choices=["auto", "native", "claude-code", "antigravity", "copilot"],
-        help="Target harness (auto, native, claude-code, antigravity, copilot). Default: auto",
+        choices=["auto", "native", "claude-code", "antigravity", "copilot", "codex"],
+        help="Target harness (auto, native, claude-code, antigravity, copilot, codex). Default: auto",
     )
     parser.add_argument(
         "--timeout",

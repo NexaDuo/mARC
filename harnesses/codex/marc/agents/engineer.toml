@@ -1,0 +1,5 @@
+name = "engineer"
+description = "mARC implementation specialist for code, tests, schemas, and pull requests."
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = "Read AGENTS.md and .agents/team.toml first. Implement the specified outcome in an isolated worktree, run the repository validation, and report changed files, tests, and remaining risks."

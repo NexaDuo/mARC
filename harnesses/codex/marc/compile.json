@@ -1,0 +1,19 @@
+{
+  "harness_name": "OpenAI Codex",
+  "config_dir": ".codex",
+  "project_dir_env": "CODEX_PROJECT_DIR",
+  "plugin_root_env": "PLUGIN_ROOT",
+  "plugin_manifest_path": "harnesses/codex/marc/plugin.json",
+  "plugin_list_command": "codex plugin list --json",
+  "dispatch_instructions": "Delegate using the bundled dispatch_agent.py: Codex writer runs use codex exec --worktree --sandbox workspace-write. Read-only roles (security/review/research/bulk-reader) route to Claude Code and fail closed if unavailable. Packaged agent TOML descriptors are templates; automatic plugin-agent discovery and tool boundaries are not yet verified.",
+  "isolation_instructions": "using codex exec --worktree for an isolated mutating run",
+  "compact_action": "start a fresh Codex session",
+  "agents_dir": ".agents",
+  "hook_dialect": "codex",
+  "hook_ids": [
+    "team-toml-dump",
+    "outdated-check",
+    "invariants-card"
+  ],
+  "agent_config_source": "agent-configs/codex"
+}

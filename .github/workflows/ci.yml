@@ -39,6 +39,22 @@ jobs:
   # Tier 1 — structural. Hard gate, no secret, no `claude` install needed except
   # for `plugin validate`.
   # ---------------------------------------------------------------------------
+  codex-install:
+    name: Codex — isolated consumer installation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Install pinned Codex CLI with lockfile integrity
+        run: npm ci --ignore-scripts --prefix scripts/ci-codex
+      - name: Real installation and helpers outside checkout
+        run: |
+          export PATH="$PWD/scripts/ci-codex/node_modules/.bin:$PATH"
+          codex --version
+          python3 scripts/test_codex_harness.py --cli
+
   structural:
     name: Tier 1 — structural
     runs-on: ubuntu-latest
@@ -78,6 +94,9 @@ jobs:
           jq . harnesses/claude-code/marc/.claude-plugin/plugin.json > /dev/null
           jq . harnesses/antigravity/marc/plugin.json > /dev/null
           jq . harnesses/copilot/marc/plugin.json > /dev/null
+
+      - name: Codex structure, version, marketplace and safety regressions
+        run: python3 scripts/test_codex_harness.py
 
       - name: Copilot harness structure gate
         run: |
@@ -249,7 +268,7 @@ jobs:
           # is the harness-neutral template and carries the placeholder token
           # by design; the format/anti-anchoring/rule-origin gates elsewhere
           # in this workflow still assert against core/ prose directly.
-          SKILL=harnesses/claude-code/marc/skills/tech-lead/SKILL.md
+          SKILL=harnesses/claude-code/marc/skills/tech-lead/references/persistence.md
           # Reusable check: every required guard phrase must be present in $1.
           # Phrases are matched case-insensitively, each on its own line in the
           # source, so a whole-file scan is unnecessary.
@@ -295,7 +314,7 @@ jobs:
       #     inside backtick code spans are safe. Deterministic, zero token cost.
       - name: Issue-template handle-escape gate
         run: |
-          SKILL=core/skills/tech-lead/SKILL.md
+          SKILL=core/skills/tech-lead/references/issue-template.md
 
           check_template() {
             f="$1"
@@ -365,7 +384,7 @@ jobs:
         run: |
           set -euo pipefail
           CHECK="core/scripts/check_rule_origin.py"
-          FILES="core/skills/tech-lead/SKILL.md \
+          FILES="core/skills/tech-lead/SKILL.md core/skills/tech-lead/references/*.md \
                  core/agents/engineer.md core/agents/sre.md core/agents/design.md \
                  core/agents/security.md core/agents/review.md core/agents/research.md \
                  AGENTS.md"
@@ -966,7 +985,7 @@ jobs:
           echo "Installed copy resolved at: $INSTALL_PATH"
 
           echo "== assert bundled scripts resolve via \${CLAUDE_PLUGIN_ROOT} against the INSTALLED copy =="
-          SCRIPT_REFS="$(grep -rhoE '\$\{CLAUDE_PLUGIN_ROOT:-\.\}/scripts/[A-Za-z0-9_.-]+' "$INSTALL_PATH"/skills/*/SKILL.md | sed -E 's#.*/scripts/##' | sort -u)"
+          SCRIPT_REFS="$(grep -rhoE '\$\{CLAUDE_PLUGIN_ROOT:-\.\}/scripts/[A-Za-z0-9_.-]+' "$INSTALL_PATH"/skills/ | sed -E 's#.*/scripts/##' | sort -u)"
           test -n "$SCRIPT_REFS" || { echo "::error::no \${CLAUDE_PLUGIN_ROOT}/scripts/* references found in installed SKILL.md files"; exit 1; }
           while IFS= read -r name; do
             resolved="$INSTALL_PATH/scripts/$name"
@@ -998,14 +1017,9 @@ jobs:
 
       # Antigravity CLI bootstrap (issue #169 AC#1, AC#2).
       # Unprivileged step: ANTIGRAVITY_API_KEY is NOT exposed here.
-      # The installer is downloaded and verified against a pinned sha256 checksum
-      # before execution (no direct curl|bash piping).
-      #
-      # Pin verification / bump procedure:
-      #   1. Fetch the installer: curl -sSL https://antigravity.google/cli/install.sh -o /tmp/install.sh
-      #   2. Inspect script content and compute sha256: sha256sum /tmp/install.sh
-      #   3. Update AGY_INSTALLER_SHA256 below with the new checksum.
-      - name: Tier 2 — Antigravity CLI bootstrap (pinned, unprivileged)
+      # Follow the latest upstream installer by explicit maintainer choice.
+      # Log its digest for diagnosis; it is not an integrity pin or fallback.
+      - name: Tier 2 — Antigravity CLI bootstrap (latest, unprivileged)
         id: antigravity_bootstrap
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
@@ -1017,15 +1031,13 @@ jobs:
           echo "Installing Google Antigravity CLI python package..."
           pip3 install --break-system-packages google-antigravity==0.1.6
 
-          echo "Bootstrapping Antigravity CLI binary (pinned sha256, unprivileged)..."
-          # SHA256 checksum of https://antigravity.google/cli/install.sh
-          # Bump instructions: curl -sSL https://antigravity.google/cli/install.sh | sha256sum
-          AGY_INSTALLER_SHA256="ee1ea43ce4e9e56356c4ab6dad907ef357ae4bdfcaadb682735909fb57c9c640"
+          echo "Bootstrapping latest Antigravity CLI binary (unprivileged)..."
           INSTALLER_SCRIPT="$(mktemp)"
-          curl -sSLo "$INSTALLER_SCRIPT" https://antigravity.google/cli/install.sh
-          echo "${AGY_INSTALLER_SHA256}  ${INSTALLER_SCRIPT}" | sha256sum -c -
+          trap 'rm -f "$INSTALLER_SCRIPT"' EXIT
+          curl --proto '=https' --proto-redir '=https' -fLsS --compressed -o "$INSTALLER_SCRIPT" https://antigravity.google/cli/install.sh
+          file "$INSTALLER_SCRIPT"
+          sha256sum "$INSTALLER_SCRIPT"
           bash "$INSTALLER_SCRIPT"
-          rm -f "$INSTALLER_SCRIPT"
 
       # Trusted-context gate (issue #167 AC#3): GitHub Actions never exposes
       # secrets to `pull_request` runs from forks, so a fork PR genuinely
@@ -1090,7 +1102,7 @@ jobs:
           # $HOME/.gemini/config/plugins/marc, mirroring Claude Code's cache
           # layout).
           echo "== assert bundled scripts resolve via \${AGY_PLUGIN_ROOT} against the INSTALLED copy =="
-          SCRIPT_REFS="$(grep -rhoE '\$\{AGY_PLUGIN_ROOT:-\.\}/scripts/[A-Za-z0-9_.-]+' "$CONFIG_DIR"/skills/*/SKILL.md | sed -E 's#.*/scripts/##' | sort -u)"
+          SCRIPT_REFS="$(grep -rhoE '\$\{AGY_PLUGIN_ROOT:-\.\}/scripts/[A-Za-z0-9_.-]+' "$CONFIG_DIR"/skills/ | sed -E 's#.*/scripts/##' | sort -u)"
           test -n "$SCRIPT_REFS" || { echo "::error::no \${AGY_PLUGIN_ROOT}/scripts/* references found in installed SKILL.md files"; exit 1; }
           while IFS= read -r name; do
             resolved="$CONFIG_DIR/scripts/$name"
@@ -1327,7 +1339,7 @@ jobs:
             bash -c "$SESSION_START_BASH"
           done
 
-          SCRIPT_REFS="$(grep -rhoE '\$\{COPILOT_PLUGIN_DATA:-\.\}/scripts/[A-Za-z0-9_.-]+' "$HOME"/.copilot/installed-plugins/nexaduo/marc/skills/*/SKILL.md | sed -E 's#.*/scripts/##' | sort -u)"
+          SCRIPT_REFS="$(grep -rhoE '\$\{COPILOT_PLUGIN_DATA:-\.\}/scripts/[A-Za-z0-9_.-]+' "$HOME"/.copilot/installed-plugins/nexaduo/marc/skills/ | sed -E 's#.*/scripts/##' | sort -u)"
           test -n "$SCRIPT_REFS" || { echo "::error::no \${COPILOT_PLUGIN_DATA}/scripts/* references found in installed SKILL.md files"; exit 1; }
           while IFS= read -r name; do
             resolved="$COPILOT_PLUGIN_DATA/scripts/$name"
