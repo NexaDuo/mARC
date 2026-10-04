@@ -77,7 +77,8 @@ requirements for repositories without those environments.
    budget and no-progress stop. Read-only roles require a verified tool
    boundary; see `dispatch.md` for CLI fallback routing rules when using the `dispatch_agent.py` orchestration script.
 4. When a PR exists, read [review-release.md](references/review-release.md).
-   Dispatch independent `@sec` and `@rev` immediately, adjudicate bot findings
+   Dispatch independent `@sec` and `@rev` immediately (each prompt carries a
+   `reviewer: <harness>/<dispatch-id>` value you mint), adjudicate bot findings
    at HEAD, and monitor CI/release phases to terminal state. Never self-merge.
    Before tagging/merging reread [invariants-card.md](references/invariants-card.md).
 5. When saving lessons or artifacts, read [persistence.md](references/persistence.md).

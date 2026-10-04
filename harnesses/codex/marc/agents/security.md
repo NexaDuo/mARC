@@ -148,7 +148,11 @@ than flagging the phantom changes.
 
 ## Output
 Start the comment body (or report body if running in report-only mode) with the
-fixed marker `## @sec review` (see Non-negotiables), then findings **ranked
+fixed marker `## @sec review` (see Non-negotiables). Immediately below it,
+include a `reviewer: <harness>/<dispatch-id>` line, echoing verbatim the
+`reviewer:` value your dispatch prompt gave you (write `reviewer: unassigned` if
+it gave none; never invent one), and a `reviewed-sha: <HEAD_SHA>` line naming
+the PR head commit you reviewed, for audit traceability. Then list findings **ranked
 most-severe first**, each with: severity (critical/high/medium/low), `file:line`,
 the concrete risk (a plausible exploit or exposure), and a concrete fix. End with
 a **verdict**:

@@ -28,7 +28,28 @@ always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16
 - **The pre-merge gate is `@sec` AND `@rev` AND bots-adjudicated-at-HEAD.**
   Hold the merge until both grep-verifiable markers (`## @sec review` and
   `## @rev review`) are on the PR, each ending in a verdict; a BLOCK from
-  either blocks the merge. Inline bot reviews (Cursor/Greptile-class) live in `pulls/{n}/comments`, not
+  either blocks the merge. Both markers MUST come from a trusted author
+  (`OWNER`, `MEMBER`, or `COLLABORATOR`). Missing/unknown/untrusted
+  association fails closed. The field is `authorAssociation` in
+  `gh pr view <N> --json comments` / `gh issue view <N> --json comments`, and
+  `author_association` in the REST `gh api .../issues/<N>/comments` payload.
+  Select verdicts with the reference filter below this list (marker prefix
+  AND trusted association). **Trust boundary:** the marker plus the
+  association check makes a verdict findable and filters out forgeries from
+  non-collaborators; it does NOT authenticate which reviewer or dispatch
+  wrote it. Any trusted account, and under a shared `gh` login every operator,
+  reviewer and the human alike, can type a `## @sec review` comment.
+  **`reviewed-sha:` MUST equal the PR's current HEAD at merge time**
+  (`gh pr view <N> --json headRefOid`); a verdict at an older SHA does not
+  count, so new commits need a delta re-review at HEAD. **`reviewer:` SHOULD
+  be present:** when dispatching `@sec`/`@rev`, mint a
+  `reviewer: <harness>/<dispatch-id>` value (e.g. `claude-code/sec-pr<N>-<n>`,
+  unique per dispatch) and pass it in the dispatch prompt; the agent echoes
+  it verbatim. A present value that doesn't match what you dispatched means
+  the verdict is not counted (re-dispatch, or surface it to the user). It is
+  SHOULD, not MUST, because verdicts posted before this rule carry no such
+  line, and because it buys audit traceability, not authentication.
+  Inline bot reviews (Cursor/Greptile-class) live in `pulls/{n}/comments`, not
   in `gh pr checks`, are not `@sec`/`@rev`, re-run on every push, and never
   notify the operator loop — "CI green" is not permission to advance while a
   bot finding sits unaddressed. Anchor adjudication to the current HEAD SHA to
@@ -37,11 +58,22 @@ always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16
   Per thread: verify it's actually addressed → reply citing the fixing commit
   → resolve the thread; a won't-fix requires a stated justification before
   resolving. Do this at every push, not once at PR-open, since bots re-comment
-  on new commits. (origin: #125 · 2026-07-16) (origin: #139 · 2026-07-20)
+  on new commits. (origin: #125 · 2026-07-16) (origin: #139 · 2026-07-20) (origin: #216 · 2026-10-03)
 - **Re-read the operating-invariants card before tagging or merging.** Treat
   `invariants-card.md` as a checkpoint at that
   moment, not just a post-compaction reminder. (origin: #41 · 2026-07-21)
 <!-- /rules:origin-required -->
+
+**Reference verdict filter** (run as
+`gh pr view <N> --json comments --jq "<filter>"`; `scripts/test_review_trust.sh`
+extracts and tests the block between these markers, keep them intact):
+<!-- review-trust-filter:begin -->
+```jq
+.comments[]
+| select(((.body // "") | startswith("## @sec review") or startswith("## @rev review"))
+    and (.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR"))
+```
+<!-- review-trust-filter:end -->
 
 **Terminal-state playbook: branch protection `REVIEW_REQUIRED`, no eligible
 non-author approver.** A repo can require a review from someone other than the
