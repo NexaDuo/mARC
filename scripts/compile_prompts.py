@@ -1,3 +1,4 @@
+import base64
 #!/usr/bin/env python3
 import json
 import os
@@ -257,6 +258,15 @@ def render_antigravity_hooks(selected_hooks, config):
         hook_id = hook["id"]
         event_name = _AGY_EVENT_MAP[hook["event"]]
         command = _build_command(hook, config)
+        
+        # Antigravity runs hooks via `cmd /c` on Windows (which chokes on raw Bash syntax)
+        # and `sh -c` on Unix. Wrapping in `bash -c "..."` ensures the script runs in Bash
+        # everywhere. Because `cmd.exe`'s quote-stripping rules and MSVCRT's parsing interact
+        # terribly with complex escaped strings (leaving `>` exposed to `cmd.exe`), we use
+        # base64 encoding to completely hide the payload from `cmd.exe` metacharacter parsing.
+        b64_command = base64.b64encode(command.encode("utf-8")).decode("utf-8")
+        command = f'bash -c "eval \\$(echo {b64_command} | base64 -d)"'
+        
         handler = {"type": "command", "command": command}
         if event_name in ("PreToolUse", "PostToolUse"):
             event_val = [{
