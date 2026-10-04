@@ -431,6 +431,18 @@ def main():
             print(f"Error loading {compile_config_path}: {e}", file=sys.stderr)
             sys.exit(1)
 
+        # Harnesses whose native role resolution does not load agent personas
+        # (e.g. Antigravity) set `agents_as_skills: true` in compile.json: each
+        # core/agents/<name>.md compiles to skills/<name>/SKILL.md instead.
+        agents_as_skills = config.get("agents_as_skills") is True
+        core_skill_names = set()
+        core_skills_dir = os.path.join(core_dir, "skills")
+        if os.path.isdir(core_skills_dir):
+            core_skill_names = {
+                d for d in os.listdir(core_skills_dir)
+                if os.path.isdir(os.path.join(core_skills_dir, d))
+            }
+
         # Walk through the core/ template files
         for root, _, files in os.walk(core_dir):
             for file in files:
@@ -438,7 +450,21 @@ def main():
                     continue
                 source_file = os.path.join(root, file)
                 rel_path = os.path.relpath(source_file, core_dir)
-                dest_file = os.path.join(harness_marc_path, rel_path)
+
+                if agents_as_skills and os.path.dirname(rel_path) == "agents":
+                    base_name = os.path.splitext(file)[0]
+                    if base_name in core_skill_names:
+                        print(
+                            f"Error: {harness}: agent '{rel_path}' would compile to "
+                            f"skills/{base_name}/SKILL.md, colliding with core skill "
+                            f"'core/skills/{base_name}/'. Rename one of them.",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                    dest_file = os.path.join(harness_marc_path, "skills", base_name, "SKILL.md")
+                else:
+                    dest_file = os.path.join(harness_marc_path, rel_path)
+
                 compile_file(source_file, dest_file, config)
 
         # Native descriptors are source inputs too, never hand-maintained output.
