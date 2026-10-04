@@ -78,17 +78,29 @@ def test_command_generation() -> None:
         check(cmd == expected, f"claude-code command for role '{r}': {cmd}")
 
     # 2. antigravity
+    # Personas ship as skills on Antigravity and agy headless ignores `--agent`
+    # (#323), so the command names the persona skill in the prompt instead.
+    def agy_cmd(skill: str) -> list:
+        return ["agy", "--dangerously-skip-permissions", "-p",
+                f"Read the '{skill}' skill instructions before proceeding, "
+                f"then act as the mARC {skill} specialist. {prompt}"]
     roles_agy = {
-        "dev": ["agy", "--dangerously-skip-permissions", "--agent", "engineer", "-p", prompt],
-        "sre": ["agy", "--dangerously-skip-permissions", "--agent", "sre", "-p", prompt],
-        "design": ["agy", "--dangerously-skip-permissions", "--agent", "design", "-p", prompt],
-        "sec": ["agy", "--dangerously-skip-permissions", "--agent", "security", "-p", prompt],
-        "rev": ["agy", "--dangerously-skip-permissions", "--agent", "review", "-p", prompt],
-        "research": ["agy", "--dangerously-skip-permissions", "--agent", "research", "-p", prompt],
+        "dev": agy_cmd("engineer"),
+        "engineer": agy_cmd("engineer"),
+        "sre": agy_cmd("sre"),
+        "design": agy_cmd("design"),
     }
     for r, expected in roles_agy.items():
         cmd = build_harness_command("antigravity", r, prompt)
         check(cmd == expected, f"antigravity command for role '{r}': {cmd}")
+        check("--agent" not in cmd, f"antigravity command for '{r}' has no ignored --agent flag")
+    # Read-only roles never get an agy command, even if called directly (#323).
+    for r in ["sec", "security", "rev", "review", "research", "bulk-reader"]:
+        try:
+            build_harness_command("antigravity", r, prompt)
+            check(False, f"antigravity command for read-only '{r}' should raise")
+        except ReadOnlyRoutingError:
+            check(True, f"antigravity command for read-only '{r}' raises")
 
     # 3. copilot
     for r in ["dev", "sre", "design", "sec", "rev", "research"]:

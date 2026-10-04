@@ -8,6 +8,29 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.10.3] - 2026-10-04
+
+### Fixed
+
+- Antigravity: run read-only roles (`@sec`, `@rev`, `@research`, and `bulk-reader`
+  if dispatched) only in a `define_subagent` with `enable_write_tools: false`, and
+  fail closed if that can't be set up. Never use `self` or the built-in `research`
+  type for them. A probe on agy 1.2.16 (2026-10-04, with
+  `--dangerously-skip-permissions`) showed that the flag removes file writes and
+  shell but keeps `view_file`, `read_url_content` and `search_web`, and that the
+  built-in `research` type can still run shell. Since the reviewer has no shell, the
+  operator hands it the PR diff as files and posts its report verbatim as the
+  `## @sec review` / `## @rev review` comment. Web-read tools remain a residual
+  exfiltration path that was not probed. The full role-to-skill mapping and the
+  #105/#125 marker rationale are restored in the dispatch text (#341, refs #323, #338).
+- Antigravity: compile agent personas to `skills/<name>/SKILL.md`, driven by a new
+  `agents_as_skills` key in `compile.json`. The compiler now fails if a persona name
+  would collide with a core skill instead of overwriting it.
+- `dispatch_agent.py`: the `agy` command no longer passes `--agent` (headless agy
+  ignores it, and personas are skills there). The prompt names the persona skill
+  instead. Building an `agy` command for a read-only role now raises, backing up the
+  existing routing rule (#323).
+
 ## [26.10.2] - 2026-10-02
 
 ### Fixed

@@ -293,17 +293,22 @@ def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
     """Build CLI execution command for target harness."""
     role = normalize_role(role)
     if (role == "bulk-reader" and harness != "claude-code") or (
-            harness == "codex" and CANONICAL_ROLES[role] in READ_ONLY_ROLES):
-        raise ReadOnlyRoutingError("read-only role requires the verified Claude Code tool boundary (#330)")
+            harness in ("codex", "antigravity") and CANONICAL_ROLES[role] in READ_ONLY_ROLES):
+        # Defense in depth: resolve_route already re-routes read-only roles away
+        # from codex/antigravity (#323, #330); never build such a command here.
+        raise ReadOnlyRoutingError("read-only role requires the verified Claude Code tool boundary (#323, #330)")
     mapped_agent = ROLE_TO_AGENT[role]
     if harness == "claude-code":
         return ["claude", "--dangerously-skip-permissions", "--agent", mapped_agent, "-p", prompt]
     elif harness == "antigravity":
         # --dangerously-skip-permissions stays unconditional here for now; whether
         # it should become opt-in per call site is a separate decision (#323).
-        # Note agy headless does not load `--agent` either (#323), so this flag
-        # applies to the stock default agent, not the named mARC specialist.
-        return ["agy", "--dangerously-skip-permissions", "--agent", mapped_agent, "-p", prompt]
+        # The Antigravity plugin ships personas as skills (skills/<name>/SKILL.md),
+        # not agents, and agy headless ignores `--agent` anyway (#323). So no
+        # `--agent` flag: the prompt tells the stock agent to load the persona skill.
+        return ["agy", "--dangerously-skip-permissions", "-p",
+                f"Read the '{mapped_agent}' skill instructions before proceeding, "
+                f"then act as the mARC {mapped_agent} specialist. {prompt}"]
     elif harness == "copilot":
         return ["copilot", "--prompt", prompt]
     elif harness == "codex":
