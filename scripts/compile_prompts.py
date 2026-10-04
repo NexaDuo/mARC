@@ -266,14 +266,16 @@ def render_antigravity_hooks(selected_hooks, config):
         # terribly with complex escaped strings (leaving `>` exposed to `cmd.exe`), we use
         # base64 encoding to completely hide the payload from `cmd.exe` metacharacter parsing.
         
-        # We append a dummy comment containing the resolved script path so that CI's hook-resolution
-        # test can still discover and assert on it, since the base64 payload hides it from `jq`/`grep`.
+        # We append dummy comments containing the resolved script path and exports so that CI's
+        # hook-resolution and parity tests can still discover and assert on them, since the base64
+        # payload hides them from `jq`/`grep`.
         refs = re.findall(r'"\$\{[A-Z_]+(?::-[^}]*)?\}[^"]*\.sh"', command)
-        ref_dummies = ' '.join(f'# {ref}' for ref in refs)
+        exports = re.findall(r'export CLAUDE_P[A-Z_]+="[^"]+"', command)
+        exposed_literals = ' '.join(f'# {lit}' for lit in refs + exports)
         
         b64_command = base64.b64encode(command.encode("utf-8")).decode("utf-8")
         decode_cmd = "base64 -d 2>/dev/null || base64 -D 2>/dev/null || base64 --decode 2>/dev/null"
-        command = f'bash -c "eval \\$(echo {b64_command} | {decode_cmd})" {ref_dummies}'.strip()
+        command = f'bash -c "eval \\"\\$(echo {b64_command} | {decode_cmd})\\"" {exposed_literals}'.strip()
         
         handler = {"type": "command", "command": command}
         if event_name in ("PreToolUse", "PostToolUse"):
