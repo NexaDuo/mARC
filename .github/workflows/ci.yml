@@ -1085,10 +1085,10 @@ jobs:
           echo "Asserting all seven components are registered..."
           CONFIG_DIR="$HOME/.gemini/config/plugins/marc"
 
-          # Assert specialist agents
+          # Assert specialist components (now compiled as skills for Antigravity)
           for component in engineer sre design security review research; do
-            test -f "$CONFIG_DIR/agents/$component.md" || {
-              echo "::error::Agent component '$component' not found in config directory"
+            test -f "$CONFIG_DIR/skills/$component/SKILL.md" || {
+              echo "::error::Skill component '$component' not found in config directory"
               exit 1
             }
           done

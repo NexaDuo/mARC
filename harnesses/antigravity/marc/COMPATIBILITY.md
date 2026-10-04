@@ -60,7 +60,13 @@ In Google Antigravity, the native equivalent is:
 **Key Antigravity Capabilities:**
 - **Workspace Isolation:** `Workspace: "share"` provides isolated workspaces sharing the underlying repository directory (similar to git worktrees) without duplicating storage, preventing parallel writers from clobbering each other.
 - **Model Tiers:** Select `Model: "flash"` for fast research and evidence gathering (`@research`), and `Model: "pro"` or `"inherit"` for deep reasoning, code implementation, and reviews (`@dev`, `@sec`, `@rev`, `@sre`).
-- **Dynamic Specialization:** Use `define_subagent` (e.g., `enable_write_tools: false`) to enforce read-only tool boundaries for reviewers and researchers.
+- **Read-only roles via `define_subagent` (probed 2026-10-04, `agy` 1.2.16):** `@sec`, `@rev`, `@research` (and `bulk-reader` if dispatched) MUST run in a subagent created with `define_subagent` and `enable_write_tools: false`, never `self`. If that can't be established, the operator fails closed rather than running the review in a write-capable agent. What the probe showed (filesystem + transcripts, every run with `--dangerously-skip-permissions`):
+  - `enable_write_tools: false` removes the file-write tools **and** shell (`run_command`). It keeps `view_file` (absolute paths only, no directory listing or search), `read_url_content` and `search_web`.
+  - The control, `enable_write_tools: true`, can write files and run shell commands.
+  - The built-in `TypeName: research` keeps `run_command` (it created a file with `touch`), so it is **not** read-only and is not used for `@research`.
+  - Not tested: runs without `--dangerously-skip-permissions`, and whether the web-read tools can exfiltrate what the subagent read (a residual path the operator should assume exists).
+  - Consequence: the no-write subagent can't run `gh` or any shell command. The operator writes the PR diff and any needed files to a scratch path, passes absolute paths, and posts the returned report verbatim as the `## @sec review` / `## @rev review` comment, noting it was relayed from a no-write subagent.
+- **Personas are skills here:** with `agents_as_skills: true` in `compile.json`, `core/agents/<name>.md` compiles to `skills/<name>/SKILL.md`, because native role resolution did not load agent personas. Their `tools:`/`model:` frontmatter is advisory on Antigravity; only the subagent definition enforces tool boundaries. `scripts/dispatch_agent.py` names the persona skill in the `agy -p` prompt (no `--agent`, which headless agy ignores, #323) and never routes read-only roles to agy.
 - **Ongoing Coordination:** Use `send_message` for two-way agent communication and task steering without spawning redundant subagents.
 
 ### 2. Dual Path Resolution
@@ -98,7 +104,7 @@ Google documents/opens a public marketplace-registration command.
 
 - [x] Create Antigravity manifest `plugin.json` ([harnesses/antigravity/marc/plugin.json](plugin.json))
 - [x] Create `COMPATIBILITY.md` tracker ([harnesses/antigravity/marc/COMPATIBILITY.md](COMPATIBILITY.md))
-- [x] Mirror shared assets and scripts (`skills/`, `agents/`, `scripts/`) from `core/` via `scripts/compile_prompts.py`
+- [x] Mirror shared assets and scripts (`skills/`, `scripts/`; `core/agents/` personas compile into `skills/<name>/SKILL.md`) from `core/` via `scripts/compile_prompts.py`
 - [x] ~~Symlink `hooks/` to Claude Code's~~ — reversed on purpose (origin: #170): a bare
       `hooks -> ../../claude-code/marc/hooks` symlink hardcoded `CLAUDE_PLUGIN_ROOT`
       with no per-harness fallback, silently no-op'ing every Antigravity hook. `hooks/`

@@ -75,8 +75,7 @@ requirements for repositories without those environments.
    available tools, bounded loops, and reconciliation triggers. Delegate in
    the background with acceptance criteria, paths, constraints, tool-call
    budget and no-progress stop. Read-only roles require a verified tool
-   boundary; Codex/Antigravity/Copilot routes redirect to Claude Code, failing
-   closed if unavailable.
+   boundary; see `dispatch.md` for CLI fallback routing rules when using the `dispatch_agent.py` orchestration script.
 4. When a PR exists, read [review-release.md](references/review-release.md).
    Dispatch independent `@sec` and `@rev` immediately (each prompt carries a
    `reviewer: <harness>/<dispatch-id>` value you mint), adjudicate bot findings
