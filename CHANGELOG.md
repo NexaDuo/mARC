@@ -30,6 +30,7 @@ date whose `YY.M.D` is already taken.
   ignores it, and personas are skills there). The prompt names the persona skill
   instead. Building an `agy` command for a read-only role now raises, backing up the
   existing routing rule (#323).
+- Fixed contradictory read-only routing instructions for Antigravity native dispatch (#340).
 
 ## [26.10.2] - 2026-10-02
 
