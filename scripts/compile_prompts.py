@@ -275,7 +275,7 @@ def render_antigravity_hooks(selected_hooks, config):
         
         b64_command = base64.b64encode(command.encode("utf-8")).decode("utf-8")
         decode_cmd = "base64 -d 2>/dev/null || base64 -D 2>/dev/null || base64 --decode 2>/dev/null"
-        command = f'bash -c "eval \\"\\$(echo {b64_command} | {decode_cmd})\\"" {exposed_literals}'.strip()
+        command = f'bash -c "PAYLOAD=\\$(echo {b64_command} | {decode_cmd}); eval \\"\\$PAYLOAD\\"" {exposed_literals}'.strip()
         
         handler = {"type": "command", "command": command}
         if event_name in ("PreToolUse", "PostToolUse"):
