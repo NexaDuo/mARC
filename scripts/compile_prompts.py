@@ -438,7 +438,14 @@ def main():
                     continue
                 source_file = os.path.join(root, file)
                 rel_path = os.path.relpath(source_file, core_dir)
-                dest_file = os.path.join(harness_marc_path, rel_path)
+                
+                # Antigravity uses skills for custom agent personas, not agents/ dir
+                if harness == "antigravity" and rel_path.startswith("agents/"):
+                    base_name = os.path.splitext(os.path.basename(file))[0]
+                    dest_file = os.path.join(harness_marc_path, "skills", base_name, "SKILL.md")
+                else:
+                    dest_file = os.path.join(harness_marc_path, rel_path)
+                    
                 compile_file(source_file, dest_file, config)
 
         # Native descriptors are source inputs too, never hand-maintained output.
