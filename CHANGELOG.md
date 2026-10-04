@@ -12,7 +12,7 @@ date whose `YY.M.D` is already taken.
 
 ### Fixed
 
-- Security: Withdrawal operator comparison is explicitly case-folded to match existing tie-break logic. Both `## @sec review` and `## @rev review` markers now strictly require `OWNER`, `MEMBER`, or `COLLABORATOR` association, and must include a correlated `reviewer: <harness>/<dispatch-id>` line plus the `HEAD SHA` to prevent forgery from compromised untrusted accounts (#216).
+- Security: the withdrawal `operator:` comparison is now explicitly case-folded, matching the tie-break rule. `## @sec review` and `## @rev review` verdicts only count from an `OWNER`, `MEMBER`, or `COLLABORATOR` author (fail closed otherwise), which filters out non-collaborator forgeries; the merge gate states plainly that this does not authenticate which reviewer wrote a verdict. Verdicts must carry `reviewed-sha:` equal to the PR head at merge time, and should carry an operator-minted `reviewer: <harness>/<dispatch-id>` line (echoed verbatim by the agent) for audit traceability. The reference jq filter is now tested directly from the doc against a recorded `gh` payload (#216).
 
 ## [26.10.2] - 2026-10-02
 

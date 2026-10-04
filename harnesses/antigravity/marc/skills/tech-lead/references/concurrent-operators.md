@@ -107,7 +107,7 @@ whole coordination protocol; there is no locking layer, by design.
   claim it didn't post. Deleting the original `## @techlead claim` comment is
   allowed as a courtesy but is never required and never assumed — always
   resolve by the marker pair, not by the comment's presence or absence.
-  (origin: #213 · 2026-08-25)
+  (origin: #213 · 2026-08-25) (origin: #216 · 2026-10-03)
 - **Read `git worktree list` before every dispatch that will mutate files.** It
   is the one coordination signal both operators genuinely share without a
   shared identity or a board round-trip: one `.git` registers every operator's
