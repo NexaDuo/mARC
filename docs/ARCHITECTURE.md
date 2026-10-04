@@ -46,7 +46,7 @@ new skill directory, no other file needs to move.
 
 ## Axis 2 — Specialists are a shared flat `agents/` pool
 
-The specialists are subagents in a single flat `agents/` directory, shared by
+The specialists are subagents in a single flat pool (`agents/` on most harnesses), shared by
 **every** leader:
 
 - `@dev` (`engineer.md`), `@sre` (`sre.md`), `@design` (`design.md`),
@@ -55,6 +55,13 @@ The specialists are subagents in a single flat `agents/` directory, shared by
 Any leader skill can convene any specialist — the bench is common infrastructure,
 not owned by a particular leader. New specialists are added by dropping another
 `agents/<name>.md`; existing leaders can immediately dispatch them.
+
+The source of the pool is `core/agents/`. Most harnesses compile it to an
+`agents/` directory. Antigravity is the exception: its `compile.json` sets
+`agents_as_skills: true`, so each persona compiles to `skills/<name>/SKILL.md`
+(native role resolution there did not load agent personas), and the dispatch text
+enforces tool boundaries through `define_subagent` rather than persona frontmatter.
+See `harnesses/antigravity/marc/COMPATIBILITY.md`.
 
 ## Axis 3 — Multi-harness are `harnesses/<harness>/` siblings
 
