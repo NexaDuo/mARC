@@ -867,11 +867,326 @@ emit_real_run_output() {
     fi
 }
 
+# =============================================================================
+# Codex arm (issue #346)
+# =============================================================================
+# BENCH_HARNESS=codex selects a before/after measurement of the Codex harness
+# instead of the Claude arms above. It reuses the same gating (is_real_run),
+# the same LOCAL_RUN isolation (setup_local_run_isolation: scratch root, arm-A
+# worktree under it, EXIT cleanup registry), the same previous-release
+# resolution (resolve_prev_release_tag) and the same report/noise-floor code
+# (scripts/benchmark_report.py). It is never part of the default Claude run,
+# so the two arms' spend is never mixed.
+#
+# Paid path gate: is_real_run() AND BENCH_HARNESS=codex AND LOCAL_RUN=true.
+# There is no CI path: the operator's Codex login is reused through a
+# symlinked auth.json, which only makes sense on the owner's own machine.
+# Every other combination takes the free stub path.
+BENCH_HARNESS="${BENCH_HARNESS:-claude}"
+# Runs per arm (median of N). 2 arms x N runs + 1 preflight are paid.
+CODEX_ITERATIONS="${CODEX_ITERATIONS:-3}"
+# Arm A ref. Empty = the previous release tag (resolve_prev_release_tag).
+CODEX_BASE_REF="${CODEX_BASE_REF:-}"
+# Where the operator's existing Codex login lives. Only auth.json is
+# symlinked from here; it is never read, printed, copied or moved.
+CODEX_AUTH_HOME="${CODEX_AUTH_HOME:-$HOME/.codex}"
+# Optional model pin for the operator thread (empty = Codex default).
+CODEX_MODEL="${CODEX_MODEL:-}"
+# Per-run wall-clock cap, seconds.
+CODEX_RUN_TIMEOUT="${CODEX_RUN_TIMEOUT:-3600}"
+CODEX_TASK="scenario"
+# The operator dispatches Claude Code specialists, which write outside the
+# throwaway fixture (their own config dir) and need the network, so the
+# workspace-write sandbox would break the scenario. `codex exec` never asks
+# for approval, so no approval bypass is added. Runs only inside a fresh
+# mktemp'd fixture repo; override with CODEX_SANDBOX if you want stricter.
+CODEX_SANDBOX="${CODEX_SANDBOX:-danger-full-access}"
+
+# Fixed scenario. The fixture has no remote, so board/issue/PR steps are
+# explicitly out of scope; the specialist loop is what's measured. Hashed
+# into the manifest so a changed scenario never compares against an old one.
+# shellcheck disable=SC2016  # `$marc:tech-lead` is a literal Codex skill mention
+CODEX_SCENARIO_PROMPT='$marc:tech-lead Fresh task in this local throwaway repo (no GitHub remote: skip issue, board, branch-push and PR steps entirely). Bug: `python3 -m unittest` fails because mean() in stats.py returns the wrong value. Run exactly this loop, then stop: (1) dispatch the engineer specialist to fix the bug and make the tests pass; (2) dispatch the security and review specialists on the resulting diff; (3) one fix round: dispatch the engineer specialist once more to address their findings (if they found nothing, have it add a one-line docstring to mean()); (4) dispatch the security and review specialists for a delta re-review of only that last change. Then report a one-paragraph summary.'
+
+is_codex_bench() {
+    [ "$BENCH_HARNESS" = "codex" ]
+}
+
+# is_codex_real_run: the ONLY way into the paid Codex path. Fails closed.
+is_codex_real_run() {
+    is_codex_bench && is_real_run && [ "$LOCAL_RUN" = "true" ]
+}
+
+codex_paid_run_count() {
+    echo $((2 * CODEX_ITERATIONS + 1))
+}
+
+codex_scenario_hash() {
+    printf '%s' "$CODEX_SCENARIO_PROMPT:$CODEX_ITERATIONS:$CODEX_MODEL" | sha256sum | awk '{print $1}' | cut -c 1-8
+}
+
+# write_codex_stub_files: free-path fixtures, same shape as a real summary
+# record, so CI walks benchmark_report.py's Codex section for free. Carries
+# the stub markers scripts/test_telemetry_no_stub_data.sh looks for.
+write_codex_stub_files() {
+    local dir="$1" arm w
+    for arm in baseline post; do
+        : > "$dir/codex_$arm-$CODEX_TASK.jsonl"
+        for w in 1 2; do
+            python3 -c '
+import json, sys
+arm, i = sys.argv[1], int(sys.argv[2])
+k = 1000 if arm == "baseline" else 900
+op = {"weighted": 40 * k + i, "input_tokens": 300 * k, "cached_input_tokens": 280 * k,
+      "uncached_input_tokens": 20 * k, "output_tokens": 5 * k, "requests": 60, "poll_turns": 12 + i, "compactions": 0}
+spec = {"engineer": {"round1": 9 * k, "round2": 3 * k}, "security": {"round1": 4 * k, "round2": 2 * k},
+        "review": {"round1": 4 * k, "round2": 2 * k}}
+sw = sum(v for r in spec.values() for v in r.values())
+print(json.dumps({"label": "stub-model", "session_id": f"sess-codex-{arm}-{i}", "operator": op,
+                  "specialists_by_role_round": spec, "specialist_invocations": 6, "specialist_weighted": sw,
+                  "weighted": op["weighted"] + sw}, sort_keys=True))
+' "$arm" "$w" >> "$dir/codex_$arm-$CODEX_TASK.jsonl"
+        done
+    done
+}
+
+# make_codex_fixture: a tiny synthetic codebase with ONE seeded defect
+# (mean() divides by len+1). Nothing from any consuming repo. Git config is
+# pinned inline so the operator's global settings (signing, hooks) can't
+# change the result.
+make_codex_fixture() {
+    local dir="$1"
+    mkdir -p "$dir"
+    cat > "$dir/stats.py" << 'PY'
+"""Tiny statistics helpers."""
+
+
+def mean(values):
+    if not values:
+        raise ValueError("mean() of empty sequence")
+    return sum(values) / (len(values) + 1)
+
+
+def spread(values):
+    return max(values) - min(values)
+PY
+    cat > "$dir/test_stats.py" << 'PY'
+import unittest
+
+from stats import mean, spread
+
+
+class StatsTest(unittest.TestCase):
+    def test_mean(self):
+        self.assertEqual(mean([2, 4, 6]), 4)
+
+    def test_spread(self):
+        self.assertEqual(spread([3, 9, 1]), 8)
+
+
+if __name__ == "__main__":
+    unittest.main()
+PY
+    printf '# fixture\n\nA throwaway repository for a token benchmark. Run `python3 -m unittest`.\n' > "$dir/README.md"
+    git -C "$dir" -c init.defaultBranch=main init -q
+    git -C "$dir" add stats.py test_stats.py README.md
+    git -C "$dir" -c user.name=bench -c user.email=bench@example.invalid -c commit.gpgsign=false \
+        -c core.hooksPath=/dev/null commit -q -m "fixture"
+}
+
+# setup_codex_home: an isolated CODEX_HOME per arm. auth.json is SYMLINKED,
+# never copied: a copy would fork the OAuth refresh token, and a rotation
+# inside the copy would invalidate the operator's real login (the same class
+# of failure the Claude `.credentials.json` note in docs/marc/benchmarks/
+# README.md describes). The file is only existence-checked, never read.
+setup_codex_home() {
+    local home="$1" auth_src="$2"
+    if [ ! -e "$auth_src/auth.json" ]; then
+        echo "Error: no Codex login at $auth_src/auth.json. Run 'codex login' first (or set CODEX_AUTH_HOME)." >&2
+        return 1
+    fi
+    mkdir -p "$home"
+    chmod 700 "$home"
+    ln -s "$auth_src/auth.json" "$home/auth.json"
+}
+
+# assert_codex_auth_symlink: if Codex refreshed its token by
+# write-temp-then-rename, the symlink is now a regular file holding the only
+# copy of the new token. Stop spending and keep the directory so the
+# operator can recover; never delete it.
+assert_codex_auth_symlink() {
+    local home="$1"
+    if [ ! -L "$home/auth.json" ]; then
+        echo "Error: $home/auth.json is no longer a symlink (Codex rewrote it, likely a token refresh). Stopping before further spend. This directory is NOT deleted; if 'codex login status' now fails in your normal shell, run 'codex login' again." >&2
+        return 1
+    fi
+}
+
+# install_codex_plugin: install the plugin from THIS ref's checkout
+# (.agents/plugins/marketplace.json -> harnesses/codex/marc) into the
+# isolated CODEX_HOME, the same two calls the codex-install CI job makes.
+install_codex_plugin() {
+    local home="$1" root="$2" name
+    if [ ! -f "$root/.agents/plugins/marketplace.json" ] || [ ! -d "$root/harnesses/codex/marc" ]; then
+        echo "Error: $root has no Codex harness (.agents/plugins/marketplace.json + harnesses/codex/marc). Pick a newer base with CODEX_BASE_REF." >&2
+        return 1
+    fi
+    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$root/.agents/plugins/marketplace.json")"
+    CODEX_HOME="$home" codex plugin marketplace add "$root" --json > /dev/null
+    CODEX_HOME="$home" codex plugin add "marc@$name" --json > /dev/null
+}
+
+# write_specialist_shims: a `claude` wrapper put first on the operator's
+# PATH. For an agent dispatch (`--agent X`) it pins a fresh --session-id and
+# records {role, session_id} in the ledger, so the transcript maps to a role
+# exactly; everything else passes through untouched. Codex specialists need
+# no shim: their rollouts land in the isolated CODEX_HOME.
+write_specialist_shims() {
+    local dir="$1" real_claude="$2" ledger="$3"
+    mkdir -p "$dir"
+    cat > "$dir/claude" << SHIM
+#!/bin/bash
+role=""
+prev=""
+for a in "\$@"; do
+    if [ "\$prev" = "--agent" ]; then role="\$a"; fi
+    prev="\$a"
+done
+if [ -n "\$role" ]; then
+    sid="\$(python3 -c 'import uuid; print(uuid.uuid4())')"
+    python3 -c 'import json, sys, datetime; print(json.dumps({"harness": "claude", "role": sys.argv[1], "session_id": sys.argv[2], "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}))' "\$role" "\$sid" >> "$ledger"
+    exec "$real_claude" --session-id "\$sid" "\$@"
+fi
+exec "$real_claude" "\$@"
+SHIM
+    chmod +x "$dir/claude"
+}
+
+# run_codex_scenario: ONE paid operator run of the fixed scenario for one
+# arm, in a fresh fixture, then one summary line appended to $out_file.
+run_codex_scenario() {
+    local label="$1" home="$2" run_dir="$3" out_file="$4" prompt="${5:-$CODEX_SCENARIO_PROMPT}"
+    local fixture="$run_dir/fixture" shims="$run_dir/shims" ledger="$run_dir/ledger.jsonl"
+    local real_claude real_codex rc
+    mkdir -p "$run_dir"
+    : > "$ledger"
+    make_codex_fixture "$fixture"
+    real_codex="$(command -v codex)"
+    real_claude="$(command -v claude || echo claude)"
+    write_specialist_shims "$shims" "$real_claude" "$ledger"
+    local -a cmd=("$real_codex" exec --json --sandbox "$CODEX_SANDBOX" -C "$fixture")
+    [ -n "$CODEX_MODEL" ] && cmd+=(-m "$CODEX_MODEL")
+    cmd+=("$prompt")
+    if command -v timeout > /dev/null; then cmd=(timeout "$CODEX_RUN_TIMEOUT" "${cmd[@]}"); fi
+
+    echo "  [$label] codex exec in $fixture"
+    set +e
+    (cd "$fixture" && CODEX_HOME="$home" PATH="$shims:$PATH" MARC_STATE_DIR="$run_dir/state" "${cmd[@]}" \
+        > "$run_dir/events.jsonl" 2> "$run_dir/stderr.log" < /dev/null)
+    rc=$?
+    set -e
+    assert_codex_auth_symlink "$home" || return 1
+    if [ "$rc" -ne 0 ]; then
+        echo "  [$label] FAILED: codex exit $rc (see $run_dir/stderr.log). Sample discarded." >&2
+        return 0
+    fi
+    if python3 "$(dirname "${BASH_SOURCE[0]}")/codex_rollout_tokens.py" summarize \
+        --events "$run_dir/events.jsonl" --codex-home "$home" --ledger "$ledger" \
+        --claude-projects "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" --label "$label" >> "$out_file"; then
+        echo "  [$label] ok"
+    else
+        echo "  [$label] INSTRUMENT LOSS: no parsable operator rollout. Sample discarded." >&2
+    fi
+    # Move this run's rollouts out of CODEX_HOME so the next run's summarize
+    # only sees its own threads; kept under the scratch root for inspection.
+    if [ -d "$home/sessions" ]; then mv "$home/sessions" "$run_dir/codex-sessions"; fi
+}
+
+# select_claude_plugin_ref: Claude Code specialists load the mARC Claude
+# plugin from the shared LOCAL_RUN_CONFIG_DIR, so re-point it at the arm's
+# own checkout before each run (the same two calls the Claude arms make).
+select_claude_plugin_ref() {
+    local root="$1"
+    (cd "$root" && ensure_marketplace_added "./" > /dev/null && claude plugin install marc@nexaduo > /dev/null)
+}
+
+main_codex() {
+    if ! is_codex_real_run; then
+        echo "Codex arm: not a paid run (needs GITHUB_EVENT_NAME=workflow_dispatch REAL_RUN_INPUT=true LOCAL_RUN=true BENCH_HARNESS=codex). Writing stub files only."
+        write_codex_stub_files "$GITHUB_WORKSPACE"
+        return 0
+    fi
+    if [ -z "${LOCAL_RUN_CONFIG_DIR:-}" ]; then
+        echo "Error: the Codex arm dispatches Claude Code specialists, which need a logged-in Claude config. Set LOCAL_RUN_CONFIG_DIR (see docs/marc/benchmarks/README.md)." >&2
+        exit 1
+    fi
+    command -v codex > /dev/null || { echo "Error: 'codex' not on PATH." >&2; exit 1; }
+
+    trap run_exit_cleanups EXIT
+    setup_local_run_isolation
+
+    local base_ref="$CODEX_BASE_REF"
+    if [ -z "$base_ref" ]; then
+        git fetch --tags --force 2>/dev/null || echo "warning: git fetch --tags failed; resolving the previous release from local tags." >&2
+        base_ref="$(resolve_prev_release_tag "$CURRENT_REF")"
+    fi
+    [ -n "$base_ref" ] || { echo "Error: no base ref (set CODEX_BASE_REF)." >&2; exit 1; }
+    add_arm_a_worktree "$ARM_A_DIR" "$base_ref"
+
+    local scratch="$LOCAL_RUN_SCRATCH_DIR" head_root="$PWD"
+    echo "Codex arm: $base_ref (A, $ARM_A_DIR) vs $CURRENT_REF (B, $head_root), $CODEX_ITERATIONS runs per arm, $(codex_paid_run_count) paid operator runs including the preflight. Scratch: $scratch"
+
+    local arm root home i
+    for arm in a b; do
+        root="$ARM_A_DIR"; [ "$arm" = b ] && root="$head_root"
+        home="$scratch/codex-home-$arm"
+        setup_codex_home "$home" "$CODEX_AUTH_HOME"
+        install_codex_plugin "$home" "$root"
+    done
+
+    echo "--- CODEX PREFLIGHT: one paid run to confirm login + rollout parsing before the rest ---"
+    rm -f "$scratch/preflight.jsonl"
+    run_codex_scenario "preflight" "$scratch/codex-home-b" "$scratch/preflight" "$scratch/preflight.jsonl" \
+        "Reply with just the word OK." || exit 1
+    if [ ! -s "$scratch/preflight.jsonl" ]; then
+        echo "Error: CODEX PREFLIGHT FAILED (no summary record; see $scratch/preflight/stderr.log). Aborting before further spend." >&2
+        exit 1
+    fi
+
+    rm -f "$GITHUB_WORKSPACE/codex_baseline-$CODEX_TASK.jsonl" "$GITHUB_WORKSPACE/codex_post-$CODEX_TASK.jsonl"
+    for ((i = 1; i <= CODEX_ITERATIONS; i++)); do
+        # Interleave A and B so drift over time (cache state, load) hits both.
+        for arm in a b; do
+            home="$scratch/codex-home-$arm"
+            local out="$GITHUB_WORKSPACE/codex_baseline-$CODEX_TASK.jsonl"
+            [ "$arm" = b ] && out="$GITHUB_WORKSPACE/codex_post-$CODEX_TASK.jsonl"
+            root="$ARM_A_DIR"; [ "$arm" = b ] && root="$head_root"
+            select_claude_plugin_ref "$root"
+            run_codex_scenario "arm $arm / run $i" "$home" "$scratch/run-$arm-$i" "$out" || exit 1
+        done
+    done
+
+    printf '%s\n' "$CODEX_ITERATIONS" > "$GITHUB_WORKSPACE/codex_iterations.txt"
+    python3 -c '
+import json, sys
+print(json.dumps({"harness": "codex", "task": sys.argv[1], "scenario_hash": sys.argv[2], "iterations": int(sys.argv[3]),
+                  "base_ref": sys.argv[4], "head_ref": sys.argv[5], "codex_version": sys.argv[6], "model": sys.argv[7] or "default"}, indent=2))
+' "$CODEX_TASK" "$(codex_scenario_hash)" "$CODEX_ITERATIONS" "$base_ref" "$CURRENT_REF" "$(codex --version 2>/dev/null)" "$CODEX_MODEL" \
+        > "$GITHUB_WORKSPACE/codex_manifest.json"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/benchmark_report.py" --harness codex --dir "$GITHUB_WORKSPACE" --iterations "$CODEX_ITERATIONS"
+}
+
 main() {
     emit_real_run_output
 
+    if is_codex_bench; then
+        main_codex
+        exit 0
+    fi
+
     if ! is_real_run; then
         echo "Not a real run (event=$EVENT_NAME, real_run input=$REAL_RUN_INPUT). Generating stubs for PR/push/unconfirmed dispatch."
+        write_codex_stub_files "$GITHUB_WORKSPACE"
         write_task_names
         for name in "${TASK_NAMES[@]}"; do
             cat << JSON > "baseline-$name.jsonl"

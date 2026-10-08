@@ -240,8 +240,119 @@ def print_comparison_table(title: str, task_names: list[str], base_suffix: str, 
     return {"aggregate_base": aggregate_base, "aggregate_post": aggregate_post, "has_untrustworthy": has_untrustworthy}
 
 
+# --- Codex arm (issue #346) ---------------------------------------------------
+# scripts/run_token_benchmark.sh (BENCH_HARNESS=codex) writes one summary
+# record per run (scripts/codex_rollout_tokens.py `summarize`) to
+# codex_baseline-<task>.jsonl (arm A, the base ref) and codex_post-<task>.jsonl
+# (arm B, the head ref). Must match CODEX_TASK in run_token_benchmark.sh.
+CODEX_TASK = "scenario"
+CODEX_BASE_PREFIX = "codex_baseline"
+CODEX_POST_PREFIX = "codex_post"
+
+# (label, dotted path into the summary record). Operator figures come from the
+# rollout's deduped per-request counters; specialist rows are added
+# dynamically per role/round below.
+CODEX_METRICS = [
+    ("weighted (operator+specialists)", "weighted"),
+    ("operator weighted", "operator.weighted"),
+    ("operator input", "operator.input_tokens"),
+    ("operator cached input", "operator.cached_input_tokens"),
+    ("operator uncached input", "operator.uncached_input_tokens"),
+    ("operator output", "operator.output_tokens"),
+    ("operator requests", "operator.requests"),
+    ("operator poll turns", "operator.poll_turns"),
+    ("operator compactions", "operator.compactions"),
+    ("specialists weighted", "specialist_weighted"),
+    ("specialist invocations", "specialist_invocations"),
+]
+
+
+def _dig(rec: dict, dotted: str):
+    cur = rec
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur if isinstance(cur, (int, float)) and not isinstance(cur, bool) else None
+
+
+def _codex_records(path: str) -> list[dict]:
+    if not os.path.isfile(path):
+        return []
+    try:
+        return token_telemetry_report.load_records(path)
+    except OSError:
+        return []
+
+
+def _median_of(records: list[dict], dotted: str):
+    vals = [v for v in (_dig(r, dotted) for r in records) if v is not None]
+    return (statistics.median(vals), len(vals)) if vals else None
+
+
+def codex_files_present(base_dir: str) -> bool:
+    return any(os.path.isfile(os.path.join(base_dir, f"{p}-{CODEX_TASK}.jsonl"))
+               for p in (CODEX_BASE_PREFIX, CODEX_POST_PREFIX))
+
+
+def print_codex_section(base_dir: str, iterations: int | None = None) -> dict:
+    """Median-of-N per metric for the two Codex arms, plus a per-arm MAD noise
+    floor on the headline `weighted` figure (same estimator as the Claude
+    arm's neutral-task floor: N runs of an identical configuration are draws
+    from one distribution, so their dispersion is noise by construction)."""
+    base_path = os.path.join(base_dir, f"{CODEX_BASE_PREFIX}-{CODEX_TASK}.jsonl")
+    post_path = os.path.join(base_dir, f"{CODEX_POST_PREFIX}-{CODEX_TASK}.jsonl")
+    base, post = _codex_records(base_path), _codex_records(post_path)
+    print(f"--- Codex arm (issue #346): base ref (A) vs head ref (B), task '{CODEX_TASK}', median of N ---")
+    metrics = list(CODEX_METRICS)
+    roles: set = set()
+    for rec in base + post:
+        for role, rounds in (rec.get("specialists_by_role_round") or {}).items():
+            if isinstance(rounds, dict):
+                roles.update((role, rnd) for rnd in rounds)
+    metrics += [(f"specialist {role} {rnd}", f"specialists_by_role_round.{role}.{rnd}") for role, rnd in sorted(roles)]
+
+    print(f"{'metric':<34} {'A (median)':>20} {'B (median)':>20} {'delta B-A':>12} {'pct':>8}")
+    head = None
+    for label, dotted in metrics:
+        a, b = _median_of(base, dotted), _median_of(post, dotted)
+        if a is None or b is None:
+            print(f"{label:<34} {fmt_cell(a):>20} {fmt_cell(b):>20} {'n/a':>12} {'n/a':>8}")
+            continue
+        delta = b[0] - a[0]
+        pct = (delta / a[0] * 100) if a[0] else 0.0
+        if dotted == "weighted":
+            head = pct
+        print(f"{label:<34} {fmt_cell(a):>20} {fmt_cell(b):>20} {delta:>+12,.0f} {pct:>+7.1f}%")
+
+    status = "ok"
+    if iterations is not None:
+        status = _worse(cell_status(median_weighted(base_path), iterations),
+                        cell_status(median_weighted(post_path), iterations))
+        print(f"\nsample status vs requested n={iterations}: {status}")
+
+    floors = []
+    for arm, path in (("A", base_path), ("B", post_path)):
+        f = mad_floor([path])
+        if f is None:
+            print(f"noise floor arm {arm}: n/a (fewer than 2 runs)")
+        else:
+            floors.append(f.mad_pct)
+            print(f"noise floor arm {arm}: MAD {f.mad_abs:,.0f} ({f.mad_pct:.1f}%), n={f.n}")
+    if head is not None and floors:
+        floor = max(floors)
+        verdict = "WITHIN NOISE (not an effect)" if abs(head) <= floor else "clears the noise floor"
+        print(f"headline weighted delta {head:+.1f}% vs floor {floor:.1f}%: {verdict}")
+    print("(lower is better; B-A negative = the head ref used fewer tokens)\n")
+    return {"has_untrustworthy": status == "UNTRUSTWORTHY", "any_data": bool(base or post)}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--harness", choices=("all", "claude", "codex"), default="all",
+                     help="which arm(s) to report. `all` (default) prints the Claude tables and, when "
+                          "codex_*-scenario.jsonl files exist, the Codex section too. `codex` prints only "
+                          "the Codex section and needs no task-names file (issue #346).")
     ap.add_argument("--dir", default=".", help="directory containing the per-task JSONL files (default: cwd)")
     ap.add_argument("--task-names-file", default="task_names.txt", help="file listing task names, one per line (default: task_names.txt)")
     ap.add_argument("--cost-per-million", type=float, default=3.0, help="cost per million weighted tokens (default 3.0)")
@@ -252,6 +363,18 @@ def main(argv=None) -> int:
                           "silently reporting a median over a silently-reduced n. Omit for the free stub path, "
                           "whose fixed n=2 samples are not a real measurement and must not trip this gate.")
     args = ap.parse_args(argv)
+
+    if args.harness == "codex":
+        if not codex_files_present(args.dir):
+            print(f"no {CODEX_BASE_PREFIX}/{CODEX_POST_PREFIX}-{CODEX_TASK}.jsonl in {args.dir} — nothing to report.",
+                  file=sys.stderr)
+            return 1
+        res = print_codex_section(args.dir, args.iterations)
+        if args.iterations is not None and res["has_untrustworthy"]:
+            print(f"FAIL: a Codex arm has n <= {untrustworthy_threshold(args.iterations)}/{args.iterations} runs.",
+                  file=sys.stderr)
+            return 1
+        return 0
 
     names_path = args.task_names_file if os.path.isabs(args.task_names_file) else os.path.join(args.dir, args.task_names_file)
     if not os.path.isfile(names_path):
@@ -345,6 +468,13 @@ def main(argv=None) -> int:
         # silently bias the cell by reporting a median over a
         # silently-reduced n.
         has_untrustworthy = has_untrustworthy or result_d["has_untrustworthy"]
+
+    # Issue #346: the free stub path writes codex_* files too, so every CI
+    # run walks the Codex section's real aggregation code. Its sample-count
+    # gate is applied only with --harness codex (the Codex arm has its own
+    # iteration count, CODEX_ITERATIONS).
+    if args.harness == "all" and codex_files_present(args.dir):
+        print_codex_section(args.dir)
 
     if args.iterations is not None and has_untrustworthy:
         print(f"FAIL: at least one (task, arm) cell has n <= {untrustworthy_threshold(args.iterations)}/{args.iterations} "

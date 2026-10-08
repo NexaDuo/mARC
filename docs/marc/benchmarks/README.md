@@ -160,7 +160,77 @@ anywhere in this script either; skip it. Run with `git fetch --tags` already
 done, ideally right after tagging a release so the walk in
 `resolve_prev_release_tag()` finds the right baseline.
 
-### CI-only invocation (do not run this locally)
+## Codex arm (issue #346)
+
+A before/after measurement of the **Codex** harness, run by hand, never by
+CI. Same script, same gate, selected with `BENCH_HARNESS=codex`. It runs
+instead of the Claude arms, not alongside them.
+
+What it measures: one fixed scenario in a throwaway fixture repo (a tiny
+synthetic codebase with one seeded defect) on two refs. Arm A is the
+previous release tag (`resolve_prev_release_tag()`, or `CODEX_BASE_REF`),
+checked out as the usual scratch arm-A worktree. Arm B is the current
+checkout. Each run starts a fresh `$marc:tech-lead` thread: engineer fix,
+then `@sec` + `@rev`, one fix round, then a delta re-review. Arms are
+interleaved (A1, B1, A2, B2, ...) so drift over time hits both.
+
+Per run, `scripts/codex_rollout_tokens.py` writes one summary record:
+operator input / cached / output from the rollout's per-request counters
+(deduplicated by `response_id`, with `token_count` events as the fallback and
+cross-check), request and turn counts, **poll turns** (requests that only
+followed a sleep/wait/peek at a specialist, each of which re-sends the whole
+carried context), compactions, and specialist tokens by role and round.
+Claude Code specialists are mapped to their transcripts through a `claude`
+shim that pins `--session-id`; Codex specialists are read from the isolated
+`CODEX_HOME`. `benchmark_report.py --harness codex` prints the median of N per
+metric for A and B, plus a MAD noise floor per arm; a headline delta inside
+that floor is reported as noise, not an effect.
+
+Isolation:
+
+- Each arm gets its own `CODEX_HOME` under the scratch root, with the plugin
+  installed from **that ref's** `harnesses/codex/marc` (via its
+  `.agents/plugins/marketplace.json`). The Claude plugin in
+  `LOCAL_RUN_CONFIG_DIR` is re-pointed at the same ref before every run.
+- `auth.json` is **symlinked** from your Codex login (`~/.codex`, or
+  `CODEX_AUTH_HOME`), never copied, read or printed. A copy would fork the
+  OAuth refresh token, the same failure class as the Claude
+  `.credentials.json` note above. If Codex ever replaces the symlink with a
+  regular file (a token refresh), the run stops immediately and leaves the
+  scratch directory in place. If `codex login status` then fails in your
+  normal shell, log in again.
+- The operator runs with `--sandbox danger-full-access` (override with
+  `CODEX_SANDBOX`), because the Claude Code specialists it dispatches write
+  to their own config dir and need the network. Commands run as your user,
+  inside a fresh `mktemp` fixture.
+
+Run it (needs the one-time `LOCAL_RUN_CONFIG_DIR` setup above and a logged-in
+`codex`):
+
+```
+BENCH_HARNESS=codex LOCAL_RUN=true LOCAL_RUN_CONFIG_DIR=~/marc-bench-config GITHUB_EVENT_NAME=workflow_dispatch REAL_RUN_INPUT=true scripts/run_token_benchmark.sh
+```
+
+Cost envelope: `2 x CODEX_ITERATIONS + 1` operator threads (default N=3:
+**7**, one of them a one-line preflight that aborts the run if login or
+rollout parsing fails). Each scenario thread dispatches about 6 specialist
+invocations (engineer x2, `@sec` x2, `@rev` x2), so about 36 specialist
+runs on top. Codex usage is billed to your Codex login; the Claude Code
+specialists bill the subscription logged into `LOCAL_RUN_CONFIG_DIR`. Budget
+for a few million mostly-cached tokens per thread. Lower N with
+`CODEX_ITERATIONS=2` for a cheaper, noisier read. Results land in the
+working directory as `codex_baseline-scenario.jsonl` (A),
+`codex_post-scenario.jsonl` (B), `codex_iterations.txt` and
+`codex_manifest.json`, and are not committed automatically. They hold only
+numbers, but review them before committing anything under `docs/marc/`,
+which is public.
+
+Every other combination (any push/PR, a dispatch without `real_run=true`,
+`LOCAL_RUN` unset) takes the free stub path, which writes synthetic
+`codex_*` files so CI exercises the report code at no cost
+(`scripts/test_run_token_benchmark_codex.sh`).
+
+## Claude arms: CI-only invocation (do not run this locally)
 
 The same script also has a non-`LOCAL_RUN` code path used by
 `token-benchmark.yml` on a disposable GitHub Actions runner:
