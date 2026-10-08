@@ -1,4 +1,6 @@
 #!/bin/bash
+# `cond && pass ... || fail ...` is safe here: pass() always returns 0.
+# shellcheck disable=SC2015
 # Regression test for issue #346: the Codex arm of run_token_benchmark.sh.
 #
 # Offline, zero cost. Fake `codex` and `claude` binaries stand in for the

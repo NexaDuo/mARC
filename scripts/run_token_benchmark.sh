@@ -987,7 +987,7 @@ class StatsTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 PY
-    printf '# fixture\n\nA throwaway repository for a token benchmark. Run `python3 -m unittest`.\n' > "$dir/README.md"
+    printf '# fixture\n\nA throwaway repository for a token benchmark. Run: python3 -m unittest\n' > "$dir/README.md"
     git -C "$dir" -c init.defaultBranch=main init -q
     git -C "$dir" add stats.py test_stats.py README.md
     git -C "$dir" -c user.name=bench -c user.email=bench@example.invalid -c commit.gpgsign=false \
