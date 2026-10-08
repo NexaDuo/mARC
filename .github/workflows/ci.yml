@@ -463,6 +463,11 @@ jobs:
           shellcheck scripts/test_benchmark_loss_accounting.sh
           bash scripts/test_benchmark_loss_accounting.sh
 
+      - name: changelog-section.sh — regex injection test
+        run: |
+          shellcheck scripts/test_changelog_section.sh
+          bash scripts/test_changelog_section.sh
+
       # 6a1c2. Issue #346: the Codex arm. Parser self-test on synthetic
       #        rollouts (cumulative vs per-request counters, duplicates,
       #        `compacted`, poll turns, specialist role/round) plus the

@@ -23,7 +23,7 @@ test -f "$changelog" || { echo "changelog-section: $changelog not found" >&2; ex
 section="$(
   awk -v ver="$version" '
     # Start capturing at "## [ver]"; stop at the next "## [" header.
-    $0 ~ ("^## \\[" ver "\\]") { grab=1; print; next }
+    index($0, "## [" ver "]") == 1 { grab=1; print; next }
     grab && /^## \[/           { exit }
     grab                        { print }
   ' "$changelog" \
