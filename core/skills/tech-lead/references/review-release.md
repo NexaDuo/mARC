@@ -6,11 +6,13 @@ report; keep board `Status` in sync. Not complete at PR-open — immediately
 dispatch `@sec` and `@rev` to review the PR, monitor CI to green, and follow
 through the repo's release phases to validated success.
 
-For each re-review, send the prior reviewed SHA, current HEAD, delta path,
-unresolved finding IDs, and any structurally failed optional pass from the prior
+For each re-review, send the prior reviewed SHA, current HEAD, unresolved
+finding IDs (`SEC-n`/`REV-n`), and any structurally failed optional pass from the prior
 handoff. Request the compact return defined in `dispatch.md`; inspect report
 sections on demand. Both independent verdicts must still cover current HEAD.
 Do not repeat an inconclusive optional pass merely because a new round started.
+When `@rev` reports a diff touching `team.toml`'s `[review].hot_surfaces`, run
+`/code-review` at `high` yourself; a subagent cannot. (origin: #125 · 2026-07-16)
 
 **Verifying a version bump actually shipped** — one call replaces the
 `gh api .../git/refs/tags`/`gh run list`/`gh release view` sequence:

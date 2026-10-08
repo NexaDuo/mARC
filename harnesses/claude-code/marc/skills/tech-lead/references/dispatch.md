@@ -34,7 +34,7 @@ and the complete findings below it; the operator stores the response before
 reading selected sections. Do not claim a file or comment exists until it does.
 
 For a follow-up dispatch, pass a compact state: target checkout and HEAD, prior
-reviewed SHA, delta path, unresolved finding IDs and report locations, accepted
+reviewed SHA (the reviewer computes the delta from git itself), unresolved finding IDs and report locations, accepted
 constraints, and any structurally failed optional pass (reason and configuration).
 Keep implementer and reviewer state separate. Fresh sessions remain the default;
 resume is not assumed cheaper and requires supported executor behavior and a

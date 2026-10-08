@@ -64,6 +64,7 @@ practice).
 - [2026-08-25-brief-concurrent-operator-coordination.md](2026-08-25-brief-concurrent-operator-coordination.md) — research brief: external prior art for coordinating concurrent operators against one clone. Verdict CONFIRM — GitHub's GraphQL exposes no optimistic-concurrency field on issue/Projects v2 mutations (verified against the live schema), so the `board.py::set_status` last-write-wins window is knowingly accepted rather than fixed; claim-field-plus-human-discipline is what comparable systems use at this scale (#205, implemented in `AGENTS.md` via #206).
 - [2026-09-08-brief-ai-memory-2-evaluation.md](2026-09-08-brief-ai-memory-2-evaluation.md) — research brief: architectural evaluation of `akitaonrails/ai-memory` 2.0 (OKF, in-process Candle embeddings, single-writer serialization, baton passing, and typed relations). Verdict CONFIRM: reaffirm #175 rejection of mandatory daemon dependency; borrow OKF frontmatter, static CI typed relation checks, and slot/baton conventions.
 - [2026-09-08-decision-ai-memory-2-reaffirmation.md](2026-09-08-decision-ai-memory-2-reaffirmation.md) — decision record: reaffirmation of Decision #175 — mARC does not adopt `akitaonrails/ai-memory` 2.0 as a dependency; adopt zero-dependency conventions natively.
+- [2026-10-08-decision-review-token-efficiency.md](2026-10-08-decision-review-token-efficiency.md) — decision record: review and dispatch token efficiency (conditional optional review passes, compact handoffs, git-computed re-review deltas).
 
 ## Landing process (write policy)
 

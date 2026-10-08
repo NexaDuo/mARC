@@ -154,7 +154,9 @@ include a `reviewer: <harness>/<dispatch-id>` line, echoing verbatim the
 it gave none; never invent one), and a `reviewed-sha: <HEAD_SHA>` line naming
 the PR head commit you reviewed, for audit traceability. Then list findings **ranked
 most-severe first**, each with: severity (critical/high/medium/low), `file:line`,
-the concrete risk (a plausible exploit or exposure), and a concrete fix. End with
+the concrete risk (a plausible exploit or exposure), and a concrete fix. Prefix
+each finding with a stable ID (`SEC-1`, `SEC-2`, ...); on follow-up rounds keep
+prior IDs and number new findings after the highest one used. End with
 a **verdict**:
 - **BLOCK** — a high/critical finding must be resolved or explicitly accepted
   before merge.
@@ -174,7 +176,10 @@ summary. In report-only mode without an artifact channel, return a compact
 marked summary followed by the complete findings for the operator to persist;
 do not create files yourself or post when forbidden.
 
-On follow-up reviews, inspect the delta from the prior reviewed SHA and its
+On follow-up reviews, compute the delta yourself with
+`git diff <prior_sha>..HEAD`; never rely on an operator-supplied diff or path.
+If `git merge-base --is-ancestor <prior_sha> HEAD` fails (update-branch, rebase
+or force-push), do a full review of the PR diff instead. Inspect the delta's
 interactions with the full PR diff. Revalidate unresolved findings at current
 HEAD; do not repeat accepted explanations or unchanged limitations in full.
 Expand the review when the delta affects earlier conclusions. Include any

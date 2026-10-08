@@ -75,8 +75,11 @@ requirements for repositories without those environments.
    version; reload after compaction if its rules are no longer available, or
    when routing/configuration changes. Before each dispatch check: acceptance
    criteria, paths, route/tool boundary, tool-call budget, no-progress stop,
-   and compact return. Delegate in the background; read-only roles require
-   a verified tool boundary.
+   and compact return. Delegate in the background. Read-only roles
+   (`@sec`/`@rev`/`@research`) run only behind a verified no-write tool
+   boundary, and via `dispatch_agent.py` only on `claude-code` (never
+   `antigravity`/`copilot`/`codex`); fail closed if neither holds.
+   (origin: #323 · 2026-09-23)
 4. When a PR exists, read [review-release.md](references/review-release.md).
    Dispatch independent `@sec` and `@rev` immediately (each prompt carries a
    `reviewer: <harness>/<dispatch-id>` value you mint), adjudicate bot findings

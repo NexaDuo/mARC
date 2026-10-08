@@ -109,6 +109,13 @@ than flagging the phantom changes.
   independent reviewer and its verdict remain required.
   (origin: #125 · 2026-07-16) (origin: #236 · 2026-09-04)
   (origin: #237 · 2026-09-05)
+- **Hot surfaces escalate to the operator.** A subagent cannot run
+  `/code-review` at `high` (it needs sub-dispatch and silently degrades), so
+  when the diff touches a path in `team.toml`'s `[review].hot_surfaces`, say so
+  in your report and ask the operator to run `/code-review` at `high` directly.
+  (origin: #125 · 2026-07-16) (origin: #345 · 2026-10-08; supersedes the
+  longer #125 "Subagents cannot spawn subagents" wording, condensed with the
+  medium-effort cap moved into the bullet above)
 - **Confirm a hypothesis, don't fish.** If `team.toml` declares a
   `validation_command`, you may run it — bounded, build/test only, to confirm
   a specific suspicion (e.g. "does this actually break the build/tests") — never
@@ -134,7 +141,9 @@ never invent one), and a `reviewed-sha: <HEAD_SHA>` line naming the PR head
 commit you reviewed, for audit traceability. Then list findings **ranked most-severe
 first**, each with: severity (critical/high/medium/low), `file:line`, the
 concrete issue (the bug, regression, or gap this introduces or leaves), whether
-it's **verified** or **assumed**, and a concrete fix. Omit routine praise and
+it's **verified** or **assumed**, and a concrete fix. Prefix each finding with a
+stable ID (`REV-1`, `REV-2`, ...); on follow-up rounds keep prior IDs and number
+new findings after the highest one used. Omit routine praise and
 unchanged operational history. End with a **verdict**:
 - **BLOCK** — a high/critical correctness finding (a real bug, a broken test, a
   regression) must be resolved or explicitly accepted before merge.
@@ -154,7 +163,10 @@ summary. In report-only mode without an artifact channel, return a compact
 marked summary followed by the complete findings for the operator to persist;
 do not create files yourself or post when forbidden.
 
-On follow-up reviews, inspect the delta from the prior reviewed SHA and its
+On follow-up reviews, compute the delta yourself with
+`git diff <prior_sha>..HEAD`; never rely on an operator-supplied diff or path.
+If `git merge-base --is-ancestor <prior_sha> HEAD` fails (update-branch, rebase
+or force-push), do a full review of the PR diff instead. Inspect the delta's
 interactions with the full PR diff. Revalidate unresolved findings at current
 HEAD; do not repeat accepted explanations or unchanged limitations in full.
 Expand the review when the delta affects earlier conclusions. Include any

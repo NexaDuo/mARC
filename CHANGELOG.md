@@ -19,7 +19,13 @@ date whose `YY.M.D` is already taken.
   after a relevant configuration fix; independent manual reviews still apply.
 - Request compact operator handoffs and delta continuation state while retaining
   complete findings, current-HEAD verdicts, and read-only reviewer boundaries.
-  See `docs/TOKEN_EFFICIENCY_REVIEW.md` for scope and measurement limitations.
+  See `docs/marc/2026-10-08-decision-review-token-efficiency.md` for scope and
+  measurement limitations.
+- Restore the `[review].hot_surfaces` escalation (the operator runs
+  `/code-review` at `high`), which the condensed `@rev` wording had dropped.
+- Reviewers compute re-review deltas from git and fall back to a full review when
+  the prior SHA is not an ancestor of HEAD. Findings carry stable `SEC-n`/`REV-n`
+  IDs. The per-dispatch checklist names the read-only routing rule directly.
 
 ## [26.10.3] - 2026-10-04
 
