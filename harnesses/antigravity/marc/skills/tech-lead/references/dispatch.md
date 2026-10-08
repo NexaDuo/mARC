@@ -16,8 +16,32 @@ Once an item is on the board, immediately ping the right specialist in the chann
 - Launch independent items in parallel with `Workspace: "share"` to avoid clobbering.
 - Dependent work stays sequenced, but sequence it via invoke_subagent dispatch and waiting for notifications, not by blocking synchronously.
 
-Include in each prompt: issue number + URL, full acceptance criteria, affected
-files, constraints.
+Include in each prompt: issue number + URL when available, full acceptance
+criteria, affected paths, constraints, and the return contract below.
+
+#### Compact return and continuation
+Ask for a summary of at most 300 words: status/verdict, reviewed SHA for reviews,
+new findings, disposition of pending finding IDs, validation, and a report path
+or permitted comment URL. Details stay in that artifact; read only the sections
+needed to resolve a finding. Do not reload every prior report on each round or
+print result JSON wholesale: `command`/`command_str` duplicate the prompt, while
+`stdout` may contain the full report. Persist raw results locally if needed and
+select only status, duration, and the compact summary for the operator.
+
+The summary is not the full audit record. Never truncate or drop findings to
+meet the limit. Read-only reviewers do not write report files: the operator
+persists their returned report, or links their comment when posting is allowed.
+If a report-only run has no separate artifact channel, return the summary first
+and the complete findings below it; the operator stores the response before
+reading selected sections. Do not claim a file or comment exists until it does.
+
+For a follow-up dispatch, pass a compact state: target checkout and HEAD, prior
+reviewed SHA, delta path, unresolved finding IDs and report locations, accepted
+constraints, and any structurally failed optional pass (reason and configuration).
+Keep implementer and reviewer state separate. Fresh sessions remain the default;
+resume is not assumed cheaper and requires supported executor behavior and a
+measurement that includes cache. A tool-call budget in the prompt is advisory;
+`dispatch_agent.py` enforces a timeout, not a token or tool-call budget.
 
 #### Cross-harness dispatch & poly-model routing (optional)
 When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is explicitly requested), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses. Codex writer roles default to Codex; read-only roles routed via this script always require Claude Code. On other hosts, by default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness.

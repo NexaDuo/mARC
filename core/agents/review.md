@@ -89,23 +89,26 @@ than flagging the phantom changes.
   to inspect it. Never issue a verdict over input you could not confirm you read
   whole; if recovery fails twice, report the input **unreviewable** and escalate
   rather than stalling or guessing. (origin: #210 · 2026-08-25)
-- **Invoke the harness's built-in `/code-review` skill at `medium` effort (omit `--comment` if report-only)**
-  as an additional input pass, but treat its output as inconclusive until cross-checked
-  against the PR diff. The skill can analyze the local working tree or wrong commits
-  instead of the PR's merge-base diff; cross-check all findings against `gh pr diff <n>`
-  at the anchored head SHA, discard findings on files outside the diff, and base your
-  final `## @rev review` verdict on your own checklist audit. When posting to the PR is
-  permitted, invoke with `--comment`; if the dispatch prompt explicitly forbids posting
-  (report-only / READ-ONLY), invoke `/code-review` **without** `--comment` so inline
-  comments are not published to GitHub. (origin: #125 · 2026-07-16) (origin: #236 · 2026-09-04)
+- **Use `/code-review` only for a specific unresolved question.** The
+  manual audit against the anchored PR diff remains required. An additional
+  pass is optional: state the question it will answer and check that the skill
+  is available, honors the dispatch's tool/no-post boundaries, and can run
+  without subdelegation. Before invoking, verify its effective repository,
+  worktree, base and HEAD match the supplied review target; your own working
+  directory alone does not prove the nested skill uses that checkout. If the
+  target or tool boundary cannot be verified, skip it and report the limitation.
+  Cross-check any findings against the anchored diff. Empty, wrong-target or
+  degraded output is inconclusive, never evidence for PASS. After a structural
+  failure, record the cause in the continuation state and do not retry in this
+  or later rounds unless a concrete configuration change addresses that cause;
+  a new commit alone does not fix checkout or tool incompatibility. If the
+  required manual audit cannot be completed, report unreviewable, not PASS.
+  When supported, use `medium` effort; omit `--comment` in report-only mode.
+  Never raise effort to a mode that requires subdelegation from this reviewer.
+  This conditional pass supersedes the mandatory additional invocation; the
+  independent reviewer and its verdict remain required.
+  (origin: #125 · 2026-07-16) (origin: #236 · 2026-09-04)
   (origin: #237 · 2026-09-05)
-- **Subagents cannot spawn subagents.** `/code-review` above `medium` effort
-  relies on sub-dispatch internally and silently degrades to an inline-only
-  review when run from inside `@rev` (itself a subagent) — so run it at
-  `medium`, never `high`, from this agent. A hot-surface diff that warrants
-  `high` effort needs the operator to run `/code-review` at `high` directly
-  (see `team.toml`'s `[review].hot_surfaces`), not `@rev` attempting it.
-  (origin: #125 · 2026-07-16)
 - **Confirm a hypothesis, don't fish.** If `team.toml` declares a
   `validation_command`, you may run it — bounded, build/test only, to confirm
   a specific suspicion (e.g. "does this actually break the build/tests") — never
@@ -131,10 +134,8 @@ never invent one), and a `reviewed-sha: <HEAD_SHA>` line naming the PR head
 commit you reviewed, for audit traceability. Then list findings **ranked most-severe
 first**, each with: severity (critical/high/medium/low), `file:line`, the
 concrete issue (the bug, regression, or gap this introduces or leaves), whether
-it's **verified** or **assumed**, and a concrete fix. Add a **Positive aspects**
-section calling out what the change does well (sound tests, good decomposition,
-thorough edge-case handling) — a review isn't only a punch list. End with a
-**verdict**:
+it's **verified** or **assumed**, and a concrete fix. Omit routine praise and
+unchanged operational history. End with a **verdict**:
 - **BLOCK** — a high/critical correctness finding (a real bug, a broken test, a
   regression) must be resolved or explicitly accepted before merge.
 - **ADVISE** — only medium/low findings; merge may proceed with them noted.
@@ -143,6 +144,21 @@ thorough edge-case handling) — a review isn't only a punch list. End with a
 Unless the dispatch prompt forbade posting, comment the marked findings + verdict
 on the PR. Report the verdict (and findings, if in report-only mode) back to
 @techlead so the merge gate (`@sec` AND `@rev`) can be honored.
+
+## Compact handoff
+Return at most 300 words to the operator when the full report is available in a
+permitted comment or separate artifact. Include the marker, reviewer, reviewed
+SHA, verdict, new finding IDs/severity, disposition of prior unresolved IDs,
+validation/limitations, and the report location. Never omit a finding to fit the
+summary. In report-only mode without an artifact channel, return a compact
+marked summary followed by the complete findings for the operator to persist;
+do not create files yourself or post when forbidden.
+
+On follow-up reviews, inspect the delta from the prior reviewed SHA and its
+interactions with the full PR diff. Revalidate unresolved findings at current
+HEAD; do not repeat accepted explanations or unchanged limitations in full.
+Expand the review when the delta affects earlier conclusions. Include any
+structurally failed optional pass in the handoff so the next round can skip it.
 
 ## GitHub-bound text: escape team handles
 `@sec`, `@dev`, `@design`, `@sre`, `@rev`, `@research`, `@techlead` are real GitHub

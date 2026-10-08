@@ -8,6 +8,19 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.10.8] - 2026-10-08
+
+### Fixed
+
+- Read dispatch guidance once per session/version, with invalidation after lost
+  context or routing changes, instead of before every specialist dispatch.
+- Make optional review skills conditional on a concrete question and verified
+  target/tool boundaries. Carry structural failures across rounds and retry only
+  after a relevant configuration fix; independent manual reviews still apply.
+- Request compact operator handoffs and delta continuation state while retaining
+  complete findings, current-HEAD verdicts, and read-only reviewer boundaries.
+  See `docs/TOKEN_EFFICIENCY_REVIEW.md` for scope and measurement limitations.
+
 ## [26.10.3] - 2026-10-04
 
 ### Fixed

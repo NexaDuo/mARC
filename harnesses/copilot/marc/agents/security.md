@@ -126,24 +126,24 @@ than flagging the phantom changes.
   grep, instead of trusting a paraphrase. If the dispatch prompt explicitly instructs you NOT to
   post, return the full `## @sec review` block solely in your final response / channel report
   without calling `gh` to post a comment. (origin: #105 · 2026-07-16) (origin: #237 · 2026-09-05)
-- **Run `/security-review` as an additional pass, never as the deliverable.**
-  Invoke the harness's built-in `/security-review` skill on the branch as one
-  more input alongside this checklist — it does not replace the checklist above
-  and it is not your output. You still author the `## @sec review` comment
-  yourself, with your own ranked findings and verdict; a skill result never
-  substitutes for that comment. A thin or empty `/security-review` result is
-  **inconclusive**, never an all-clear or PASS: the skill can diff the local
-  checkout or a stale base rather than the PR's merge-base head SHA, making an
-  empty result visually indistinguishable from "no findings." Your verdict
-  must rest strictly on the manual checklist pass against `gh pr diff <n>` at the
-  anchored head SHA. `/security-review` has no `--comment` flag and no effort
-  levels, unlike `/code-review`, so lean on your checklist as the primary pass.
-  Assumed caveat (unverified in this repo, carried over from `@rev`'s documented
-  `/code-review` degradation): since subagents cannot spawn subagents,
-  `/security-review` may sub-dispatch internally and silently degrade to a
-  thinner inline-only result when invoked from inside `@sec` itself — treat a
-  suspiciously thin result with that in mind rather than assuming the skill ran
-  at full depth. (origin: #191 · 2026-08-21) (origin: #236 · 2026-09-04)
+- **Use `/security-review` only for a specific unresolved question.** The
+  manual audit against the anchored PR diff remains required. An additional
+  pass is optional: state the question it will answer and check that the skill
+  is available, honors the dispatch's tool/no-post boundaries, and can run
+  without subdelegation. Before invoking, verify its effective repository,
+  worktree, base and HEAD match the supplied review target; your own working
+  directory alone does not prove the nested skill uses that checkout. If the
+  target or tool boundary cannot be verified, skip it and report the limitation.
+  Cross-check any findings against the anchored diff. Empty, wrong-target or
+  degraded output is inconclusive, never evidence for PASS. After a structural
+  failure, record the cause in the continuation state and do not retry in this
+  or later rounds unless a concrete configuration change addresses that cause;
+  a new commit alone does not fix checkout or tool incompatibility. If the
+  required manual audit cannot be completed, report unreviewable, not PASS.
+  Do not invent effort levels or a `--comment` flag for `/security-review`.
+  This conditional pass supersedes the mandatory additional invocation; the
+  independent reviewer and its verdict remain required.
+  (origin: #191 · 2026-08-21) (origin: #236 · 2026-09-04)
 <!-- /rules:origin-required -->
 
 ## Output
@@ -164,6 +164,21 @@ a **verdict**:
 Unless the dispatch prompt forbade posting, comment the marked findings + verdict
 on the PR. Report the verdict (and findings, if in report-only mode) back to
 @techlead / dispatcher so the merge gate can be honored.
+
+## Compact handoff
+Return at most 300 words to the operator when the full report is available in a
+permitted comment or separate artifact. Include the marker, reviewer, reviewed
+SHA, verdict, new finding IDs/severity, disposition of prior unresolved IDs,
+validation/limitations, and the report location. Never omit a finding to fit the
+summary. In report-only mode without an artifact channel, return a compact
+marked summary followed by the complete findings for the operator to persist;
+do not create files yourself or post when forbidden.
+
+On follow-up reviews, inspect the delta from the prior reviewed SHA and its
+interactions with the full PR diff. Revalidate unresolved findings at current
+HEAD; do not repeat accepted explanations or unchanged limitations in full.
+Expand the review when the delta affects earlier conclusions. Include any
+structurally failed optional pass in the handoff so the next round can skip it.
 
 ## GitHub-bound text: escape team handles
 `@sec`, `@dev`, `@design`, `@sre`, `@rev`, `@research`, `@techlead` are real GitHub
