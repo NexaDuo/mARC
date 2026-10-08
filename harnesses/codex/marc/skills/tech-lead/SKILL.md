@@ -71,11 +71,15 @@ requirements for repositories without those environments.
    if a new issue is needed.
 2. Before claiming or potentially overlapping work, read the concurrency
    procedure below. Assignees are not ownership claims.
-3. Before every dispatch, read [dispatch.md](references/dispatch.md): routes,
-   available tools, bounded loops, and reconciliation triggers. Delegate in
-   the background with acceptance criteria, paths, constraints, tool-call
-   budget and no-progress stop. Read-only roles require a verified tool
-   boundary; see `dispatch.md` for CLI fallback routing rules when using the `dispatch_agent.py` orchestration script.
+3. Read [dispatch.md](references/dispatch.md) once per session and plugin
+   version; reload after compaction if its rules are no longer available, or
+   when routing/configuration changes. Before each dispatch check: acceptance
+   criteria, paths, route/tool boundary, tool-call budget, no-progress stop,
+   and compact return. Delegate in the background. Read-only roles
+   (`@sec`/`@rev`/`@research`) run only behind a verified no-write tool
+   boundary, and via `dispatch_agent.py` only on `claude-code` (never
+   `antigravity`/`copilot`/`codex`); fail closed if neither holds.
+   (origin: #323 · 2026-09-23)
 4. When a PR exists, read [review-release.md](references/review-release.md).
    Dispatch independent `@sec` and `@rev` immediately (each prompt carries a
    `reviewer: <harness>/<dispatch-id>` value you mint), adjudicate bot findings
