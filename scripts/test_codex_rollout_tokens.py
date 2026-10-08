@@ -5,7 +5,8 @@ Every fixture here is synthetic and built in-process: no real rollout,
 transcript, prompt, or user content is read or committed. Covers the cases
 the issue calls out: cumulative vs per-request counters, duplicate records
 and re-emitted token_count events, `compacted` (including a counter reset),
-poll-turn counting, and the per-role/per-round specialist summary.
+poll-turn counting (real function_call shapes, compound
+commands), records without response_id or compaction id, and the per-role/per-round specialist summary.
 """
 import json
 import os
@@ -208,6 +209,62 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(res["specialist_transcripts_missing"], 1)
         self.assertEqual(res["specialist_invocations"], 5)
         self.assertEqual(res["weighted"], res["operator"]["weighted"] + res["specialist_weighted"])
+
+    def test_poll_classifier_real_function_call_shapes(self):
+        # REV-3/REV-5 (PR #347): the real exec_command / shell argument shapes,
+        # and a compound command that did real work before sleeping.
+        def fc(name, args):
+            return crt.classify_call({"type": "function_call", "name": name, "arguments": json.dumps(args)})
+        self.assertEqual(fc("exec_command", {"cmd": "sleep 30"}), "poll")
+        self.assertEqual(fc("exec_command", {"cmd": "sleep 5 && sleep 5"}), "poll")
+        self.assertEqual(fc("shell", {"command": ["bash", "-lc", "sleep 20"]}), "poll")
+        self.assertEqual(fc("exec_command", {"cmd": "bash -lc 'sleep 10'"}), "poll")
+        self.assertNotEqual(fc("exec_command", {"cmd": "python3 -m unittest; sleep 1"}), "poll")
+        self.assertNotEqual(fc("shell", {"command": ["bash", "-lc", "make test && sleep 2"]}), "poll")
+        self.assertNotEqual(crt.classify_call({"type": "custom_tool_call", "name": "exec",
+                                               "input": "python3 -m unittest; sleep 1"}), "poll")
+        self.assertEqual(fc("write_stdin", {"session_id": 3, "chars": ""}), "poll")
+        self.assertNotEqual(fc("write_stdin", {"session_id": 3, "chars": "\u0003"}), "poll")
+        self.assertEqual(fc("exec_command", {"cmd": "gh run watch 123"}), "poll")
+
+    def test_compound_sleep_not_counted_as_poll_turn(self):
+        r = Rollout()
+        r.request(u(100, 0, 5))
+        r.call("c1", typ="function_call", name="exec_command", inp=json.dumps({"cmd": "python3 -m unittest; sleep 1"}))
+        r.request(u(150, 100, 5))
+        r.call("c2", typ="function_call", name="exec_command", inp=json.dumps({"cmd": "sleep 30"}))
+        r.request(u(160, 150, 5))
+        res = crt.parse_rollout(r.write(self.path("p.jsonl")))
+        self.assertEqual(res["poll_turns"], 1)
+
+    def test_record_without_response_id_deduped(self):
+        # REV-4: an id-less record re-emitted verbatim counts once; two
+        # distinct id-less requests both count.
+        r = Rollout()
+        r.request(u(100, 0, 5), dup_record=True)
+        r.request(u(150, 100, 5))
+        for row in r.rows:
+            if row["type"] == "token_usage_record":
+                row["payload"].pop("response_id")
+        res = crt.parse_rollout(r.write(self.path("noid.jsonl")))
+        self.assertEqual(res["checks"]["source"], "token_usage_record")
+        self.assertEqual(res["checks"]["duplicates_skipped"], 1)
+        self.assertEqual(res["requests"], 2)
+        self.assertEqual(res["input_tokens"], 250)
+
+    def test_compacted_without_id_in_records_mode(self):
+        # REV-4: a compacted record with no compaction_response_id still
+        # charges the next request to the compaction bucket in records mode.
+        r = Rollout()
+        r.request(u(1000, 0, 50))
+        r.rows.append({"type": "compacted", "payload": {}})
+        r.request(u(400, 0, 100))
+        r.request(u(450, 400, 10))
+        res = crt.parse_rollout(r.write(self.path("cnoid.jsonl")))
+        self.assertEqual(res["checks"]["source"], "token_usage_record")
+        self.assertEqual(res["compactions"], 1)
+        self.assertEqual(res["by_bucket"]["compaction"]["requests"], 1)
+        self.assertEqual(res["by_bucket"]["compaction"]["input_tokens"], 400)
 
     def test_cli_summarize_emits_one_json_line(self):
         home = self.path("h2")

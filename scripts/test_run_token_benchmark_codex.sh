@@ -16,7 +16,12 @@
 #      plugin installed from each ref's own checkout, 2N+1 operator runs
 #      (preflight + N per arm), specialist tokens by role and round, report.
 #   4. A token refresh that replaces the auth.json symlink stops the run
-#      before further spend.
+#      before further spend, prints the recovery steps, and leaves the
+#      scratch dir (holding the refreshed token) in place (SEC-4, PR #347).
+#   5. A failed `codex exec` still has its rollouts moved out of CODEX_HOME,
+#      so the next sample's specialist count is unchanged (REV-1, PR #347).
+#   6. A `claude` that resolves to a relative path fails fast, before any
+#      `codex exec` (SEC-1, PR #347).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +50,8 @@ case "$1" in
     *) exit 2 ;;
 esac
 prompt="${*: -1}"
+n=$(( $(cat "$FAKE_CALLS.n" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$FAKE_CALLS.n"
 tid="thread-$RANDOM$RANDOM"
 python3 "$FAKE_ROLLOUT" "$CODEX_HOME" "$tid" "Fresh operator thread."
 if [[ "$prompt" == *tech-lead* ]]; then
@@ -56,6 +63,7 @@ if [ "${FAKE_ROTATE:-0}" = "1" ]; then
     printf 'rotated\n' > "$CODEX_HOME/auth.json.tmp" && mv -f "$CODEX_HOME/auth.json.tmp" "$CODEX_HOME/auth.json"
 fi
 echo "{\"type\":\"thread.started\",\"thread_id\":\"$tid\"}"
+if [ "$n" = "${FAKE_FAIL_AT:-0}" ]; then echo "fake failure" >&2; exit 1; fi
 echo '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
 STUB
 
@@ -122,6 +130,7 @@ run_bench() {  # run_bench <outdir> [VAR=value ...]
 }
 
 exec_calls() { grep -c '^codex exec' "$CALLS" || true; }
+reset_calls() { : > "$CALLS"; rm -f "$CALLS.n"; }
 
 # 1. Gating matrix: none of these may reach `codex exec`.
 n=0
@@ -133,7 +142,7 @@ for combo in \
     "GITHUB_EVENT_NAME=workflow_dispatch BENCH_HARNESS=codex REAL_RUN_INPUT=TRUE LOCAL_RUN=true" \
     "GITHUB_EVENT_NAME=push"; do
     n=$((n + 1))
-    : > "$CALLS"
+    reset_calls
     # shellcheck disable=SC2086
     if run_bench "$WORK/gate-$n" $combo && [ "$(exec_calls)" = 0 ] \
         && [ -s "$WORK/gate-$n/codex_baseline-scenario.jsonl" ] && [ -s "$WORK/gate-$n/codex_post-scenario.jsonl" ]; then
@@ -143,7 +152,7 @@ for combo in \
     fi
 done
 
-# 2. Report walks the Codex section on stub data (default harness=all).
+# 2. Report walks the Codex section on stub data (--harness codex).
 if python3 "$REPORT" --harness codex --dir "$WORK/gate-1" > "$WORK/stub-report.txt" \
     && grep -q "Codex arm (issue #346)" "$WORK/stub-report.txt" \
     && grep -q "specialist engineer round2" "$WORK/stub-report.txt" \
@@ -155,16 +164,23 @@ fi
 (cd "$WORK/gate-6" && python3 "$REPORT" > "$WORK/all-report.txt") || true
 grep -q "Codex arm (issue #346)" "$WORK/all-report.txt" && pass "harness=all includes Codex section" || fail "harness=all lacks Codex section"
 
-# 3. Real path end to end against the fakes.
+# 3. Real path end to end against the fakes. Arm B is a feature-branch
+# checkout, so head_ref must record that branch, not GITHUB_REF_NAME=main.
+"${G[@]}" checkout -q -b feat-b
+HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
 REAL=(GITHUB_EVENT_NAME=workflow_dispatch REAL_RUN_INPUT=true LOCAL_RUN=true BENCH_HARNESS=codex
       LOCAL_RUN_CONFIG_DIR="$WORK/claude-config" CODEX_AUTH_HOME="$WORK/auth" CODEX_ITERATIONS=2)
-: > "$CALLS"
+reset_calls
 OUT="$WORK/real"
+RES="$OUT/bench-results/codex"
 if run_bench "$OUT" "${REAL[@]}"; then pass "real path (fakes) exits 0"; else fail "real path exit"; cat "$OUT/log.txt"; fi
 [ "$(exec_calls)" = 5 ] && pass "2N+1 = 5 operator runs (preflight + 2 per arm)" || fail "expected 5 codex exec calls, got $(exec_calls)"
-[ "$(wc -l < "$OUT/codex_baseline-scenario.jsonl")" = 2 ] && [ "$(wc -l < "$OUT/codex_post-scenario.jsonl")" = 2 ] \
-    && pass "N=2 summary records per arm" || fail "record counts"
-if python3 - "$OUT" << 'PY'
+[ "$(wc -l < "$RES/codex_baseline-scenario.jsonl")" = 2 ] && [ "$(wc -l < "$RES/codex_post-scenario.jsonl")" = 2 ] \
+    && pass "N=2 summary records per arm, under bench-results/codex" || fail "record counts"
+ls "$OUT"/codex_* > /dev/null 2>&1 && fail "paid-path results written to the workspace root" || pass "no paid-path results in the workspace root"
+(cd "$SCRIPT_DIR/.." && git check-ignore -q bench-results/codex/codex_manifest.json) \
+    && pass "bench-results/ is gitignored" || fail "bench-results/ not gitignored"
+if python3 - "$RES" << 'PY'
 import json, sys
 for arm in ("baseline", "post"):
     for line in open(f"{sys.argv[1]}/codex_{arm}-scenario.jsonl"):
@@ -177,8 +193,10 @@ for arm in ("baseline", "post"):
 PY
 then pass "operator + specialist (role, round) accounting"; else fail "summary record contents"; fi
 grep -q "Codex arm (issue #346)" "$OUT/log.txt" && pass "report ran at the end" || fail "no report in log"
-[ -f "$OUT/codex_manifest.json" ] && grep -q '"base_ref": "v1.0.0"' "$OUT/codex_manifest.json" \
+[ -f "$RES/codex_manifest.json" ] && grep -q '"base_ref": "v1.0.0"' "$RES/codex_manifest.json" \
     && pass "base ref resolved to previous release tag" || fail "manifest/base ref"
+grep -q '"head_ref": "feat-b"' "$RES/codex_manifest.json" && grep -q "\"head_sha\": \"$HEAD_SHA\"" "$RES/codex_manifest.json" \
+    && pass "manifest records the real head ref and sha" || { fail "manifest head ref"; cat "$RES/codex_manifest.json"; }
 grep -q "CODEX_HOME=.*codex-home-a plugin marketplace add .*arm-a" "$CALLS" \
     && grep -q "CODEX_HOME=.*codex-home-b plugin marketplace add $REPO" "$CALLS" \
     && pass "plugin installed per arm from that ref's checkout" || fail "per-ref plugin install"
@@ -189,12 +207,14 @@ for arm in a b; do
     if [ ! -L "$h" ] || [ "$(readlink "$h")" != "$WORK/auth/auth.json" ]; then ok=0; fi
 done
 [ "$ok" = 1 ] && pass "auth.json symlinked (not copied) in both CODEX_HOMEs" || fail "auth.json not a symlink"
+grep -qx "real=$WORK/bin/claude" "$SCRATCH/run-a-1/shims/claude" && ! grep -q "SHIM" "$SCRATCH/run-a-1/shims/claude" \
+    && pass "shim pins the absolute claude path via printf %q" || fail "shim real= line"
 grep -rq "$SENTINEL" "$OUT" && fail "credential content leaked into outputs" || pass "credential content never printed"
 grep -q "$SENTINEL" "$WORK/auth/auth.json" && pass "real auth.json untouched" || fail "real auth.json modified"
 git -C "$REPO" worktree list | grep -q arm-a && fail "arm-A worktree left registered" || pass "arm-A worktree cleaned up"
 
 # 4. Token refresh replaced the symlink -> stop before further spend.
-: > "$CALLS"
+reset_calls
 rm -rf "$WORK/tmp"/marc-local-run.*
 if run_bench "$WORK/rot" "${REAL[@]}" FAKE_ROTATE=1; then
     fail "rotation should abort"
@@ -203,6 +223,47 @@ else
         && pass "symlink replaced -> aborted after the first run" || fail "rotation abort (exec calls=$(exec_calls))"
 fi
 grep -q "$SENTINEL" "$WORK/auth/auth.json" && pass "real auth.json still untouched after rotation" || fail "real auth.json modified by rotation"
+ROT_SCRATCH="$(find "$WORK/tmp" -maxdepth 1 -name 'marc-local-run.*' | head -1)"
+if [ -n "$ROT_SCRATCH" ] && [ -f "$ROT_SCRATCH/codex-home-b/auth.json" ] && [ ! -L "$ROT_SCRATCH/codex-home-b/auth.json" ]; then
+    pass "scratch dir and the refreshed token survive the abort"
+else
+    fail "refreshed token lost on abort (scratch=$ROT_SCRATCH)"
+fi
+grep -q "mv \"$ROT_SCRATCH/codex-home-b/auth.json\" \"$WORK/auth/auth.json\"" "$WORK/rot/log.txt" \
+    && pass "abort message prints the exact recovery command" || { fail "recovery command missing"; cat "$WORK/rot/log.txt"; }
+
+# 5. A failed run (exec #2 = arm A run 1) must not leak its rollouts into
+# the next sample. N=3 so the report gate tolerates one discarded sample.
+reset_calls
+rm -rf "$WORK/tmp"/marc-local-run.*
+run_bench "$WORK/failrun" "${REAL[@]}" CODEX_ITERATIONS=3 CODEX_BASE_REF=v1.0.0 FAKE_FAIL_AT=2 || true
+FR="$WORK/failrun/bench-results/codex"
+FS="$(find "$WORK/tmp" -maxdepth 1 -name 'marc-local-run.*' | head -1)"
+grep -q "FAILED: codex exit 1" "$WORK/failrun/log.txt" && pass "failed run reported and discarded" || { fail "no failure logged"; cat "$WORK/failrun/log.txt"; }
+[ "$(wc -l < "$FR/codex_baseline-scenario.jsonl")" = 2 ] && pass "arm A kept 2 of 3 samples" || fail "arm A sample count"
+if python3 - "$FR" << 'PY'
+import json, sys
+for arm in ("baseline", "post"):
+    for line in open(f"{sys.argv[1]}/codex_{arm}-scenario.jsonl"):
+        r = json.loads(line)
+        assert r["specialist_invocations"] == 3, r["specialist_invocations"]
+        assert "codex-other" not in r["specialists_by_role_round"], r["specialists_by_role_round"]
+PY
+then pass "next sample's specialist count unchanged after a failed run"; else fail "failed run leaked rollouts into the next sample"; fi
+[ -n "$(find "$FS/run-a-1/codex-home-snapshot/sessions" -name 'rollout-*.jsonl' 2>/dev/null)" ] \
+    && [ ! -d "$FS/codex-home-a/sessions" ] && pass "failed run's rollouts quarantined under its run dir" || fail "failed run's rollouts not quarantined"
+
+# 6. claude resolving to a relative path fails fast, before any paid call.
+reset_calls
+rm -rf "$WORK/tmp"/marc-local-run.*
+mkdir -p "$WORK/relbin"
+cp "$WORK/bin/claude" "$WORK/relbin/claude"
+if (cd "$REPO" && env -u GITHUB_OUTPUT GITHUB_WORKSPACE="$WORK/rel" GITHUB_REF_NAME=main PATH="../relbin:$PATH" "${REAL[@]}" bash "$TARGET") > "$WORK/rel.log" 2>&1; then
+    fail "relative claude path should abort"
+else
+    [ "$(exec_calls)" = 0 ] && grep -q "not an absolute path" "$WORK/rel.log" \
+        && pass "relative claude path -> fail fast, no codex exec" || { fail "relative claude (exec calls=$(exec_calls))"; cat "$WORK/rel.log"; }
+fi
 
 echo
 if [ "$FAILS" -ne 0 ]; then

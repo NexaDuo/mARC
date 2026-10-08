@@ -104,6 +104,43 @@ def _usage(d) -> dict:
     return out
 
 
+_WRAP_RE = re.compile(r"""^\s*(?:/\S*/)?(?:ba|z)?sh\s+-l?c\s+(['"])(.*)\1\s*$""", re.S)
+_POLL_SEGMENT_RE = re.compile(r"^(sleep\s+\d+(\.\d+)?[smh]?|wait|true|:)$")
+
+
+def _shell_command(raw) -> str | None:
+    """The shell command a tool call runs, unwrapped from `bash -lc '...'`.
+    Handles a raw command string, a JSON `{"cmd": ...}` / `{"command": ...}`
+    arguments object, and an argv list. None when it isn't a shell call."""
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            parsed = raw
+        raw = parsed
+    if isinstance(raw, dict):
+        raw = raw.get("cmd", raw.get("command"))
+    if isinstance(raw, list):
+        items = [str(x) for x in raw]
+        if len(items) >= 3 and os.path.basename(items[0]) in ("bash", "sh", "zsh") and items[1] in ("-c", "-lc"):
+            return items[2].strip()
+        return " ".join(items).strip()
+    if not isinstance(raw, str):
+        return None
+    m = _WRAP_RE.match(raw)
+    return (m.group(2) if m else raw).strip()
+
+
+def is_pure_wait(cmd: str | None) -> bool:
+    """True only when every segment of the command is a sleep/wait (REV-3,
+    PR #347): `pytest; sleep 1` did real work and is not a poll."""
+    if not cmd:
+        return False
+    segs = [x.strip() for x in re.split(r"&&|\|\||;|\n", cmd)]
+    segs = [x for x in segs if x]
+    return bool(segs) and all(_POLL_SEGMENT_RE.match(x) for x in segs)
+
+
 def classify_call(p: dict) -> str:
     """Bucket for one tool call. Text is lowercased and path-normalized."""
     name = str(p.get("name") or "")
@@ -119,7 +156,7 @@ def classify_call(p: dict) -> str:
     t = text.lower().replace("\\\\", "/").replace("\\", "/")
     if "dispatch_agent.py" in t and "--help" not in t:
         return "dispatch"
-    if re.search(r"(^|[\s\"'(;&|])sleep\s+\d", t) or re.search(r"\bgh\s+(run|pr)\s+(watch|checks\b.*--watch)", t):
+    if is_pure_wait(_shell_command(raw)) or re.search(r"\bgh\s+(run|pr)\s+(watch|checks\b.*--watch)", t):
         return "poll"
     if ".claude/projects" in t or ("/sessions/" in t and "rollout-" in t):
         return "poll"
@@ -152,7 +189,7 @@ def _requests(rows: list[dict], checks: dict) -> list[dict]:
 
     def charge(usage: dict, rid=None, turn_id=None) -> None:
         nonlocal pending, after_user, compaction_pending
-        if (rid is not None and rid in compaction_rids) or (compaction_pending and rid is None):
+        if (rid is not None and rid in compaction_rids) or compaction_pending:
             share = {"compaction": 1.0}
             compaction_pending = False
         elif pending:
@@ -172,7 +209,10 @@ def _requests(rows: list[dict], checks: dict) -> list[dict]:
         if typ == "compacted":
             window += 1
             checks["compactions"] += 1
-            if not has_records:
+            # Records mode matches the compaction request by id; a compacted
+            # record without one (or the token_count fallback, which has no
+            # ids) charges the next request instead (REV-4, PR #347).
+            if not has_records or not p.get("compaction_response_id"):
                 compaction_pending = True
             continue
         if typ == "turn_context" or (typ == "event_msg" and p.get("type") == "task_started"):
@@ -190,11 +230,14 @@ def _requests(rows: list[dict], checks: dict) -> list[dict]:
         if typ == "token_usage_record" and has_records:
             checks["usage_records"] += 1
             rid = p.get("response_id")
-            if rid is not None and rid in seen:
+            # No response_id: dedupe on (turn, cumulative counter) instead, so
+            # a re-emitted id-less record is still counted once (REV-4).
+            key = ("rid", rid) if rid is not None else (
+                "turn", p.get("turn_id"), json.dumps(p.get("thread_token_usage"), sort_keys=True))
+            if key in seen:
                 checks["duplicates_skipped"] += 1
                 continue
-            if rid is not None:
-                seen.add(rid)
+            seen.add(key)
             usage = _usage(p.get("usage"))
             total = _usage(p.get("thread_token_usage"))
             if prev_total is not None and any(total[f] < prev_total[f] for f in FIELDS):

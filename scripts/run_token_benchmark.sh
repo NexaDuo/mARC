@@ -885,8 +885,14 @@ emit_real_run_output() {
 BENCH_HARNESS="${BENCH_HARNESS:-claude}"
 # Runs per arm (median of N). 2 arms x N runs + 1 preflight are paid.
 CODEX_ITERATIONS="${CODEX_ITERATIONS:-3}"
-# Arm A ref. Empty = the previous release tag (resolve_prev_release_tag).
+# Arm A ref. Set it explicitly (the README command does). Empty = the
+# previous release tag walked from HEAD (resolve_prev_release_tag), which
+# only works once a release tag contains harnesses/codex/marc; until then
+# install_codex_plugin fails closed before any spend.
 CODEX_BASE_REF="${CODEX_BASE_REF:-}"
+# Where paid-run result files go. Gitignored (bench-results/), so a blanket
+# `git add` can't sweep them into a commit (SEC-5, PR #347).
+CODEX_OUT_DIR="${CODEX_OUT_DIR:-$GITHUB_WORKSPACE/bench-results/codex}"
 # Where the operator's existing Codex login lives. Only auth.json is
 # symlinked from here; it is never read, printed, copied or moved.
 CODEX_AUTH_HOME="${CODEX_AUTH_HOME:-$HOME/.codex}"
@@ -898,8 +904,9 @@ CODEX_TASK="scenario"
 # The operator dispatches Claude Code specialists, which write outside the
 # throwaway fixture (their own config dir) and need the network, so the
 # workspace-write sandbox would break the scenario. `codex exec` never asks
-# for approval, so no approval bypass is added. Runs only inside a fresh
-# mktemp'd fixture repo; override with CODEX_SANDBOX if you want stricter.
+# for approval, so no approval bypass is added. The cwd is a fresh mktemp'd
+# fixture, but that is NOT containment: the model runs with your full user
+# access (SEC-3). Override with CODEX_SANDBOX if you want stricter.
 CODEX_SANDBOX="${CODEX_SANDBOX:-danger-full-access}"
 
 # Fixed scenario. The fixture has no remote, so board/issue/PR steps are
@@ -1015,9 +1022,19 @@ setup_codex_home() {
 # copy of the new token. Stop spending and keep the directory so the
 # operator can recover; never delete it.
 assert_codex_auth_symlink() {
-    local home="$1"
+    local home="$1" auth_src="${2:-$CODEX_AUTH_HOME}"
     if [ ! -L "$home/auth.json" ]; then
-        echo "Error: $home/auth.json is no longer a symlink (Codex rewrote it, likely a token refresh). Stopping before further spend. This directory is NOT deleted; if 'codex login status' now fails in your normal shell, run 'codex login' again." >&2
+        cat >&2 << MSG
+Error: $home/auth.json is no longer a symlink (Codex rewrote it, likely a token
+refresh). Stopping before further spend. The scratch directory is NOT deleted:
+that file may now hold the ONLY valid copy of your refreshed token.
+Recover (see docs/marc/benchmarks/README.md, "Codex arm"):
+  1. codex login status        # in your normal shell
+  2. if that fails, restore the refreshed token:
+       mv "$home/auth.json" "$auth_src/auth.json" && chmod 600 "$auth_src/auth.json"
+     and re-run 'codex login status' (if it still fails: codex login)
+  3. then delete the scratch directory: rm -rf "$(dirname "$home")"
+MSG
         return 1
     fi
 }
@@ -1028,7 +1045,7 @@ assert_codex_auth_symlink() {
 install_codex_plugin() {
     local home="$1" root="$2" name
     if [ ! -f "$root/.agents/plugins/marketplace.json" ] || [ ! -d "$root/harnesses/codex/marc" ]; then
-        echo "Error: $root has no Codex harness (.agents/plugins/marketplace.json + harnesses/codex/marc). Pick a newer base with CODEX_BASE_REF." >&2
+        echo "Error: $root has no Codex harness (.agents/plugins/marketplace.json + harnesses/codex/marc). Set CODEX_BASE_REF to a ref that has it (e.g. origin/main); no release tag carries it until one ships." >&2
         return 1
     fi
     name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$root/.agents/plugins/marketplace.json")"
@@ -1041,25 +1058,64 @@ install_codex_plugin() {
 # records {role, session_id} in the ledger, so the transcript maps to a role
 # exactly; everything else passes through untouched. Codex specialists need
 # no shim: their rollouts land in the isolated CODEX_HOME.
+# The two interpolated values are emitted with printf %q and the body is a
+# quoted heredoc, so no path character can become shim code (SEC-2).
 write_specialist_shims() {
     local dir="$1" real_claude="$2" ledger="$3"
+    case "$real_claude" in
+        /*) ;;
+        *) echo "Error: write_specialist_shims needs an absolute claude path, got '$real_claude'." >&2; return 1 ;;
+    esac
     mkdir -p "$dir"
-    cat > "$dir/claude" << SHIM
-#!/bin/bash
+    {
+        echo '#!/bin/bash'
+        printf 'real=%q\nledger=%q\n' "$real_claude" "$ledger"
+        cat << 'SHIM'
 role=""
 prev=""
-for a in "\$@"; do
-    if [ "\$prev" = "--agent" ]; then role="\$a"; fi
-    prev="\$a"
+for a in "$@"; do
+    if [ "$prev" = "--agent" ]; then role="$a"; fi
+    prev="$a"
 done
-if [ -n "\$role" ]; then
-    sid="\$(python3 -c 'import uuid; print(uuid.uuid4())')"
-    python3 -c 'import json, sys, datetime; print(json.dumps({"harness": "claude", "role": sys.argv[1], "session_id": sys.argv[2], "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}))' "\$role" "\$sid" >> "$ledger"
-    exec "$real_claude" --session-id "\$sid" "\$@"
+if [ -n "$role" ]; then
+    sid="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+    python3 -c 'import json, sys, datetime; print(json.dumps({"harness": "claude", "role": sys.argv[1], "session_id": sys.argv[2], "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")}))' "$role" "$sid" >> "$ledger"
+    exec "$real" --session-id "$sid" "$@"
 fi
-exec "$real_claude" "\$@"
+exec "$real" "$@"
 SHIM
+    } > "$dir/claude"
     chmod +x "$dir/claude"
+}
+
+# resolve_real_claude: the absolute path of the real `claude` binary, or
+# fail. No fallback to a bare `claude`: with the shims dir first on PATH that
+# would exec the shim itself in a loop, and a relative PATH entry would
+# resolve from the fixture cwd the operator can write to (SEC-1).
+resolve_real_claude() {
+    local p
+    p="$(command -v claude)" || { echo "Error: 'claude' not on PATH (the Codex arm's specialists need it)." >&2; return 1; }
+    case "$p" in
+        /*) ;;
+        *) echo "Error: 'claude' resolved to '$p', not an absolute path (relative PATH entry?). Fix PATH." >&2; return 1 ;;
+    esac
+    if [ ! -f "$p" ] || [ ! -x "$p" ]; then
+        echo "Error: '$p' is not an executable file." >&2
+        return 1
+    fi
+    printf '%s\n' "$p"
+}
+
+# quarantine_codex_sessions: move every rollout out of the arm's CODEX_HOME
+# into dest. Called unconditionally after each run, whatever its exit code,
+# so a failed or timed-out run can never leak its threads into the next
+# sample as extra specialists (REV-1, PR #347).
+quarantine_codex_sessions() {
+    local home="$1" dest="$2"
+    if [ -d "$home/sessions" ]; then
+        mkdir -p "$dest"
+        mv "$home/sessions" "$dest/sessions"
+    fi
 }
 
 # run_codex_scenario: ONE paid operator run of the fixed scenario for one
@@ -1067,13 +1123,15 @@ SHIM
 run_codex_scenario() {
     local label="$1" home="$2" run_dir="$3" out_file="$4" prompt="${5:-$CODEX_SCENARIO_PROMPT}"
     local fixture="$run_dir/fixture" shims="$run_dir/shims" ledger="$run_dir/ledger.jsonl"
-    local real_claude real_codex rc
+    local real_claude real_codex rc snap="$run_dir/codex-home-snapshot"
     mkdir -p "$run_dir"
     : > "$ledger"
+    # Defensive: anything already in CODEX_HOME belongs to no run of ours.
+    quarantine_codex_sessions "$home" "$run_dir/stale-before-run"
     make_codex_fixture "$fixture"
     real_codex="$(command -v codex)"
-    real_claude="$(command -v claude || echo claude)"
-    write_specialist_shims "$shims" "$real_claude" "$ledger"
+    real_claude="$(resolve_real_claude)" || return 1
+    write_specialist_shims "$shims" "$real_claude" "$ledger" || return 1
     local -a cmd=("$real_codex" exec --json --sandbox "$CODEX_SANDBOX" -C "$fixture")
     [ -n "$CODEX_MODEL" ] && cmd+=(-m "$CODEX_MODEL")
     cmd+=("$prompt")
@@ -1085,21 +1143,21 @@ run_codex_scenario() {
         > "$run_dir/events.jsonl" 2> "$run_dir/stderr.log" < /dev/null)
     rc=$?
     set -e
+    # Finally-style: move this run's rollouts out BEFORE any early return
+    # (failure, timeout's 124, auth abort). Kept under the scratch root.
+    quarantine_codex_sessions "$home" "$snap"
     assert_codex_auth_symlink "$home" || return 1
     if [ "$rc" -ne 0 ]; then
-        echo "  [$label] FAILED: codex exit $rc (see $run_dir/stderr.log). Sample discarded." >&2
+        echo "  [$label] FAILED: codex exit $rc (see $run_dir/stderr.log). Sample discarded; its rollouts are in $snap." >&2
         return 0
     fi
     if python3 "$(dirname "${BASH_SOURCE[0]}")/codex_rollout_tokens.py" summarize \
-        --events "$run_dir/events.jsonl" --codex-home "$home" --ledger "$ledger" \
+        --events "$run_dir/events.jsonl" --codex-home "$snap" --ledger "$ledger" \
         --claude-projects "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" --label "$label" >> "$out_file"; then
         echo "  [$label] ok"
     else
         echo "  [$label] INSTRUMENT LOSS: no parsable operator rollout. Sample discarded." >&2
     fi
-    # Move this run's rollouts out of CODEX_HOME so the next run's summarize
-    # only sees its own threads; kept under the scratch root for inspection.
-    if [ -d "$home/sessions" ]; then mv "$home/sessions" "$run_dir/codex-sessions"; fi
 }
 
 # select_claude_plugin_ref: Claude Code specialists load the mARC Claude
@@ -1121,6 +1179,7 @@ main_codex() {
         exit 1
     fi
     command -v codex > /dev/null || { echo "Error: 'codex' not on PATH." >&2; exit 1; }
+    resolve_real_claude > /dev/null || exit 1
 
     trap run_exit_cleanups EXIT
     setup_local_run_isolation
@@ -1128,13 +1187,22 @@ main_codex() {
     local base_ref="$CODEX_BASE_REF"
     if [ -z "$base_ref" ]; then
         git fetch --tags --force 2>/dev/null || echo "warning: git fetch --tags failed; resolving the previous release from local tags." >&2
-        base_ref="$(resolve_prev_release_tag "$CURRENT_REF")"
+        # Walk from the checked-out HEAD, not $CURRENT_REF (which defaults
+        # to "main" locally and would ignore a PR branch checkout).
+        base_ref="$(resolve_prev_release_tag HEAD)"
+        echo "CODEX_BASE_REF not set; defaulting arm A to the previous release tag '$base_ref'." >&2
     fi
     [ -n "$base_ref" ] || { echo "Error: no base ref (set CODEX_BASE_REF)." >&2; exit 1; }
     add_arm_a_worktree "$ARM_A_DIR" "$base_ref"
 
+    # Record what arm B really is: the checkout's branch (or "HEAD" when
+    # detached) and its commit, never the "main" default of CURRENT_REF.
+    local head_ref head_sha base_sha
+    head_ref="$(git rev-parse --abbrev-ref HEAD)"
+    head_sha="$(git rev-parse HEAD)"
+    base_sha="$(git -C "$ARM_A_DIR" rev-parse HEAD)"
     local scratch="$LOCAL_RUN_SCRATCH_DIR" head_root="$PWD"
-    echo "Codex arm: $base_ref (A, $ARM_A_DIR) vs $CURRENT_REF (B, $head_root), $CODEX_ITERATIONS runs per arm, $(codex_paid_run_count) paid operator runs including the preflight. Scratch: $scratch"
+    echo "Codex arm: $base_ref (A, $ARM_A_DIR) vs $head_ref@${head_sha:0:12} (B, $head_root), $CODEX_ITERATIONS runs per arm, $(codex_paid_run_count) paid operator runs including the preflight. Scratch: $scratch. Results: $CODEX_OUT_DIR"
 
     local arm root home i
     for arm in a b; do
@@ -1153,27 +1221,29 @@ main_codex() {
         exit 1
     fi
 
-    rm -f "$GITHUB_WORKSPACE/codex_baseline-$CODEX_TASK.jsonl" "$GITHUB_WORKSPACE/codex_post-$CODEX_TASK.jsonl"
+    mkdir -p "$CODEX_OUT_DIR"
+    rm -f "$CODEX_OUT_DIR/codex_baseline-$CODEX_TASK.jsonl" "$CODEX_OUT_DIR/codex_post-$CODEX_TASK.jsonl"
     for ((i = 1; i <= CODEX_ITERATIONS; i++)); do
         # Interleave A and B so drift over time (cache state, load) hits both.
         for arm in a b; do
             home="$scratch/codex-home-$arm"
-            local out="$GITHUB_WORKSPACE/codex_baseline-$CODEX_TASK.jsonl"
-            [ "$arm" = b ] && out="$GITHUB_WORKSPACE/codex_post-$CODEX_TASK.jsonl"
+            local out="$CODEX_OUT_DIR/codex_baseline-$CODEX_TASK.jsonl"
+            [ "$arm" = b ] && out="$CODEX_OUT_DIR/codex_post-$CODEX_TASK.jsonl"
             root="$ARM_A_DIR"; [ "$arm" = b ] && root="$head_root"
             select_claude_plugin_ref "$root"
             run_codex_scenario "arm $arm / run $i" "$home" "$scratch/run-$arm-$i" "$out" || exit 1
         done
     done
 
-    printf '%s\n' "$CODEX_ITERATIONS" > "$GITHUB_WORKSPACE/codex_iterations.txt"
+    printf '%s\n' "$CODEX_ITERATIONS" > "$CODEX_OUT_DIR/codex_iterations.txt"
     python3 -c '
 import json, sys
 print(json.dumps({"harness": "codex", "task": sys.argv[1], "scenario_hash": sys.argv[2], "iterations": int(sys.argv[3]),
-                  "base_ref": sys.argv[4], "head_ref": sys.argv[5], "codex_version": sys.argv[6], "model": sys.argv[7] or "default"}, indent=2))
-' "$CODEX_TASK" "$(codex_scenario_hash)" "$CODEX_ITERATIONS" "$base_ref" "$CURRENT_REF" "$(codex --version 2>/dev/null)" "$CODEX_MODEL" \
-        > "$GITHUB_WORKSPACE/codex_manifest.json"
-    python3 "$(dirname "${BASH_SOURCE[0]}")/benchmark_report.py" --harness codex --dir "$GITHUB_WORKSPACE" --iterations "$CODEX_ITERATIONS"
+                  "base_ref": sys.argv[4], "base_sha": sys.argv[5], "head_ref": sys.argv[6], "head_sha": sys.argv[7],
+                  "codex_version": sys.argv[8], "model": sys.argv[9] or "default"}, indent=2))
+' "$CODEX_TASK" "$(codex_scenario_hash)" "$CODEX_ITERATIONS" "$base_ref" "$base_sha" "$head_ref" "$head_sha" \
+        "$(codex --version 2>/dev/null)" "$CODEX_MODEL" > "$CODEX_OUT_DIR/codex_manifest.json"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/benchmark_report.py" --harness codex --dir "$CODEX_OUT_DIR" --iterations "$CODEX_ITERATIONS"
 }
 
 main() {
