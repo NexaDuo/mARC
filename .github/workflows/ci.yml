@@ -463,6 +463,18 @@ jobs:
           shellcheck scripts/test_benchmark_loss_accounting.sh
           bash scripts/test_benchmark_loss_accounting.sh
 
+      # 6a1c2. Issue #346: the Codex arm. Parser self-test on synthetic
+      #        rollouts (cumulative vs per-request counters, duplicates,
+      #        `compacted`, poll turns, specialist role/round) plus the
+      #        script's gating matrix and an end-to-end run against fake
+      #        `codex`/`claude` binaries. The paid path is never reachable
+      #        here: it needs LOCAL_RUN=true + an explicit real_run dispatch.
+      - name: run_token_benchmark.sh — Codex arm self-test (free path only)
+        run: |
+          shellcheck scripts/test_run_token_benchmark_codex.sh
+          python3 scripts/test_codex_rollout_tokens.py
+          bash scripts/test_run_token_benchmark_codex.sh
+
       # 6a1d. Issue #295: scripts/benchmark_report.py must surface each
       #       (task, arm) cell's sample count against --iterations and fail
       #       loudly (non-zero exit) rather than silently reporting a median

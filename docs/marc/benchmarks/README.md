@@ -160,7 +160,105 @@ anywhere in this script either; skip it. Run with `git fetch --tags` already
 done, ideally right after tagging a release so the walk in
 `resolve_prev_release_tag()` finds the right baseline.
 
-### CI-only invocation (do not run this locally)
+## Codex arm (issue #346)
+
+A before/after measurement of the **Codex** harness, run by hand, never by
+CI. Same script, same gate, selected with `BENCH_HARNESS=codex`. It runs
+instead of the Claude arms, not alongside them.
+
+What it measures: one fixed scenario in a throwaway fixture repo (a tiny
+synthetic codebase with one seeded defect) on two refs. Arm A is
+`CODEX_BASE_REF`, checked out as the usual scratch arm-A worktree. Set it
+explicitly: **it is required until a release tag contains
+`harnesses/codex/marc`** (none does yet). If it's unset, the script falls back
+to the previous release tag walked from `HEAD` (`resolve_prev_release_tag()`),
+and today that fallback stops before any spend because the tag has no Codex
+harness. Arm B is the current checkout. The manifest records arm B's real
+branch and commit (`head_ref`, `head_sha`) and arm A's `base_ref` and
+`base_sha`. Each run starts a fresh `$marc:tech-lead` thread: engineer fix,
+then `@sec` + `@rev`, one fix round, then a delta re-review. Arms are
+interleaved (A1, B1, A2, B2, ...) so drift over time hits both.
+
+Per run, `scripts/codex_rollout_tokens.py` writes one summary record:
+operator input / cached / output from the rollout's per-request counters
+(deduplicated by `response_id`, with `token_count` events as the fallback and
+cross-check), request and turn counts, **poll turns** (requests that only
+followed a sleep/wait/peek at a specialist, each of which re-sends the whole
+carried context), compactions, and specialist tokens by role and round.
+"Per turn" here means the deduplicated per-request counters plus the request
+and turn counts. The record doesn't carry a token breakdown for each turn. A
+shell call counts as a poll only when every part of the command is a
+`sleep`/`wait` (so `python3 -m unittest; sleep 1` is not a poll), or when it's
+a `gh ... --watch` or a peek at a specialist transcript. A failed or timed-out
+run is discarded, and its rollouts are always moved out of the arm's
+`CODEX_HOME` so they can't be counted in the next sample.
+Claude Code specialists are mapped to their transcripts through a `claude`
+shim that pins `--session-id`; Codex specialists are read from the isolated
+`CODEX_HOME`. `benchmark_report.py --harness codex` prints the median of N per
+metric for A and B, plus a MAD noise floor per arm; a headline delta inside
+that floor is reported as noise, not an effect.
+
+Isolation:
+
+- Each arm gets its own `CODEX_HOME` under the scratch root, with the plugin
+  installed from **that ref's** `harnesses/codex/marc` (via its
+  `.agents/plugins/marketplace.json`). The Claude plugin in
+  `LOCAL_RUN_CONFIG_DIR` is re-pointed at the same ref before every run.
+- `auth.json` is **symlinked** from your Codex login (`~/.codex`, or
+  `CODEX_AUTH_HOME`), never copied, read or printed. A copy would fork the
+  OAuth refresh token, the same failure class as the Claude
+  `.credentials.json` note above. If Codex ever replaces the symlink with a
+  regular file (a token refresh), the run stops immediately and leaves the
+  scratch directory in place, because that file may now be the only valid
+  copy of your refreshed token. The error prints the exact paths. To recover:
+  1. Run `codex login status` in your normal shell. If it passes, skip to step 3.
+  2. Move the refreshed token back over your login:
+     `mv "$TMPDIR/marc-local-run.XXXXXX/codex-home-<arm>/auth.json" ~/.codex/auth.json && chmod 600 ~/.codex/auth.json`
+     (use `CODEX_AUTH_HOME` instead of `~/.codex` if you set it), then run
+     `codex login status` again. If it still fails, run `codex login`.
+  3. Delete the scratch directory (`rm -rf "$TMPDIR/marc-local-run.XXXXXX"`)
+     so no stray token copy is left behind.
+- The operator runs with `--sandbox danger-full-access` (override with
+  `CODEX_SANDBOX`), because the Claude Code specialists it dispatches write
+  to their own config dir and need the network. **This is not containment.**
+  The model runs with your full user access: it can read and write anything
+  your user can, including your real `~/.codex/auth.json` (through the
+  symlink) and the Claude config in `LOCAL_RUN_CONFIG_DIR`. The `mktemp`
+  fixture is only its working directory. The prompt is fixed and the fixture
+  is synthetic, but run it only on a machine where that access is acceptable.
+- The `claude` shim that maps specialists to transcripts calls the real
+  `claude` by absolute path. If `claude` isn't on `PATH`, or resolves to a
+  relative path, the run fails before any spend.
+
+Run it from the checkout you want as arm B (needs the one-time
+`LOCAL_RUN_CONFIG_DIR` setup above and a logged-in `codex`). `CODEX_BASE_REF`
+is arm A. Use `origin/main` to measure a branch against main, or any other ref
+that has `harnesses/codex/marc`:
+
+```
+git fetch origin
+CODEX_BASE_REF=origin/main BENCH_HARNESS=codex LOCAL_RUN=true LOCAL_RUN_CONFIG_DIR=~/marc-bench-config GITHUB_EVENT_NAME=workflow_dispatch REAL_RUN_INPUT=true scripts/run_token_benchmark.sh
+```
+
+Cost envelope: `2 x CODEX_ITERATIONS + 1` operator threads (default N=3:
+**7**, one of them a one-line preflight that aborts the run if login or
+rollout parsing fails). Each scenario thread dispatches about 6 specialist
+invocations (engineer x2, `@sec` x2, `@rev` x2), so about 36 specialist
+runs on top. Codex usage is billed to your Codex login; the Claude Code
+specialists bill the subscription logged into `LOCAL_RUN_CONFIG_DIR`. Budget
+for a few million mostly-cached tokens per thread. Lower N with
+`CODEX_ITERATIONS=2` for a cheaper, noisier read. Results land in
+`bench-results/codex/` (override with `CODEX_OUT_DIR`), which is gitignored,
+as `codex_baseline-scenario.jsonl` (A), `codex_post-scenario.jsonl` (B),
+`codex_iterations.txt` and `codex_manifest.json`. They hold only numbers,
+but review them before copying anything under `docs/marc/`, which is public.
+
+Every other combination (any push/PR, a dispatch without `real_run=true`,
+`LOCAL_RUN` unset) takes the free stub path, which writes synthetic
+`codex_*` files so CI exercises the report code at no cost
+(`scripts/test_run_token_benchmark_codex.sh`).
+
+## Claude arms: CI-only invocation (do not run this locally)
 
 The same script also has a non-`LOCAL_RUN` code path used by
 `token-benchmark.yml` on a disposable GitHub Actions runner:
