@@ -29,8 +29,8 @@ measurement that includes cache. A tool-call budget in the prompt is advisory;
 `dispatch_agent.py` enforces a timeout, not a token or tool-call budget.
 
 #### Cross-harness dispatch & poly-model routing (optional)
-When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is explicitly requested), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses. Codex writer roles default to Codex; read-only roles routed via this script always require Claude Code. On other hosts, by default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness.
-**Note:** When using `dispatch_agent.py`, read-only roles (`@rev`/`@research`/`@sec`) are never dispatched to `antigravity`, `copilot`, or `codex`, since none of these apply mARC agent definitions headless (#323). This restriction applies ONLY to the CLI wrapper — when dispatching read-only roles natively, strictly follow your primary dispatch instructions above to ensure tool boundaries are safely enforced.
+When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is explicitly requested), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses. Codex writer roles default to Codex; read-only roles routed via this script require Claude Code unless `team.toml` explicitly opts them into Codex (#351). On other hosts, by default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness.
+**Note:** When using `dispatch_agent.py`, read-only roles (`@rev`/`@research`/`@sec`) are never dispatched to `antigravity`, `copilot`, or `codex`, since none of these apply mARC agent definitions headless (#323). The one exception is an explicit `team.toml` route to `codex` for `@sec`/`@rev`/`@research` (see the Codex note below; origin: #351 · 2026-10-14). This restriction applies ONLY to the CLI wrapper — when dispatching read-only roles natively, strictly follow your primary dispatch instructions above to ensure tool boundaries are safely enforced.
 ```bash
 python3 "${{{ plugin_root_env }}:-.}/scripts/dispatch_agent.py" \
   --role "<dev|sre|design|sec|rev|research>" \
@@ -241,6 +241,27 @@ advance local `main`): `git fetch origin && git checkout -b <branch>
 origin/main`. Stale PR → `gh pr update-branch <N>`, never re-cut the branch.
 
 
-Codex note (#330): read-only roles follow the #323 Claude Code route until
-native agent discovery and tool restrictions are proven. Codex writers use
-`--sandbox workspace-write`; filesystem read-only alone is not a tool boundary.
+Codex note (#330, narrowed by #351): Codex writers use `--sandbox
+workspace-write`. Codex read-only roles: opt-in, fs read-only + network
+profile, verified by the CI probe. `@sec`/`@rev`/`@research` (never
+`bulk-reader`) run on Codex only when `team.toml` `[orchestration.routes]`
+names `codex` for that role; `--harness codex` alone, `auto`, native mode, host
+detection and fallbacks keep them on Claude Code, as before. The argv is fixed
+(`codex exec -C <checkout>` plus the `marc_readonly` permissions profile, no
+bypass/`--full-auto`/`workspace-write`/`danger-full-access`) and the role's
+agent definition is prepended to the prompt, ending in a `verdict:` last line
+for `@sec`/`@rev`. Dispatch from a checkout at the PR HEAD: the reviewer reads
+that tree, it does not create a worktree. The opt-in is read from that same
+checkout's `team.toml`, so a PR can change its own review routing: dispatch
+reviews from a checkout whose `team.toml` you trust (e.g. the base branch).
+The opt-in counts only from the `team.toml` discovered from that checkout:
+sync dispatch and `start` refuse it (exit 2) when it comes from any other
+`--team-toml`, inside the checkout or outside it.
+Honest limits, same as Claude Code reviewers: secrets stay readable, and
+network on means a reviewer could still run `gh pr merge`; only server-side
+branch protection stops that. The CI probe (`scripts/probe_codex_readonly.py`)
+checks what the profile contains, with the profile named by `codex sandbox -P`;
+it does not prove that `codex exec` selects it via `default_permissions` over a
+user or project `sandbox_mode`. That stays unverified until the owner's
+`--exec` run passes (no config, user config, project config).
+(origin: #351 · 2026-10-14)

@@ -79,14 +79,23 @@ class CodexRegression(unittest.TestCase):
                 self.assertTrue((path.parent / target).is_file(), f'{path}: {target}')
 
     def test_readonly_routes_never_reach_codex(self):
+        # Without the team.toml opt-in (#351) no source lands a read-only role on codex.
         for role in READERS + (' @REV ', ' SEC ', '@bulk-reader'):
+            routes = {'toml_routes': {dispatch.normalize_role(role): 'codex'}}
+            opted_in = dispatch.CANONICAL_ROLES[dispatch.normalize_role(role)] in dispatch.CODEX_READONLY_ROLES
             for opts in ({}, {'explicit_harness': 'codex'}, {'toml_mode': 'native'},
-                         {'toml_routes': {dispatch.normalize_role(role): 'codex'}}):
+                         {'toml_mode': 'native', **routes}, routes, {'explicit_harness': 'codex', **routes}):
+                expect_codex = opted_in and 'toml_routes' in opts and 'toml_mode' not in opts
                 with self.subTest(role=role, opts=opts), contextlib.redirect_stderr(io.StringIO()):
                     route = dispatch.resolve_target_harness_detailed('codex', role, cli_checker=lambda b: b, **opts)
-                    self.assertEqual(route['harness'], 'claude-code')
-                    with self.assertRaises(dispatch.ReadOnlyRoutingError):
-                        dispatch.resolve_target_harness_detailed('codex', role, cli_checker=lambda b: b if b == 'codex' else None, **opts)
+                    self.assertEqual(route['harness'], 'codex' if expect_codex else 'claude-code')
+                    only_codex = lambda b: b if b == 'codex' else None  # noqa: E731
+                    if expect_codex:
+                        route = dispatch.resolve_target_harness_detailed('codex', role, cli_checker=only_codex, **opts)
+                        self.assertEqual(route['harness'], 'codex')
+                    else:
+                        with self.assertRaises(dispatch.ReadOnlyRoutingError):
+                            dispatch.resolve_target_harness_detailed('codex', role, cli_checker=only_codex, **opts)
             with self.assertRaises(dispatch.ReadOnlyRoutingError):
                 dispatch.build_harness_command('codex', role, 'untrusted input')
         runner = Mock()

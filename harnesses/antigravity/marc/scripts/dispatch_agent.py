@@ -46,6 +46,25 @@ Routing resolution:
       is not available, dispatch fails with exit code 2 instead of running them
       unrestricted. The JSON result's policy_reroute/policy_reason fields mark the
       policy override separately from a missing-CLI fallback.
+    - Codex read-only roles: opt-in, fs read-only + network profile, verified by the CI
+      probe (origin: #351 · 2026-10-14). sec/rev/research (never bulk-reader) may run
+      on codex only when team.toml [orchestration.routes] names "codex" for that role.
+      `--harness codex` alone is not an opt-in (it is honored only together with that
+      route); auto, native, host detection and fallbacks never pick codex for them.
+      The argv is fixed: `codex exec -C <checkout>` plus the CODEX_READONLY_PROFILE_ARGS
+      permissions profile (whole filesystem read, network on), the role's agent
+      definition prepended to the prompt, and the effort/model pin from the Codex agent
+      descriptor. Never bypass, --full-auto, workspace-write or danger-full-access.
+      Secrets stay readable and a networked reviewer can still run `gh pr merge`,
+      exactly as Claude Code reviewers can; only server-side branch protection
+      prevents that. scripts/probe_codex_readonly.py checks what the profile contains
+      under `codex sandbox -P` (no model); it does not prove that `codex exec` selects
+      it via `default_permissions` over a user or project `sandbox_mode`, which stays
+      unverified until the owner's `--exec` run passes. The opt-in is read from the
+      dispatching checkout's team.toml (a PR can change its own routing). It counts
+      only from the team.toml discovered from that checkout: sync dispatch, `start`
+      and the runner's re-check all re-discover it there (`mode` included) and refuse
+      an opt-in that comes from any other --team-toml, inside or outside the checkout.
 """
 from __future__ import annotations
 
@@ -124,6 +143,30 @@ NON_ENFORCING_HARNESSES = frozenset({"antigravity", "copilot", "codex"})
 # enforces `tools:` even under --dangerously-skip-permissions (measured, #320/#323).
 READ_ONLY_PREFERRED_HARNESS = "claude-code"
 
+# Codex read-only reviewers (origin: #351 · 2026-10-14). The read-only roles in
+# this set may run on codex, but ONLY when team.toml [orchestration.routes]
+# names "codex" for that role explicitly (see codex_readonly_opt_in). auto,
+# host detection, native mode and every fallback still never pick codex for
+# them. bulk-reader is deliberately absent: it stays pinned to claude-code.
+# The boundary is a fixed Codex permissions profile: whole filesystem
+# read-only, network on (parity with Claude Code reviewers, which already have
+# Bash + WebFetch). Its contents are probed in CI by scripts/probe_codex_readonly.py
+# via `codex sandbox -P`; selection by `codex exec` is owner-verified (--exec). Secrets stay readable, and no local sandbox stops a
+# networked `gh pr merge`: that is server-side branch protection's job.
+CODEX_READONLY_ROLES = frozenset({"rev", "research", "sec"})
+CODEX_READONLY_PROFILE = "marc_readonly"
+CODEX_READONLY_PROFILE_ARGS: Tuple[str, ...] = (
+    "-c", f'default_permissions="{CODEX_READONLY_PROFILE}"',
+    "-c", f'permissions.{CODEX_READONLY_PROFILE}.filesystem={{":root"="read"}}',
+    "-c", f"permissions.{CODEX_READONLY_PROFILE}.network.enabled=true",
+)
+# Verdict line required as the last line of a Codex reviewer's final response,
+# so the dual-marker merge gate keeps a grep-verifiable result (#351).
+CODEX_READONLY_VERDICT_ROLES = frozenset({"rev", "sec"})
+# Values Codex accepts for model_reasoning_effort (#351 SEC-3); anything else fails closed.
+CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+_CODEX_MODEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_:/")
+
 
 class ReadOnlyRoutingError(RuntimeError):
     """No harness that applies agent definitions is available for a read-only role (#323)."""
@@ -154,16 +197,38 @@ def normalize_role(role: str) -> str:
     return norm
 
 
-def is_forbidden_readonly_route(role: str, harness: Optional[str]) -> bool:
+def codex_readonly_opt_in(role: str, toml_routes: Any) -> bool:
+    """Does team.toml [orchestration.routes] explicitly route this read-only role to codex? (#351)
+
+    Only the literal value "codex" counts: "auto", "native" or a missing entry
+    never opt in, even when the host happens to be codex. The lookup mirrors
+    route resolution (canonical key first, then the alias that was requested).
+    """
+    norm = normalize_role(role)
+    canonical = CANONICAL_ROLES[norm]
+    if canonical not in CODEX_READONLY_ROLES or not isinstance(toml_routes, dict):
+        return False
+    route = toml_routes.get(canonical) or toml_routes.get(norm)
+    return isinstance(route, str) and route.strip() == "codex"
+
+
+def is_forbidden_readonly_route(role: str, harness: Optional[str], codex_opt_in: bool = False) -> bool:
     """Single #323 predicate: may this (role, harness) pair NOT run?
 
     True when the role is read-only and the harness does not apply mARC agent
     definitions headless (NON_ENFORCING_HARNESSES), or when the role is
     bulk-reader and the harness is not the verified claude-code boundary.
     Used by route resolution, command building and the detached runner (#352).
+
+    One narrow exception (origin: #351 · 2026-10-14): a role in
+    CODEX_READONLY_ROLES may run on codex when `codex_opt_in` is True, which
+    callers set only from codex_readonly_opt_in() on the team.toml routes.
+    The default (False) keeps the #323/#330 fail-closed behavior.
     """
     canonical = CANONICAL_ROLES[normalize_role(role)]
     if canonical not in READ_ONLY_ROLES:
+        return False
+    if harness == "codex" and codex_opt_in and canonical in CODEX_READONLY_ROLES:
         return False
     if harness in NON_ENFORCING_HARNESSES:
         return True
@@ -330,14 +395,124 @@ def detect_native_harness(
     return "claude-code"
 
 
-def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
-    """Build CLI execution command for target harness."""
+def _plugin_dir() -> Path:
+    """Directory holding this script's sibling `agents/` (plugin root, or `core/`)."""
+    return Path(__file__).resolve().parent.parent
+
+
+def _strip_front_matter(text: str) -> str:
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                return "\n".join(lines[i + 1:]).strip()
+    return text.strip()
+
+
+def load_codex_persona(mapped_agent: str, plugin_dir: Optional[Path] = None) -> Tuple[str, Dict[str, str]]:
+    """Agent-definition body plus Codex pins for a read-only role on codex (#351).
+
+    `codex exec` has no agent selector, so the persona travels in the prompt
+    (as the antigravity path names its persona skill in the prompt). The body
+    is the shipped `agents/<agent>.md` next to this script, front matter
+    stripped (`skills/<agent>/SKILL.md` in the Antigravity plugin). Pins come
+    only from the Codex agent descriptor (`agents/<agent>.toml` in the Codex
+    plugin, `agent-configs/codex/<agent>.toml` in `core/`): `model` -> `-m`,
+    `model_reasoning_effort` -> `-c`. A host plugin without that descriptor
+    passes no pin, and Codex uses its configured default. The `.md`
+    front matter's `model:` names a Claude model and is never passed to codex.
+    A missing persona fails closed: a reviewer never runs without its contract.
+    """
+    base = plugin_dir or _plugin_dir()
+    md = base / "agents" / f"{mapped_agent}.md"
+    if not md.is_file():
+        # The Antigravity plugin ships personas as skills (see build_harness_command).
+        skill = base / "skills" / mapped_agent / "SKILL.md"
+        if skill.is_file():
+            md = skill
+    try:
+        body = _strip_front_matter(md.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise ReadOnlyRoutingError(
+            f"cannot read agent definition {md} for the codex read-only route (#351): {e}") from e
+    if not body:
+        raise ReadOnlyRoutingError(f"agent definition {md} is empty; refusing codex read-only route (#351)")
+    pins: Dict[str, str] = {}
+    for desc in (base / "agents" / f"{mapped_agent}.toml",
+                 base / "agent-configs" / "codex" / f"{mapped_agent}.toml"):
+        if desc.is_file():
+            data = parse_toml(desc)
+            for key in ("model", "model_reasoning_effort"):
+                val = data.get(key)
+                if isinstance(val, str) and val.strip():
+                    pins[key] = val.strip()
+            break
+    # Allowlist before the value reaches argv (#351 SEC-3): the effort lands
+    # inside a TOML `-c` value, and the model must never parse as a flag.
+    effort = pins.get("model_reasoning_effort")
+    if effort is not None and effort not in CODEX_REASONING_EFFORTS:
+        raise ReadOnlyRoutingError(
+            f"model_reasoning_effort {effort!r} in {desc} is not one of "
+            f"{sorted(CODEX_REASONING_EFFORTS)}; refusing codex read-only route (#351)")
+    model = pins.get("model")
+    if model is not None and (model.startswith("-") or not set(model) <= _CODEX_MODEL_CHARS):
+        raise ReadOnlyRoutingError(f"model {model!r} in {desc} is not a plain model id (#351)")
+    return body, pins
+
+
+def build_codex_readonly_prompt(role: str, mapped_agent: str, body: str, prompt: str) -> str:
+    """Persona-first prompt for a Codex read-only reviewer (#351)."""
+    canonical = CANONICAL_ROLES[normalize_role(role)]
+    parts = [
+        f"You are the mARC {mapped_agent} specialist (`@{canonical}`), dispatched through "
+        f"`codex exec`, which has no agent selector. Your agent definition follows; it is "
+        f"binding. The filesystem is read-only: do not try to edit files, commit or push.",
+        f'<agent-definition name="{mapped_agent}">\n{body}\n</agent-definition>',
+    ]
+    if canonical in CODEX_READONLY_VERDICT_ROLES:
+        parts.append(
+            "Report contract: follow the Output section above, and make the LAST line of your "
+            "final response the verdict line, exactly one of `verdict: BLOCK`, "
+            "`verdict: ADVISE`, `verdict: PASS`."
+        )
+    parts.append(f"Task:\n{prompt}")
+    return "\n\n".join(parts)
+
+
+def build_harness_command(
+    harness: str,
+    role: str,
+    prompt: str,
+    codex_opt_in: bool = False,
+    cwd: Optional[str] = None,
+) -> List[str]:
+    """Build CLI execution command for target harness.
+
+    `codex_opt_in` must come from codex_readonly_opt_in() on team.toml routes;
+    `cwd` is the checkout a Codex read-only reviewer reads (default: the
+    current directory). Both only matter for a read-only role on codex (#351).
+    """
     role = normalize_role(role)
-    if is_forbidden_readonly_route(role, harness):
+    if is_forbidden_readonly_route(role, harness, codex_opt_in):
         # Defense in depth: resolve_route already re-routes read-only roles away
         # from every non-enforcing harness (#323, #330); never build such a command here.
         raise ReadOnlyRoutingError("read-only role requires the verified Claude Code tool boundary (#323, #330)")
     mapped_agent = ROLE_TO_AGENT[role]
+    if harness == "codex" and CANONICAL_ROLES[role] in READ_ONLY_ROLES:
+        # Opt-in Codex reviewer (#351): fixed argv, never a bypass/full-auto/
+        # workspace-write/danger-full-access flag. `-C <checkout>` and not
+        # `--worktree`: the reviewer must read the exact checkout the operator
+        # put at the PR HEAD, and a managed worktree would be a new write
+        # (and a different tree) a read-only role has no reason to make.
+        body, pins = load_codex_persona(mapped_agent)
+        checkout = str(Path(cwd or os.getcwd()).resolve())
+        cmd = ["codex", "exec", "-C", checkout, *CODEX_READONLY_PROFILE_ARGS]
+        if "model" in pins:
+            cmd += ["-m", pins["model"]]
+        if "model_reasoning_effort" in pins:
+            cmd += ["-c", f'model_reasoning_effort="{pins["model_reasoning_effort"]}"']
+        cmd.append(build_codex_readonly_prompt(role, mapped_agent, body, prompt))
+        return cmd
     if harness == "claude-code":
         return ["claude", "--dangerously-skip-permissions", "--agent", mapped_agent, "-p", prompt]
     elif harness == "antigravity":
@@ -354,9 +529,9 @@ def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
     elif harness == "codex":
         # Codex selects configured subagents through the model's Agent tool;
         # `-p` is a profile flag, not an agent selector. State the role in the
-        # prompt and use a managed worktree for mutating runs.
-        sandbox = "read-only" if role in READ_ONLY_ROLES else "workspace-write"
-        return ["codex", "exec", "--worktree", "--sandbox", sandbox,
+        # prompt and use a managed worktree for mutating runs. (Read-only roles
+        # returned above, #351.)
+        return ["codex", "exec", "--worktree", "--sandbox", "workspace-write",
                 f"Act as the mARC {mapped_agent} specialist. {prompt}"]
     else:
         raise ValueError(f"Unsupported harness: {harness!r}")
@@ -415,9 +590,17 @@ def resolve_target_harness_detailed(
     role = normalize_role(role)
     canonical_role = CANONICAL_ROLES[role]
 
+    # Codex read-only opt-in (#351): honored only when team.toml routes name
+    # codex for the role AND the codex target came from that route or from an
+    # explicit `--harness codex`. Native mode/`--harness native`, the matrix,
+    # host detection and every fallback never count as an opt-in.
+    toml_opt_in = codex_readonly_opt_in(role, toml_routes)
+    route_opt_in = False
+
     # Priority 1: Explicit --harness argument
     if explicit_harness and explicit_harness != "auto":
         target_harness = host_harness if explicit_harness == "native" else explicit_harness
+        route_opt_in = toml_opt_in and explicit_harness == "codex"
     elif toml_mode == "native":
         target_harness = host_harness
     else:
@@ -428,6 +611,7 @@ def resolve_target_harness_detailed(
 
         if user_route and user_route != "auto":
             target_harness = host_harness if user_route == "native" else user_route
+            route_opt_in = toml_opt_in and user_route == "codex"
         else:
             # Priority 3: When route is 'auto', unset, or in hybrid mode, lookup DEFAULT_HYBRID_MATRIX
             matrix = DEFAULT_HYBRID_MATRIX.get(host_harness, DEFAULT_HYBRID_MATRIX.get("claude-code", {}))
@@ -438,13 +622,15 @@ def resolve_target_harness_detailed(
 
     if target_harness not in HARNESS_BINARIES:
         target_harness = "claude-code"
+    if target_harness != "codex":
+        route_opt_in = False
 
     # Fail closed for read-only roles (#323): no source (explicit --harness,
     # team.toml route, native mode, matrix) may land them on a harness that
-    # does not apply the agent definition.
+    # does not apply the agent definition, except the explicit Codex opt-in (#351).
     read_only = canonical_role in READ_ONLY_ROLES
     reroute_reason: Optional[str] = None
-    if is_forbidden_readonly_route(role, target_harness):
+    if is_forbidden_readonly_route(role, target_harness, route_opt_in):
         reroute_reason = (
             f"role '{role}' is read-only but harness '{target_harness}' does not apply mARC "
             f"agent definitions in headless dispatch (issue #323)"
@@ -454,6 +640,7 @@ def resolve_target_harness_detailed(
             f"Re-routing to '{READ_ONLY_PREFERRED_HARNESS}'.\n"
         )
         target_harness = READ_ONLY_PREFERRED_HARNESS
+        route_opt_in = False
 
     def _is_available(h_or_b: str) -> bool:
         b = HARNESS_BINARIES.get(h_or_b, h_or_b)
@@ -477,6 +664,7 @@ def resolve_target_harness_detailed(
         if read_only:
             # Only fall back to a harness that applies agent definitions; never
             # to a NON_ENFORCING_HARNESSES entry, even when it is the host (#323).
+            # The predicate runs WITHOUT the opt-in: a fallback never picks codex (#351).
             candidates = [
                 h for h in (READ_ONLY_PREFERRED_HARNESS, host_harness)
                 if not is_forbidden_readonly_route(role, h)
@@ -507,9 +695,16 @@ def resolve_target_harness_detailed(
             "policy_reroute": reroute_reason is not None,
             "policy_reason": reroute_reason,
             "cli_fallback": True,
+            "codex_readonly_opt_in": False,
         }
 
-    _warn_if_unenforced(target_harness)
+    if route_opt_in:
+        sys.stderr.write(
+            f"[mARC dispatch] Notice: read-only role '{role}' runs on codex by explicit team.toml "
+            f"opt-in (#351): filesystem read-only + network profile, persona carried in the prompt.\n"
+        )
+    else:
+        _warn_if_unenforced(target_harness)
     return {
         "harness": target_harness,
         "fallback": reroute_reason is not None,
@@ -517,6 +712,7 @@ def resolve_target_harness_detailed(
         "policy_reroute": reroute_reason is not None,
         "policy_reason": reroute_reason,
         "cli_fallback": False,
+        "codex_readonly_opt_in": route_opt_in,
     }
 
 
@@ -602,6 +798,7 @@ def prepare_dispatch(
     team_toml: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
     which_fn: Callable[[str], Optional[str]] = shutil.which,
+    cwd: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Resolve the route and build the command, without running it (#352).
 
@@ -610,7 +807,8 @@ def prepare_dispatch(
     dict that already carries `exit_code` is terminal (refusal or dry run);
     otherwise pass it to execute_prepared().
     """
-    toml_path = find_team_toml(team_toml)
+    # Discover team.toml from the same checkout `-C` and `start` use (#351 REV-3).
+    toml_path = find_team_toml(team_toml, start_dir=cwd)
     try:
         role = normalize_role(role)
         route = resolve_route_detailed(
@@ -646,7 +844,28 @@ def prepare_dispatch(
         }
 
     resolved_harness = route["harness"]
-    cmd = build_harness_command(resolved_harness, role, prompt)
+    opt_in = bool(route.get("codex_readonly_opt_in"))
+    try:
+        # One rule for sync dispatch, `start` and the runner (#351 REV-7): a
+        # Codex read-only opt-in counts only from the team.toml discovered from
+        # the checkout. Any other --team-toml (inside or outside it) is refused.
+        if opt_in and not _reresolve_codex_opt_in(role, harness, str((cwd or Path.cwd()).resolve())):
+            raise ReadOnlyRoutingError(
+                f"codex read-only opt-in for '{role}' comes from {toml_path}, not from the team.toml "
+                f"discovered from the checkout; refusing (#351)")
+        cmd = build_harness_command(resolved_harness, role, prompt,
+                                    codex_opt_in=opt_in, cwd=str(cwd) if cwd else None)
+    except ReadOnlyRoutingError as e:
+        # e.g. an opted-in Codex reviewer whose persona file is missing (#351).
+        err_msg = f"[mARC dispatch] Error: {e}"
+        sys.stderr.write(err_msg + "\n")
+        return {
+            "role": role, "mapped_agent": ROLE_TO_AGENT.get(role), "requested_harness": harness,
+            "harness": None, "command": [], "command_str": "", "fallback": False,
+            "fallback_reason": None, "policy_reroute": False, "policy_reason": None,
+            "dry_run": dry_run, "exit_code": 2, "stdout": "", "stderr": err_msg,
+            "success": False, "error": str(e), "duration_sec": 0.0,
+        }
     cmd_str = shlex.join(cmd)
 
     result: Dict[str, Any] = {
@@ -663,6 +882,8 @@ def prepare_dispatch(
         "fallback_reason": route["fallback_reason"],
         "policy_reroute": route["policy_reroute"],
         "policy_reason": route["policy_reason"],
+        "codex_readonly_opt_in": opt_in,
+        "team_toml": str(toml_path.resolve()) if toml_path else None,
         "dry_run": dry_run,
     }
 
@@ -881,12 +1102,21 @@ def start_job(
     git dir inside a sandbox).
     """
     _require_flock()
-    prepared = prepare_dispatch(role=role, prompt=prompt, harness=harness, team_toml=team_toml)
+    workdir = (cwd or Path.cwd()).resolve()
+    prepared = prepare_dispatch(role=role, prompt=prompt, harness=harness, team_toml=team_toml,
+                                cwd=workdir)
     if "exit_code" in prepared:
         # Fail closed (#323) or unknown role: no job is created, nothing runs.
         return prepared["exit_code"], {"error": prepared.get("error"), "exit_code": prepared["exit_code"]}
+    try:
+        # Refuse now, not in the runner, what the runner's re-check would refuse
+        # (e.g. a Codex read-only opt-in from any --team-toml other than the one
+        # discovered from the checkout, #351).
+        _validate_spec({"prompt": prompt, "cwd": str(workdir), "prepared": prepared})
+    except ReadOnlyRoutingError as e:
+        sys.stderr.write(f"[mARC dispatch] Error: {e}\n")
+        return EXIT_USAGE, {"error": str(e), "exit_code": EXIT_USAGE}
 
-    workdir = (cwd or Path.cwd()).resolve()
     root = jobs_root(workdir)
     job_id = _new_job_id()
     job_dir = root / job_id
@@ -1036,6 +1266,39 @@ def _on_term_signal(signum: int, _frame: Any) -> None:
         raise _RunnerTerminated(f"runner terminated by signal {signum}")
 
 
+def _reresolve_codex_opt_in(role: str, requested: Any, cwd: Optional[str]) -> bool:
+    """Re-derive the Codex read-only opt-in for a job spec (#351 REV-2).
+
+    Nothing in the spec is trusted but the checkout dir: team.toml is
+    re-discovered from it (never the spec's recorded path, so `start
+    --team-toml <elsewhere>` cannot opt in), and the full orchestration config
+    (`mode` included) goes back through resolve_target_harness_detailed. The
+    requested harness only matters when it is exactly "codex" (route plus
+    explicit flag); anything else re-resolves as "auto".
+    """
+    if not cwd or not Path(cwd).is_dir():
+        return False
+    config = parse_toml(find_team_toml(None, start_dir=Path(cwd)))
+    orch = config.get("orchestration", {}) if isinstance(config, dict) else {}
+    if not isinstance(orch, dict):
+        return False
+    old_stderr = sys.stderr
+    sys.stderr = open(os.devnull, "w")
+    try:
+        d = resolve_target_harness_detailed(
+            host_harness=READ_ONLY_PREFERRED_HARNESS, role=role,
+            explicit_harness="codex" if requested == "codex" else "auto",
+            toml_routes=orch.get("routes"), toml_mode=orch.get("mode"),
+            cli_checker=lambda _b: True,
+        )
+    except (ReadOnlyRoutingError, UnknownRoleError):
+        return False
+    finally:
+        sys.stderr.close()
+        sys.stderr = old_stderr
+    return d["harness"] == "codex" and bool(d.get("codex_readonly_opt_in"))
+
+
 def _validate_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     """Re-check a job spec before exec (#352 SEC-1): the routed command, #323 guard included."""
     prepared = spec.get("prepared")
@@ -1044,10 +1307,15 @@ def _validate_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("job spec missing or unreadable")
     role = normalize_role(str(prepared.get("role", "")))
     harness = prepared.get("harness")
-    if is_forbidden_readonly_route(role, harness):
+    cwd = spec.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and cwd else None
+    opt_in = False
+    if harness == "codex" and CANONICAL_ROLES[role] in READ_ONLY_ROLES:
+        opt_in = _reresolve_codex_opt_in(role, prepared.get("requested_harness"), cwd)
+    if is_forbidden_readonly_route(role, harness, opt_in):
         raise ReadOnlyRoutingError(
             f"job spec routes read-only role '{role}' to '{harness}'; refusing (issue #323)")
-    expected = build_harness_command(str(harness), role, prompt)
+    expected = build_harness_command(str(harness), role, prompt, codex_opt_in=opt_in, cwd=cwd)
     if prepared.get("command") != expected:
         raise RuntimeError("job spec command does not match the routed harness command")
     return prepared

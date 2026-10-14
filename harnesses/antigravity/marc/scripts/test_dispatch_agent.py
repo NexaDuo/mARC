@@ -40,7 +40,14 @@ from dispatch_agent import (  # noqa: E402
     ROLE_TO_AGENT,
     ReadOnlyRoutingError,
     UnknownRoleError,
+    _validate_spec,
+    build_codex_readonly_prompt,
     build_harness_command,
+    codex_readonly_opt_in,
+    is_forbidden_readonly_route,
+    load_codex_persona,
+    prepare_dispatch,
+    resolve_route_detailed,
     detect_native_harness,
     dispatch,
     main as dispatch_main,
@@ -753,6 +760,265 @@ def test_read_only_roles_fail_closed() -> None:
     check("#323" not in err, "no #323 warning for claude-code dispatch")
 
 
+# Literal, not imported: a drift in the shipped profile must fail this test (#351).
+_CODEX_RO_PROFILE = [
+    "-c", 'default_permissions="marc_readonly"',
+    "-c", 'permissions.marc_readonly.filesystem={":root"="read"}',
+    "-c", "permissions.marc_readonly.network.enabled=true",
+]
+_CODEX_FORBIDDEN_FLAGS = ("--dangerously-bypass-approvals-and-sandbox", "--full-auto",
+                          "workspace-write", "danger-full-access", "--worktree", "--sandbox",
+                          "--approve-for-me", "--add-dir")
+
+
+def test_codex_readonly_opt_in() -> None:
+    print("\n--- Test: opt-in Codex read-only reviewers (#351) ---")
+    prompt = "Review PR #42"
+    ro = ["sec", "security", "rev", "review", "research", "bulk-reader"]
+
+    # 1. Default (no opt-in): every read-only role still refuses on codex.
+    for r in ro:
+        check(is_forbidden_readonly_route(r, "codex"), f"'{r}' on codex forbidden without opt-in")
+        try:
+            build_harness_command("codex", r, prompt)
+            check(False, f"codex command for read-only '{r}' without opt-in should raise")
+        except ReadOnlyRoutingError:
+            check(True, f"codex command for read-only '{r}' without opt-in raises")
+    # bulk-reader never opts in; the opt-in never unlocks another non-enforcing harness.
+    check(is_forbidden_readonly_route("bulk-reader", "codex", True), "bulk-reader on codex forbidden even with opt-in")
+    for h in ("antigravity", "copilot"):
+        check(is_forbidden_readonly_route("rev", h, True), f"opt-in does not unlock '{h}'")
+    try:
+        build_harness_command("codex", "bulk-reader", prompt, codex_opt_in=True)
+        check(False, "bulk-reader codex command with opt-in should raise")
+    except ReadOnlyRoutingError:
+        check(True, "bulk-reader codex command with opt-in raises")
+
+    # 2. Opt-in: exact argv. -C <checkout>, fixed profile, effort pin from the
+    #    Codex descriptor, persona-first prompt. No forbidden flag anywhere.
+    # Effort pins come from the Codex agent descriptors, present in `core/`
+    # (agent-configs/codex) and the Codex plugin (agents/*.toml) only; this
+    # test also runs from the other harness copies, which ship none.
+    plugin = Path(HERE).parent
+    has_descriptors = (plugin / "agent-configs" / "codex").is_dir() or (plugin / "agents" / "review.toml").is_file()
+    efforts = {"rev": "high", "review": "high", "sec": "high", "security": "high", "research": "medium"}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        checkout = str(Path(tmpdir).resolve())
+        for r, effort in efforts.items():
+            agent = ROLE_TO_AGENT[r]
+            body, pins = load_codex_persona(agent)
+            want = {"model_reasoning_effort": effort} if has_descriptors else {}
+            check(pins == want, f"codex pins for '{r}': {pins}")
+            pin_args = ["-c", f'model_reasoning_effort="{effort}"'] if has_descriptors else []
+            cmd = build_harness_command("codex", r, prompt, codex_opt_in=True, cwd=tmpdir)
+            expected = (["codex", "exec", "-C", checkout] + _CODEX_RO_PROFILE + pin_args
+                        + [build_codex_readonly_prompt(r, agent, body, prompt)])
+            check(cmd == expected, f"opt-in codex argv for '{r}': {cmd[:12]}")
+            check(not any(f in a for a in cmd[:-1] for f in _CODEX_FORBIDDEN_FLAGS),
+                  f"opt-in codex argv for '{r}' carries no bypass/write flag")
+            p = cmd[-1]
+            check(f'<agent-definition name="{agent}">\n' in p and body in p,
+                  f"persona body for '{r}' prepended to the prompt")
+            check(p.index("<agent-definition") < p.index("Task:\n"), f"persona precedes the task for '{r}'")
+            check(p.endswith(f"Task:\n{prompt}"), f"task prompt last for '{r}'")
+            check("\nname: " not in body and not body.startswith("---"), f"front matter stripped for '{r}'")
+            has_verdict = "make the LAST line of your final response the verdict line" in p
+            check(has_verdict == (CANONICAL_ROLES[r] in ("rev", "sec")),
+                  f"verdict-last-line contract for '{r}': {has_verdict}")
+
+    # 3. A missing persona fails closed.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            load_codex_persona("review", plugin_dir=Path(tmpdir))
+            check(False, "missing persona should raise")
+        except ReadOnlyRoutingError:
+            check(True, "missing persona raises ReadOnlyRoutingError")
+
+    # 4. codex_readonly_opt_in only accepts the literal "codex" route.
+    check(codex_readonly_opt_in("sec", {"sec": "codex"}), "routes sec=codex opts in")
+    check(codex_readonly_opt_in("@REV", {"rev": "codex"}), "normalized @REV opts in")
+    for routes in ({}, None, {"sec": "auto"}, {"sec": "native"}, {"sec": "claude-code"}, {"rev": "codex"}):
+        check(not codex_readonly_opt_in("sec", routes), f"no opt-in for sec with routes {routes}")
+    check(not codex_readonly_opt_in("bulk-reader", {"bulk-reader": "codex"}), "bulk-reader never opts in")
+    check(not codex_readonly_opt_in("dev", {"dev": "codex"}), "writer roles are not read-only opt-ins")
+
+    # 5. Resolution: only the explicit team.toml route opts in.
+    env_cc = {"CLAUDE_PROJECT_DIR": "/x"}
+    env_codex = {"CODEX_PROJECT_DIR": "/x"}
+
+    def all_which(b):
+        return f"/bin/{b}"
+
+    def no_codex(b):
+        return None if b == "codex" else f"/bin/{b}"
+
+    def only_codex(b):
+        return "/bin/codex" if b == "codex" else None
+
+    def res(role, harness, toml_text, env, which):
+        """Returns (route_dict_or_None, exception_or_None)."""
+        with tempfile.TemporaryDirectory() as d:
+            t = None
+            if toml_text is not None:
+                t = Path(d) / "team.toml"
+                t.write_text(toml_text, encoding="utf-8")
+            out, _err, exc = _capture_stderr(resolve_route_detailed, role, harness, t, env, which)
+            return out or {}, exc
+
+    opt = '[orchestration.routes]\nsec = "codex"\nrev = "codex"\nresearch = "codex"\nbulk-reader = "codex"\n'
+    for env in (env_cc, env_codex):
+        for r in ("sec", "rev", "research"):
+            d, _ = res(r, "auto", opt, env, all_which)
+            check(d.get("harness") == "codex" and d.get("codex_readonly_opt_in") is True
+                  and not d.get("policy_reroute"),
+                  f"team.toml route codex opts '{r}' in (host {env}): {d.get('harness')}")
+            d, _ = res(r, "codex", opt, env, all_which)
+            check(d.get("harness") == "codex" and d.get("codex_readonly_opt_in") is True,
+                  f"--harness codex + team.toml route opts '{r}' in: {d.get('harness')}")
+        d, _ = res("bulk-reader", "auto", opt, env, all_which)
+        check(d.get("harness") == "claude-code" and d.get("policy_reroute"), "bulk-reader route codex re-routed")
+    for r in ("sec", "rev", "research"):
+        # --harness codex alone is NOT an opt-in.
+        for toml_text in (None, f'[orchestration.routes]\n{r} = "auto"\n'):
+            d, _ = res(r, "codex", toml_text, env_cc, all_which)
+            check(d.get("harness") == "claude-code" and d.get("policy_reroute")
+                  and not d.get("codex_readonly_opt_in"),
+                  f"--harness codex without team.toml opt-in re-routes '{r}': {d.get('harness')}")
+        # auto / host detection / matrix / native on a codex host never pick codex.
+        cases = [
+            ("auto", None, "codex host matrix"),
+            ("auto", f'[orchestration.routes]\n{r} = "native"\n', "route native on codex host"),
+            ("auto", f'[orchestration]\nmode = "native"\n[orchestration.routes]\n{r} = "codex"\n',
+             "native mode on codex host"),
+            ("native", opt, "--harness native on codex host"),
+            ("claude-code", opt, "explicit --harness claude-code"),
+        ]
+        for harness, toml_text, label in cases:
+            d, _ = res(r, harness, toml_text, env_codex, all_which)
+            check(d.get("harness") == "claude-code", f"{label} keeps '{r}' on claude-code: {d.get('harness')}")
+        # Fallbacks never pick codex: codex missing -> claude-code; nothing enforcing -> refuse.
+        d, _ = res(r, "auto", opt, env_codex, no_codex)
+        check(d.get("harness") == "claude-code" and d.get("cli_fallback") and not d.get("codex_readonly_opt_in"),
+              f"opted-in '{r}' with codex missing falls back to claude-code")
+        d, exc = res(r, "auto", None, env_codex, only_codex)
+        check(isinstance(exc, ReadOnlyRoutingError),
+              f"'{r}' with only codex available and no opt-in refuses: {exc!r}")
+
+    # 6. prepare_dispatch + the `start` job-spec re-check (#352 SEC-1) re-derive
+    #    the opt-in from team.toml, never from the spec's own field.
+    with tempfile.TemporaryDirectory() as d:
+        t = Path(d) / "team.toml"
+        t.write_text(opt, encoding="utf-8")
+        prepared, _err, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", False, str(t),
+                                              env_cc, all_which, Path(d))
+        check(exc is None and prepared["command"][:4] == ["codex", "exec", "-C", str(Path(d).resolve())],
+              f"prepared opt-in command: {(prepared or {}).get('command', [])[:4]} {exc!r}")
+        spec = {"prompt": prompt, "cwd": str(Path(d).resolve()), "prepared": prepared}
+        _r, _e, exc = _capture_stderr(_validate_spec, spec)
+        check(exc is None, f"job spec re-check accepts the opted-in codex reviewer: {exc!r}")
+        prepared["codex_readonly_opt_in"] = True  # a forged flag must not matter
+        t.write_text('[orchestration.routes]\nrev = "auto"\n', encoding="utf-8")
+        _r, _e, exc = _capture_stderr(_validate_spec, spec)
+        check(isinstance(exc, ReadOnlyRoutingError), f"re-check refuses once team.toml drops the opt-in: {exc!r}")
+        # REV-2: forged native mode + codex. The re-check re-reads `mode` too.
+        t.write_text('[orchestration]\nmode = "native"\n[orchestration.routes]\nrev = "codex"\n',
+                     encoding="utf-8")
+        _r, _e, exc = _capture_stderr(_validate_spec, spec)
+        check(isinstance(exc, ReadOnlyRoutingError), f"re-check refuses native mode + codex spec: {exc!r}")
+        # REV-2: the spec's recorded team_toml path is not trusted; only the
+        # team.toml discovered from the spec cwd counts.
+        with tempfile.TemporaryDirectory() as other:
+            forged = Path(other) / "team.toml"
+            forged.write_text(opt, encoding="utf-8")
+            t.write_text('[orchestration.routes]\nrev = "auto"\n', encoding="utf-8")
+            prepared["team_toml"] = str(forged)
+            _r, _e, exc = _capture_stderr(_validate_spec, spec)
+            check(isinstance(exc, ReadOnlyRoutingError),
+                  f"re-check ignores a spec team_toml outside the checkout: {exc!r}")
+            # REV-7: one rule for sync dispatch and `start` (both go through
+            # prepare_dispatch): an opt-in counts only from the team.toml
+            # discovered from the checkout. Any other --team-toml is refused,
+            # outside the checkout or inside it.
+            empty = Path(other) / "checkout"
+            empty.mkdir()
+            alt = Path(d) / "alt.toml"
+            alt.write_text(opt, encoding="utf-8")
+            for label, toml_arg, where in (("outside", str(forged), empty),
+                                           ("inside (alt.toml)", str(alt), Path(d))):
+                for dry in (True, False):
+                    pre, _e, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", dry, toml_arg,
+                                                   env_cc, all_which, where)
+                    check(exc is None and pre.get("exit_code") == 2 and pre.get("command") == []
+                          and pre.get("harness") is None,
+                          f"--team-toml {label} opt-in refused (dry_run={dry}): {pre.get('exit_code')} {exc!r}")
+                # dispatch() takes no cwd: run it from `where`, so "inside" really
+                # is inside the checkout (REV-9).
+                runner = MagicMock()
+                prev_cwd = os.getcwd()
+                os.chdir(str(where))
+                try:
+                    res_d, _e, exc = _capture_stderr(dispatch, "rev", prompt, "auto", 30.0, False, toml_arg,
+                                                     env_cc, all_which, runner)
+                finally:
+                    os.chdir(prev_cwd)
+                check(res_d is not None and res_d["exit_code"] == 2 and not runner.called,
+                      f"sync dispatch refuses a --team-toml {label} opt-in without running anything")
+            # The discovered team.toml passed explicitly is the same file: allowed.
+            t.write_text(opt, encoding="utf-8")
+            pre, _e, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", True, str(t),
+                                           env_cc, all_which, Path(d))
+            check(exc is None and pre.get("harness") == "codex",
+                  f"--team-toml naming the discovered file keeps the opt-in: {pre.get('harness')} {exc!r}")
+            # REV-9 positive: sync dispatch() from a checkout whose own team.toml
+            # opts in runs the fixed Codex reviewer argv.
+            runner = MagicMock(return_value=subprocess.CompletedProcess([], 0, "verdict: PASS\n", ""))
+            prev_cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                res_d, _e, exc = _capture_stderr(dispatch, "rev", prompt, "auto", 30.0, False, None,
+                                                 env_cc, all_which, runner)
+            finally:
+                os.chdir(prev_cwd)
+            ran = runner.call_args[0][0] if runner.called else []
+            check(exc is None and res_d["exit_code"] == 0 and res_d["harness"] == "codex"
+                  and ran[:4] == ["codex", "exec", "-C", str(Path(d).resolve())]
+                  and ran[4:10] == _CODEX_RO_PROFILE,
+                  f"sync dispatch from an opted-in checkout runs codex: {ran[:4]} {exc!r}")
+
+    # REV-3: prepare_dispatch discovers team.toml from `cwd`, not the process cwd.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "team.toml").write_text(opt, encoding="utf-8")
+        prepared, _err, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", True, None,
+                                              env_cc, all_which, Path(d))
+        check(exc is None and prepared.get("harness") == "codex"
+              and prepared["command"][3] == str(Path(d).resolve()),
+              f"team.toml discovered from cwd={d}, not {os.getcwd()}: {prepared.get('harness')} {exc!r}")
+
+    # SEC-3: the effort pin is allowlisted before it reaches the `-c` TOML value.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "agents").mkdir()
+        (Path(d) / "agents" / "review.md").write_text("---\nname: review\n---\nbody\n", encoding="utf-8")
+        for bad in ('high" -c sandbox_mode="danger-full-access', "turbo", ""):
+            (Path(d) / "agents" / "review.toml").write_text(
+                f"model_reasoning_effort = '{bad}'\n", encoding="utf-8")
+            try:
+                body, pins = load_codex_persona("review", plugin_dir=Path(d))
+                check(bad == "" and pins == {}, f"effort {bad!r} rejected or ignored: {pins}")
+            except ReadOnlyRoutingError:
+                check(bad != "", f"effort {bad!r} rejected")
+        for good in ("minimal", "low", "medium", "high", "xhigh"):
+            (Path(d) / "agents" / "review.toml").write_text(
+                f'model_reasoning_effort = "{good}"\n', encoding="utf-8")
+            check(load_codex_persona("review", plugin_dir=Path(d))[1] == {"model_reasoning_effort": good},
+                  f"effort {good!r} accepted")
+        (Path(d) / "agents" / "review.toml").write_text('model = "--full-auto"\n', encoding="utf-8")
+        try:
+            load_codex_persona("review", plugin_dir=Path(d))
+            check(False, "a model pin that parses as a flag should raise")
+        except ReadOnlyRoutingError:
+            check(True, "a model pin that parses as a flag raises")
+
+
 def test_role_normalization_fail_closed() -> None:
     """Regression for #323 review: near-miss role spellings can't bypass the guard."""
     print("\n--- Test: role normalization and unknown-role rejection (#323) ---")
@@ -1196,6 +1462,7 @@ def main() -> int:
     test_json_and_cli_interface()
     test_read_only_roles_fail_closed()
     test_role_normalization_fail_closed()
+    test_codex_readonly_opt_in()
     test_start_wait_jobs()
 
     if _failures:
