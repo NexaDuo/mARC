@@ -14,6 +14,20 @@ CLI Options:
     --dry-run             Resolve command and print without executing.
     --team-toml <path>    Optional path to team.toml (default: discovered from repo root).
 
+Detached jobs (#352): start a dispatch without blocking, then wait with one call:
+    python3 dispatch_agent.py start --role dev (--prompt <s> | --prompt-file <p>) \\
+        [--harness ...] [--timeout ...] [--team-toml ...]
+      -> prints one JSON line: job_id, pid, role, harness, result_path. Routing and the
+         #323 read-only guard run before anything is spawned (refusal exits 2, no job).
+    python3 dispatch_agent.py wait <job_id>... [--timeout S] [--any]
+      -> silent while blocking; then one JSON line per job: job_id, status
+         (succeeded|failed|timed_out|running|lost), exit_code, duration_sec, result_path.
+         Exit 0 all succeeded; 1 any failed/timed_out/lost; 2 usage error or unknown
+         job id; 75 timeout reached with job(s) still running (call wait again).
+    The full dispatch() result JSON is written atomically to result_path, under
+    $(git rev-parse --git-common-dir)/marc/jobs/<job_id>/ (outside every working tree),
+    or ${XDG_STATE_HOME:-~/.local/state}/marc/jobs/ outside a git repository.
+
 Routing resolution:
     - Priority 1: Explicit --harness argument (if not 'auto').
     - Priority 2: User explicit route in team.toml [orchestration.routes].
@@ -546,6 +560,32 @@ def dispatch(
     runner_fn: Callable[..., Any] = subprocess.run,
 ) -> Dict[str, Any]:
     """Resolve and dispatch subagent across harnesses."""
+    result = prepare_dispatch(
+        role=role, prompt=prompt, harness=harness, dry_run=dry_run,
+        team_toml=team_toml, env=env, which_fn=which_fn,
+    )
+    if "exit_code" in result:
+        # Fail-closed refusal (#323) or dry run: nothing to execute.
+        return result
+    return execute_prepared(result, timeout=timeout, runner_fn=runner_fn)
+
+
+def prepare_dispatch(
+    role: str,
+    prompt: str,
+    harness: str = "auto",
+    dry_run: bool = False,
+    team_toml: Optional[str] = None,
+    env: Optional[Dict[str, str]] = None,
+    which_fn: Callable[[str], Optional[str]] = shutil.which,
+) -> Dict[str, Any]:
+    """Resolve the route and build the command, without running it (#352).
+
+    Shared by dispatch() and the `start` subcommand, so routing, the read-only
+    fail-closed guard (#323) and CLI fallback are one code path. A returned
+    dict that already carries `exit_code` is terminal (refusal or dry run);
+    otherwise pass it to execute_prepared().
+    """
     toml_path = find_team_toml(team_toml)
     try:
         role = normalize_role(role)
@@ -611,7 +651,17 @@ def dispatch(
             "duration_sec": 0.0,
         })
         return result
+    return result
 
+
+def execute_prepared(
+    result: Dict[str, Any],
+    timeout: float = 300.0,
+    runner_fn: Callable[..., Any] = subprocess.run,
+) -> Dict[str, Any]:
+    """Run a command prepared by prepare_dispatch() and record its outcome."""
+    result = dict(result)
+    cmd = result["command"]
     start_time = time.time()
     try:
         proc = runner_fn(
@@ -656,6 +706,304 @@ def dispatch(
         })
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Detached jobs: `start` / `wait` (#352)
+#
+# `start` resolves the route in-process (same prepare_dispatch() code path, so
+# the #323 read-only guard refuses before anything is spawned), then launches a
+# detached runner (`_run <job_dir>`) that executes the prepared command and
+# writes result.json atomically. `wait` blocks silently until the job(s)
+# finish or its timeout elapses, then prints one compact JSON line per job.
+#
+# Job state lives under `$(git rev-parse --git-common-dir)/marc/jobs/<job_id>/`
+# (shared by every worktree of the clone, never in a working tree), or under
+# `${XDG_STATE_HOME:-~/.local/state}/marc/jobs/` outside a git repository.
+# ---------------------------------------------------------------------------
+
+# wait exit codes. 75 is EX_TEMPFAIL from sysexits.h: "try again later".
+EXIT_OK = 0
+EXIT_FAILED = 1
+EXIT_USAGE = 2
+EXIT_STILL_RUNNING = 75
+
+JOB_STATUSES = ("succeeded", "failed", "timed_out", "running", "lost")
+_JOB_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
+DEFAULT_WAIT_TIMEOUT = 25.0
+
+
+def jobs_root(cwd: Optional[Path] = None) -> Path:
+    """Directory holding job state, outside any working tree (#352)."""
+    base = (cwd or Path.cwd()).resolve()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(base), "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            common = Path(proc.stdout.strip())
+            if not common.is_absolute():
+                common = base / common
+            return common.resolve() / "marc" / "jobs"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state) / "marc" / "jobs"
+
+
+def _valid_job_id(job_id: str) -> bool:
+    return bool(job_id) and len(job_id) <= 64 and set(job_id) <= _JOB_ID_CHARS
+
+
+def _new_job_id() -> str:
+    return time.strftime("%Y%m%d-%H%M%S", time.gmtime()) + "-" + os.urandom(4).hex()
+
+
+def _write_json_atomic(path: Path, data: Dict[str, Any]) -> None:
+    """Write JSON via temp file + fsync + rename, so readers never see a partial file."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(tmp), str(path))
+    except BaseException:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            pass
+        raise
+
+
+def _read_json(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_alive(pid: Any, job_id: str) -> bool:
+    """True if the runner process still exists (zombies count as dead).
+
+    On Linux, also require the job id on the process command line, so a
+    recycled pid is not mistaken for the runner.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    except OSError:
+        return False
+    proc_dir = Path("/proc") / str(pid)
+    if proc_dir.is_dir():
+        try:
+            stat = (proc_dir / "stat").read_text(encoding="utf-8", errors="replace")
+            if stat.rsplit(")", 1)[-1].split()[0] in ("Z", "X"):
+                return False
+            cmdline = (proc_dir / "cmdline").read_bytes().decode("utf-8", errors="replace")
+            return job_id in cmdline
+        except (OSError, IndexError):
+            return False
+    return True
+
+
+def _status_of_result(result: Dict[str, Any]) -> str:
+    if result.get("success"):
+        return "succeeded"
+    if result.get("exit_code") == 124 and str(result.get("error", "")).startswith("Timeout"):
+        return "timed_out"
+    return "failed"
+
+
+def start_job(
+    role: str,
+    prompt: str,
+    harness: str = "auto",
+    timeout: float = 300.0,
+    team_toml: Optional[str] = None,
+    cwd: Optional[Path] = None,
+) -> Tuple[int, Dict[str, Any]]:
+    """Resolve the route and launch a detached runner. Returns (exit_code, summary)."""
+    prepared = prepare_dispatch(role=role, prompt=prompt, harness=harness, team_toml=team_toml)
+    if "exit_code" in prepared:
+        # Fail closed (#323) or unknown role: no job is created, nothing runs.
+        return prepared["exit_code"], {"error": prepared.get("error"), "exit_code": prepared["exit_code"]}
+
+    workdir = (cwd or Path.cwd()).resolve()
+    root = jobs_root(workdir)
+    job_id = _new_job_id()
+    job_dir = root / job_id
+    job_dir.mkdir(parents=True, mode=0o700)
+    result_path = job_dir / "result.json"
+    _write_json_atomic(job_dir / "spec.json", {
+        "job_id": job_id,
+        "timeout": timeout,
+        "cwd": str(workdir),
+        "prepared": prepared,
+    })
+    log = open(job_dir / "runner.log", "ab")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "_run", str(job_dir)],
+            cwd=str(workdir),
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            close_fds=True,
+            start_new_session=True,
+        )
+    finally:
+        log.close()
+    summary = {
+        "job_id": job_id,
+        "pid": proc.pid,
+        "role": prepared["role"],
+        "harness": prepared["harness"],
+        "result_path": str(result_path),
+    }
+    _write_json_atomic(job_dir / "job.json", dict(summary, started_at=time.time(), timeout=timeout))
+    return EXIT_OK, summary
+
+
+def run_job(job_dir: Path) -> int:
+    """Detached runner body: execute the prepared command, write result.json atomically."""
+    spec = _read_json(job_dir / "spec.json") or {}
+    result_path = job_dir / "result.json"
+    prepared = spec.get("prepared")
+    try:
+        if not isinstance(prepared, dict) or not prepared.get("command"):
+            raise RuntimeError("job spec missing or unreadable")
+        if prepared["command"][0] not in HARNESS_BINARIES.values():
+            # Only ever run a harness CLI that prepare_dispatch() could have built.
+            raise RuntimeError(f"job spec command {prepared['command'][0]!r} is not a harness CLI")
+        result = execute_prepared(prepared, timeout=float(spec.get("timeout", 300.0)))
+    except Exception as e:  # never leave a job without a result
+        result = dict(prepared or {}, exit_code=1, stdout="", stderr=str(e),
+                      success=False, error=str(e), duration_sec=0.0)
+    result["job_id"] = spec.get("job_id", job_dir.name)
+    result["status"] = _status_of_result(result)
+    _write_json_atomic(result_path, result)
+    return EXIT_OK
+
+
+def job_summary(job_id: str, root: Path) -> Dict[str, Any]:
+    """Compact status for one job: never includes command/stdout (#352)."""
+    job_dir = root / job_id
+    result_path = job_dir / "result.json"
+    result = _read_json(result_path)
+    if result is None:
+        meta = _read_json(job_dir / "job.json") or {}
+        if _pid_alive(meta.get("pid"), job_id):
+            started = meta.get("started_at")
+            elapsed = round(time.time() - started, 3) if isinstance(started, (int, float)) else None
+            return {"job_id": job_id, "status": "running", "exit_code": None,
+                    "duration_sec": elapsed, "result_path": str(result_path)}
+        # The runner may have written its result between the two checks.
+        result = _read_json(result_path)
+        if result is None:
+            return {"job_id": job_id, "status": "lost", "exit_code": None,
+                    "duration_sec": None, "result_path": str(result_path)}
+    return {
+        "job_id": job_id,
+        "status": result.get("status") or _status_of_result(result),
+        "exit_code": result.get("exit_code"),
+        "duration_sec": result.get("duration_sec"),
+        "result_path": str(result_path),
+    }
+
+
+def wait_jobs(
+    job_ids: List[str],
+    timeout: float = DEFAULT_WAIT_TIMEOUT,
+    any_mode: bool = False,
+    root: Optional[Path] = None,
+) -> Tuple[int, List[Dict[str, Any]]]:
+    """Block (silently) until the jobs finish or `timeout` elapses (#352).
+
+    Exit code: 0 all waited jobs succeeded (with --any: at least one finished,
+    and every finished one succeeded); 1 any finished job failed, timed out or
+    was lost; 75 timeout reached with job(s) still running and none failed.
+    """
+    root = root or jobs_root()
+    deadline = time.monotonic() + max(0.0, timeout)
+    interval = 0.1
+    while True:
+        summaries = [job_summary(j, root) for j in job_ids]
+        running = [s for s in summaries if s["status"] == "running"]
+        done = [s for s in summaries if s["status"] != "running"]
+        if not running or (any_mode and done) or time.monotonic() >= deadline:
+            break
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+        interval = min(interval * 2, 1.0)
+    if any(s["status"] != "succeeded" for s in done):
+        return EXIT_FAILED, summaries
+    if running and not (any_mode and done):
+        return EXIT_STILL_RUNNING, summaries
+    return EXIT_OK, summaries
+
+
+def _compact(data: Dict[str, Any]) -> str:
+    return json.dumps(data, separators=(",", ":"))
+
+
+def _main_start(argv: List[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="dispatch_agent.py start",
+        description="Launch a detached specialist dispatch and print its job id (#352).",
+    )
+    parser.add_argument("--role", required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--prompt")
+    group.add_argument("--prompt-file")
+    parser.add_argument("--harness", default="auto",
+                        choices=["auto", "native", "claude-code", "antigravity", "copilot", "codex"])
+    parser.add_argument("--timeout", type=float, default=300.0,
+                        help="Harness execution timeout in seconds. Default: 300")
+    parser.add_argument("--team-toml", default=None)
+    args = parser.parse_args(argv)
+    if args.prompt_file is not None:
+        try:
+            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+        except OSError as e:
+            sys.stderr.write(f"[mARC dispatch] Error: cannot read --prompt-file: {e}\n")
+            return EXIT_USAGE
+    else:
+        prompt = args.prompt
+    code, summary = start_job(args.role, prompt, args.harness, args.timeout, args.team_toml)
+    if code == EXIT_OK:
+        print(_compact(summary))
+    return code
+
+
+def _main_wait(argv: List[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="dispatch_agent.py wait",
+        description=("Block until dispatch job(s) finish. Exit 0 all succeeded, 1 any failed/"
+                     "timed_out/lost, 2 usage error or unknown job, 75 still running: call wait again."),
+    )
+    parser.add_argument("job_ids", nargs="+")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_WAIT_TIMEOUT,
+                        help=f"Seconds to block before returning 75. Default: {DEFAULT_WAIT_TIMEOUT:g}")
+    parser.add_argument("--any", action="store_true", help="Return as soon as one job finishes")
+    args = parser.parse_args(argv)
+    root = jobs_root()
+    for j in args.job_ids:
+        if not _valid_job_id(j) or not (root / j).is_dir():
+            sys.stderr.write(f"[mARC dispatch] Error: unknown job id {j!r} under {root}\n")
+            return EXIT_USAGE
+    code, summaries = wait_jobs(args.job_ids, args.timeout, args.any, root)
+    for s in summaries:
+        print(_compact(s))
+    return code
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -705,6 +1053,12 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 def main(argv: Optional[List[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] == "start":
+        return _main_start(argv[1:])
+    if argv and argv[0] == "wait":
+        return _main_wait(argv[1:])
+    if argv and argv[0] == "_run" and len(argv) == 2:
+        return run_job(Path(argv[1]))
     args = parse_args(argv)
 
     result = dispatch(

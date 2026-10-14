@@ -53,6 +53,35 @@ python3 "${AGY_PLUGIN_ROOT:-.}/scripts/dispatch_agent.py" \
   --harness "<auto|native|claude-code|antigravity|copilot|codex>"
 ```
 
+#### Detached dispatch: `start`, then one blocking `wait`
+When the host has no native background agent (Codex today), don't run the
+synchronous form above and then poll it. Start the job, then collect it:
+```bash
+python3 "${AGY_PLUGIN_ROOT:-.}/scripts/dispatch_agent.py" start \
+  --role dev --prompt-file <spec.md> --timeout 3600   # prints {"job_id":...}
+python3 "${AGY_PLUGIN_ROOT:-.}/scripts/dispatch_agent.py" wait <job_id> --timeout 25
+```
+Exit codes of `wait`: `0` every job succeeded; `1` a job `failed`, `timed_out` or
+was `lost` (its runner died without a result); `2` usage error or unknown job id;
+`75` the wait timed out and the job is still `running`. Read the full result from
+`result_path` only when you need it. Job state lives under the clone's git common
+dir (`<git-common-dir>/marc/jobs/`), so it is shared by all worktrees and never
+dirties `git status`.
+<!-- rules:origin-required -->
+- **Collect detached dispatches with `wait`, never with a polling loop.** Fan out
+  with several `start` calls, then issue one `wait` over all job ids (`--any` to
+  react to the first finisher). On exit `75`, issue the same `wait` again. Do not
+  `sleep`, send empty `write_stdin` polls, run `gh ... --watch`, or read specialist
+  transcripts or session logs to check progress: each of those re-sends your
+  whole context and yields no information. Keep each `wait --timeout` below the
+  host's tool-call yield, so the call returns on its own with a status instead of
+  leaving a backgrounded session to poll. On Codex `exec_command`, set
+  `yield_time_ms` to `30000` (the maximum) and use `wait --timeout 25`. What this
+  does not change: `--timeout` on `start` bounds the specialist's wall clock, not
+  its tokens or tool calls, and a long job still costs one `wait` turn per
+  timeout window. (origin: #352 · 2026-10-14)
+<!-- /rules:origin-required -->
+
 **Cost discipline at dispatch time** — model choice and loop bounds are the
 cheapest lever on token budget:
 <!-- rules:origin-required -->
