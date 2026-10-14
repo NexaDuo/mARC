@@ -154,6 +154,22 @@ def normalize_role(role: str) -> str:
     return norm
 
 
+def is_forbidden_readonly_route(role: str, harness: Optional[str]) -> bool:
+    """Single #323 predicate: may this (role, harness) pair NOT run?
+
+    True when the role is read-only and the harness does not apply mARC agent
+    definitions headless (NON_ENFORCING_HARNESSES), or when the role is
+    bulk-reader and the harness is not the verified claude-code boundary.
+    Used by route resolution, command building and the detached runner (#352).
+    """
+    canonical = CANONICAL_ROLES[normalize_role(role)]
+    if canonical not in READ_ONLY_ROLES:
+        return False
+    if harness in NON_ENFORCING_HARNESSES:
+        return True
+    return canonical == "bulk-reader" and harness != READ_ONLY_PREFERRED_HARNESS
+
+
 DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
     # rev/review/research route to claude-code in EVERY host row (issue #323):
     # agy headless ignores `--agent`, so routing them to antigravity ran the
@@ -317,10 +333,9 @@ def detect_native_harness(
 def build_harness_command(harness: str, role: str, prompt: str) -> List[str]:
     """Build CLI execution command for target harness."""
     role = normalize_role(role)
-    if (role == "bulk-reader" and harness != "claude-code") or (
-            harness in ("codex", "antigravity") and CANONICAL_ROLES[role] in READ_ONLY_ROLES):
+    if is_forbidden_readonly_route(role, harness):
         # Defense in depth: resolve_route already re-routes read-only roles away
-        # from codex/antigravity (#323, #330); never build such a command here.
+        # from every non-enforcing harness (#323, #330); never build such a command here.
         raise ReadOnlyRoutingError("read-only role requires the verified Claude Code tool boundary (#323, #330)")
     mapped_agent = ROLE_TO_AGENT[role]
     if harness == "claude-code":
@@ -429,8 +444,7 @@ def resolve_target_harness_detailed(
     # does not apply the agent definition.
     read_only = canonical_role in READ_ONLY_ROLES
     reroute_reason: Optional[str] = None
-    if read_only and (target_harness in NON_ENFORCING_HARNESSES or
-                      (canonical_role == "bulk-reader" and target_harness != "claude-code")):
+    if is_forbidden_readonly_route(role, target_harness):
         reroute_reason = (
             f"role '{role}' is read-only but harness '{target_harness}' does not apply mARC "
             f"agent definitions in headless dispatch (issue #323)"
@@ -465,8 +479,7 @@ def resolve_target_harness_detailed(
             # to a NON_ENFORCING_HARNESSES entry, even when it is the host (#323).
             candidates = [
                 h for h in (READ_ONLY_PREFERRED_HARNESS, host_harness)
-                if h not in NON_ENFORCING_HARNESSES
-                and (canonical_role != "bulk-reader" or h == "claude-code")
+                if not is_forbidden_readonly_route(role, h)
             ]
             ro_fallback = next((h for h in candidates if _is_available(h)), None)
             if ro_fallback is None:
@@ -700,6 +713,7 @@ def execute_prepared(
             "stderr": (stderr + ("\n" if stderr else "") + err_msg),
             "success": False,
             "error": f"Timeout after {timeout} seconds",
+            "timed_out": True,
             "duration_sec": round(duration, 3),
         })
     except Exception as e:
@@ -848,7 +862,7 @@ def _lock_state(job_dir: Path) -> str:
 def _status_of_result(result: Dict[str, Any]) -> str:
     if result.get("success"):
         return "succeeded"
-    if result.get("exit_code") == 124 and str(result.get("error", "")).startswith("Timeout"):
+    if result.get("timed_out") is True:
         return "timed_out"
     return "failed"
 
@@ -878,6 +892,8 @@ def start_job(
     job_dir = root / job_id
     result_path = job_dir / "result.json"
     lock_fd = -1
+    spawned = False
+    stage = "cannot create job under"
     try:
         root.parent.parent.mkdir(parents=True, exist_ok=True)
         for d in (root.parent, root):
@@ -907,6 +923,7 @@ def start_job(
         }
         _write_json_atomic(staging / "job.json", meta)
         os.rename(str(staging), str(job_dir))
+        stage = "failed to spawn runner under"
         log_fd = os.open(str(job_dir / "runner.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND | _O_NOFOLLOW, 0o600)
         try:
             proc = subprocess.Popen(
@@ -920,17 +937,21 @@ def start_job(
             )
         finally:
             os.close(log_fd)
+        spawned = True
         meta["pid"] = proc.pid
         try:
             _write_json_atomic(job_dir / "job.json", meta)
         except OSError:
             pass  # informational only; liveness comes from the lock
-    except OSError as e:
-        # Nothing was spawned: remove the half-built (or already published)
-        # job so it never lingers as `lost` (#352 review).
-        for leftover in (root / f".tmp-{job_id}", job_dir):
-            shutil.rmtree(str(leftover), ignore_errors=True)
-        raise JobStoreError(f"cannot create job under {root}: {e.strerror or e}") from e
+    except BaseException as e:
+        if not spawned:
+            # Nothing runs: remove the staging dir or the already-published
+            # job, whatever the failure, so neither lingers (#352 review).
+            for leftover in (root / f".tmp-{job_id}", job_dir):
+                shutil.rmtree(str(leftover), ignore_errors=True)
+        if isinstance(e, OSError):
+            raise JobStoreError(f"{stage} {root}: {e.strerror or e}") from e
+        raise
     finally:
         if lock_fd >= 0:
             # The runner now holds the lock through its inherited descriptor.
@@ -980,6 +1001,9 @@ def _run_in_own_group(cmd: List[str], capture_output: bool = True, text: bool = 
     _HARNESS_PGID = proc.pid
     try:
         try:
+            if _TERM_PENDING is not None:
+                # Signalled before the harness started: don't let it run.
+                raise _RunnerTerminated(f"runner terminated by signal {_TERM_PENDING}")
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_harness_group(signal.SIGKILL)
@@ -996,8 +1020,20 @@ def _run_in_own_group(cmd: List[str], capture_output: bool = True, text: bool = 
         _HARNESS_PGID = None
 
 
+_TERM_PENDING: Optional[int] = None
+
+
 def _on_term_signal(signum: int, _frame: Any) -> None:
-    raise _RunnerTerminated(f"runner terminated by signal {signum}")
+    """Interrupt only a running harness; otherwise just record the signal.
+
+    Raising outside the harness run (e.g. during the final result.json write)
+    would leave the job without a result, so the signal is deferred there and
+    the runner still writes its terminal result before exiting (#352 review).
+    """
+    global _TERM_PENDING
+    _TERM_PENDING = signum
+    if _HARNESS_PGID is not None:
+        raise _RunnerTerminated(f"runner terminated by signal {signum}")
 
 
 def _validate_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -1008,10 +1044,7 @@ def _validate_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("job spec missing or unreadable")
     role = normalize_role(str(prepared.get("role", "")))
     harness = prepared.get("harness")
-    canonical = CANONICAL_ROLES[role]
-    if canonical in READ_ONLY_ROLES and (
-            harness in NON_ENFORCING_HARNESSES
-            or (canonical == "bulk-reader" and harness != READ_ONLY_PREFERRED_HARNESS)):
+    if is_forbidden_readonly_route(role, harness):
         raise ReadOnlyRoutingError(
             f"job spec routes read-only role '{role}' to '{harness}'; refusing (issue #323)")
     expected = build_harness_command(str(harness), role, prompt)
@@ -1113,8 +1146,11 @@ def wait_jobs(
     root = root or jobs_root()
     deadline = time.monotonic() + max(0.0, timeout)
     interval = 0.1
+    finished: Dict[str, Dict[str, Any]] = {}
     while True:
-        summaries = [job_summary(j, root) for j in job_ids]
+        # Finished jobs are terminal: parse their result.json once, not every poll.
+        summaries = [finished[j] if j in finished else job_summary(j, root) for j in job_ids]
+        finished.update({s["job_id"]: s for s in summaries if s["status"] != "running"})
         running = [s for s in summaries if s["status"] == "running"]
         done = [s for s in summaries if s["status"] != "running"]
         if not running or (any_mode and done) or time.monotonic() >= deadline:

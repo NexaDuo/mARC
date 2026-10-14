@@ -105,9 +105,17 @@ def test_command_generation() -> None:
             check(True, f"antigravity command for read-only '{r}' raises")
 
     # 3. copilot
-    for r in ["dev", "sre", "design", "sec", "rev", "research"]:
+    for r in ["dev", "sre", "design"]:
         cmd = build_harness_command("copilot", r, prompt)
         check(cmd == ["copilot", "--prompt", prompt], f"copilot command for role '{r}': {cmd}")
+    # Read-only roles never get a copilot command either: one shared #323
+    # predicate (is_forbidden_readonly_route) now backs every call site (#352).
+    for r in ["sec", "rev", "research", "bulk-reader"]:
+        try:
+            build_harness_command("copilot", r, prompt)
+            check(False, f"copilot command for read-only '{r}' should raise")
+        except ReadOnlyRoutingError:
+            check(True, f"copilot command for read-only '{r}' raises")
 
     # 4. Codex writers use an explicit sandbox; read-only roles are routed away.
     for r in ["dev", "sre", "design"]:
@@ -965,6 +973,8 @@ def _start_wait_cases(tmp_p: Path, started_pids: List[int], harness_pids: List[i
     out = _lines(r.stdout)
     check(r.returncode == 1 and out and out[0]["status"] == "timed_out",
           f"harness timeout reports timed_out (got {r.returncode}, {r.stdout!r})")
+    to_full = json.loads(Path(to_job["result_path"]).read_text(encoding="utf-8"))
+    check(to_full.get("timed_out") is True, "timeout is a structured timed_out field, not an error string")
 
     # SIGKILL on the runner alone: no result -> lost (no hang), and the harness
     # child does not outlive it (REV-9, PR_SET_PDEATHSIG on Linux).
@@ -1043,13 +1053,27 @@ def _start_wait_cases(tmp_p: Path, started_pids: List[int], harness_pids: List[i
     check(r.returncode == 2 and "not inside the job store" in r.stderr,
           f"runner refuses a job dir outside the store (got {r.returncode}, {r.stderr!r})")
 
-    # A read-only role routed to a forbidden harness fails closed at start (#323).
+    # Read-only roles routed to any forbidden harness fail closed, on both the
+    # synchronous and the start path (#323), through one shared predicate.
+    import dispatch_agent as _da
+    for h in sorted(NON_ENFORCING_HARNESSES):
+        for role in ("rev", "sec", "research", "bulk-reader"):
+            check(_da.is_forbidden_readonly_route(role, h), f"{role} on {h} is a forbidden route")
+    check(not _da.is_forbidden_readonly_route("dev", "copilot"), "writer on copilot is allowed")
+    check(_da.is_forbidden_readonly_route("bulk-reader", "native"), "bulk-reader off claude-code is forbidden")
+    check(not _da.is_forbidden_readonly_route("rev", "claude-code"), "read-only on claude-code is allowed")
     ro_bin = tmp_p / "ro-bin"
-    _make_stub_bin(ro_bin, ["codex"])  # no `claude` on PATH
+    _make_stub_bin(ro_bin, ["codex", "copilot", "agy"])  # no `claude` on PATH
     before = sorted(p.name for p in jobs.iterdir())
-    r = _cli(["start", "--role", "rev", "--harness", "codex", "--prompt", "x"], repo, _job_env(ro_bin))
-    check(r.returncode == 2 and r.stdout.strip() == "" and "#323" in r.stderr,
-          f"read-only role to codex without claude fails closed at start (got {r.returncode}, {r.stderr!r})")
+    for h in ("antigravity", "copilot", "codex"):
+        for role in ("rev", "bulk-reader"):
+            r = _cli(["start", "--role", role, "--harness", h, "--prompt", "x"], repo, _job_env(ro_bin))
+            check(r.returncode == 2 and r.stdout.strip() == "" and "#323" in r.stderr,
+                  f"start: read-only {role} to {h} without claude fails closed (got {r.returncode}, {r.stderr!r})")
+            r = _cli(["--role", role, "--harness", h, "--prompt", "x", "--json"], repo, _job_env(ro_bin))
+            res = json.loads(r.stdout) if r.stdout.strip() else {}
+            check(r.returncode == 2 and res.get("command") == [] and res.get("harness") is None,
+                  f"sync: read-only {role} to {h} without claude fails closed (got {r.returncode})")
     check(sorted(p.name for p in jobs.iterdir()) == before, "a refused start creates no job")
 
     # An unwritable job store is a clean exit 2, not a traceback (REV-1).
@@ -1075,8 +1099,64 @@ def _start_wait_cases(tmp_p: Path, started_pids: List[int], harness_pids: List[i
     except subprocess.TimeoutExpired:
         check(False, "wait hung on a FIFO at lock")
 
+    # A start that fails before publishing leaves no `.tmp-<id>` staging dir.
+    saved_write, saved_path = _da._write_json_atomic, os.environ.get("PATH", "")
+    before = sorted(p.name for p in jobs.iterdir())
+    raised = None
+
+    def _failing_write(path: Path, data: Dict[str, Any]) -> None:
+        raise OSError(28, "No space left on device")
+    try:
+        os.environ["PATH"] = str(bin_dir)
+        _da._write_json_atomic = _failing_write
+        try:
+            _da.start_job("dev", "x", "claude-code", cwd=repo)
+        except _da.JobStoreError as e:
+            raised = e
+    finally:
+        _da._write_json_atomic = saved_write
+        os.environ["PATH"] = saved_path
+    check(raised is not None and "cannot create job" in str(raised)
+          and sorted(p.name for p in jobs.iterdir()) == before,
+          f"failed staging write removes the staging dir (got {raised!r})")
+
+    # Termination signals outside the harness run are deferred, not raised,
+    # so the final result.json write cannot be interrupted (#352 review).
+    saved_pgid, saved_pending = _da._HARNESS_PGID, _da._TERM_PENDING
+    try:
+        _da._HARNESS_PGID = None
+        try:
+            _da._on_term_signal(15, None)
+            check(_da._TERM_PENDING == 15, "signal outside the harness run is recorded, not raised")
+        except _da._RunnerTerminated:
+            check(False, "signal outside the harness run must not raise")
+        _da._HARNESS_PGID = 999999
+        try:
+            _da._on_term_signal(15, None)
+            check(False, "signal during the harness run should raise")
+        except _da._RunnerTerminated:
+            check(True, "signal during the harness run interrupts it")
+    finally:
+        _da._HARNESS_PGID, _da._TERM_PENDING = saved_pgid, saved_pending
+
+    # wait parses a finished job's result once, not on every poll.
+    calls: Dict[str, int] = {}
+    saved_summary = _da.job_summary
+
+    def _counting_summary(job_id: str, root: Path) -> Dict[str, Any]:
+        calls[job_id] = calls.get(job_id, 0) + 1
+        return saved_summary(job_id, root)
+    slow2 = start("sleep=60")
+    try:
+        _da.job_summary = _counting_summary
+        code, _ = _da.wait_jobs([job["job_id"], slow2["job_id"]], timeout=1.5, root=jobs)
+    finally:
+        _da.job_summary = saved_summary
+        _kill_group(slow2["pid"])
+    check(code == 75 and calls.get(job["job_id"]) == 1 and calls.get(slow2["job_id"], 0) > 1,
+          f"finished summaries are cached across polls (calls={calls})")
+
     # A start that fails after publishing the job leaves nothing behind.
-    import dispatch_agent as _da
     saved_exe, saved_path = sys.executable, os.environ.get("PATH", "")
     before = sorted(p.name for p in jobs.iterdir())
     raised = None
@@ -1090,8 +1170,9 @@ def _start_wait_cases(tmp_p: Path, started_pids: List[int], harness_pids: List[i
     finally:
         _da.sys.executable = saved_exe
         os.environ["PATH"] = saved_path
-    check(raised is not None and sorted(p.name for p in jobs.iterdir()) == before,
-          f"failed spawn raises JobStoreError and removes the published job (got {raised!r})")
+    check(raised is not None and "failed to spawn runner" in str(raised)
+          and sorted(p.name for p in jobs.iterdir()) == before,
+          f"failed spawn says so and removes the published job (got {raised!r})")
 
     # Backward-compatible no-subcommand invocation still runs synchronously.
     r = _cli(["--role", "dev", "--harness", "claude-code", "--prompt", "exit=0", "--json"], repo, env)

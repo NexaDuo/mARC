@@ -27,6 +27,10 @@ date whose `YY.M.D` is already taken.
   exec, runs the harness in its own process group and kills it on exit or
   termination. An unusable job store (e.g. read-only under a sandbox) is a clean
   exit `2`. The no-subcommand invocation is unchanged.
+- One shared #323 predicate (`is_forbidden_readonly_route`) backs route
+  resolution, command building and the detached runner. `build_harness_command`
+  now also refuses read-only roles on `copilot`; the synchronous path already
+  re-routed them, so this tightens defense in depth only.
 
 ### Changed
 
