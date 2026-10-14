@@ -73,6 +73,10 @@ jobs:
         run: |
           export PATH="$PWD/scripts/ci-codex/node_modules/.bin:$PATH"
           python3 scripts/probe_codex_readonly.py
+      # The owner-only --exec mode must fail closed; tested against a stub
+      # `codex` (no model call, temp HOME/CODEX_HOME).
+      - name: Probe --exec fail-closed self-test (stub codex)
+        run: python3 scripts/test_probe_codex_readonly.py
 
   structural:
     name: Tier 1 — structural

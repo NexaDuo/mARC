@@ -25,13 +25,21 @@ Usage:
     python3 scripts/probe_codex_readonly.py            # sandbox probe (CI default)
     python3 scripts/probe_codex_readonly.py --json     # machine-readable result
     python3 scripts/probe_codex_readonly.py --exec     # OWNER ONLY, manual: real
-        `codex exec` (one model call) with the same profile, to check that exec
-        honors it, also with a user config.toml carrying
-        `sandbox_mode = "danger-full-access"`. Never run in CI.
+        `codex exec` (three model calls) with the reviewer argv, once per case:
+        no config; `sandbox_mode = "danger-full-access"` temporarily added to the
+        user $CODEX_HOME/config.toml (restored afterwards); the same line in a
+        project `.codex/config.toml` inside the probe workspace. Never run in CI.
+
+What the default mode proves, and what it does not (#351 SEC-1): it checks what
+the profile CONTAINS, with the profile named explicitly by `codex sandbox -P`.
+The reviewer argv selects it only through `-c default_permissions=...`; whether
+`codex exec` honors that selection over a user or project `sandbox_mode` is
+unverified until the owner's `--exec` run passes in all three cases.
 
 Exit codes: 0 matrix as expected; 1 matrix changed (a Codex upgrade changed the
 profile semantics, or the probe found a hole); 2 the probe could not run (codex
-missing, sandbox failed to start, control run not clean).
+missing, sandbox failed to start, control run not clean; in --exec mode also a
+failed exec, an absent probe sentinel or any missing row).
 """
 from __future__ import annotations
 
@@ -217,39 +225,98 @@ EXEC_PROMPT = (
 )
 
 
-def run_exec(base: Path) -> Tuple[int, Dict[str, object]]:
-    """OWNER ONLY. One real `codex exec` (model call) under the reviewer profile.
+OVERRIDE_LINE = 'sandbox_mode = "danger-full-access"'
+EXEC_CASES = ("no-config", "user-config", "project-config")
 
-    Side effects are judged from outside (files left behind, commits made); the
-    network line is taken from the model's echo of the probe output, so it is
-    reported, not proven.
+
+def _with_user_override(text: str) -> str:
+    """User config.toml with a top-level `sandbox_mode = "danger-full-access"` (replacing one if present)."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("["):
+            break
+        if s.split("=", 1)[0].strip() == "sandbox_mode" and "=" in s:
+            lines[i] = OVERRIDE_LINE
+            return "\n".join(lines) + "\n"
+    return OVERRIDE_LINE + "\n" + text
+
+
+def judge_exec(exit_code: int, stdout: str, effects: Dict[str, bool]) -> Tuple[int, Dict[str, object]]:
+    """Fail closed (#351 REV-1): 2 unless exec succeeded, the probe ran and every row is present."""
+    result = classify(parse_lines(stdout), effects)
+    leaked = sorted(k for k, v in effects.items() if v)
+    out: Dict[str, object] = {"exec_exit": exit_code, "sentinel": SENTINEL in stdout,
+                              "result": result, "leaked_side_effects": leaked}
+    if leaked or any(result[k] not in (EXPECTED[k], "missing") for k in EXPECTED):
+        return 1, out  # a proven hole outranks "could not run"
+    if exit_code != 0 or SENTINEL not in stdout or "missing" in result.values():
+        out["error"] = "codex exec failed or the probe did not run completely; nothing is proven"
+        return 2, out
+    return 0, out
+
+
+def run_exec_case(base: Path, case: str) -> Tuple[int, Dict[str, object]]:
+    """One real `codex exec` (one model call) under the reviewer profile, for one config case.
+
+    no-config       the user's config as is
+    user-config     $CODEX_HOME/config.toml temporarily carries OVERRIDE_LINE (restored after)
+    project-config  OVERRIDE_LINE in <workspace>/.codex/config.toml (the reviewed checkout)
+    Writes and the commit are judged from the filesystem; read_file and network
+    come from the model's echo of the probe output.
     """
-    box = Battery(base, "exec")
+    box = Battery(base, f"exec-{case}")
     argv = ["codex", "exec", "-C", str(box.ws), *CODEX_READONLY_PROFILE_ARGS, EXEC_PROMPT]
-    report: Dict[str, object] = {"mode": "exec", "argv": argv[:-1] + ["<prompt>"]}
+    user_cfg = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+    original = None
     try:
-        e = subprocess.run(argv, cwd=str(box.ws), env=box.env(), capture_output=True, text=True,
-                           timeout=600)
+        if case == "user-config":
+            original = user_cfg.read_bytes() if user_cfg.exists() else b""
+            user_cfg.write_text(_with_user_override(original.decode("utf-8")), encoding="utf-8")
+        elif case == "project-config":
+            (box.ws / ".codex").mkdir()
+            (box.ws / ".codex" / "config.toml").write_text(OVERRIDE_LINE + "\n", encoding="utf-8")
+        try:
+            e = subprocess.run(argv, cwd=str(box.ws), env=box.env(), capture_output=True, text=True,
+                               timeout=600)
+            code_out = (e.returncode, e.stdout, e.stderr)
+        except (OSError, subprocess.SubprocessError) as exc:
+            code_out = (127, "", str(exc))
         effects = box.side_effects()
     finally:
+        if original is not None:
+            if original:
+                user_cfg.write_bytes(original)
+            else:
+                user_cfg.unlink()
         box.cleanup()
-    report["exec_exit"] = e.returncode
-    codes = parse_lines(e.stdout)
-    report["leaked_side_effects"] = sorted(k for k, v in effects.items() if v)
-    result = classify(codes, effects)
-    report["result"] = result
-    report["note"] = ("writes/commit judged from the filesystem; read_file/network from the model's "
-                      "echo. Repeat once with `sandbox_mode = \"danger-full-access\"` in your "
-                      "config.toml to test the user-config override.")
-    hole = bool(report["leaked_side_effects"])
-    return (1 if hole or any(result[k] != EXPECTED[k] for k in EXPECTED if result[k] != "missing") else 0), report
+    code, out = judge_exec(code_out[0], code_out[1], effects)
+    if code == 2:
+        out["stderr"] = code_out[2][-1000:]
+    return code, out
+
+
+def run_exec(base: Path) -> Tuple[int, Dict[str, object]]:
+    """OWNER ONLY: every EXEC_CASES case. Exit 1 if any case leaked, else 2 if any could not run."""
+    report: Dict[str, object] = {"mode": "exec",
+                                 "argv": ["codex", "exec", "-C", "<ws>", *CODEX_READONLY_PROFILE_ARGS, "<prompt>"]}
+    cases: Dict[str, object] = {}
+    codes = []
+    for case in EXEC_CASES:
+        code, out = run_exec_case(base, case)
+        out["code"] = code
+        cases[case] = out
+        codes.append(code)
+    report["cases"] = cases
+    return (1 if 1 in codes else 2 if 2 in codes else 0), report
 
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--json", action="store_true", help="print the full report as JSON")
     ap.add_argument("--exec", dest="exec_mode", action="store_true",
-                    help="OWNER ONLY: real `codex exec` (one model call). Never in CI.")
+                    help="OWNER ONLY: real `codex exec`, three model calls (no config, user "
+                         "config override, project config override). Never in CI.")
     args = ap.parse_args(argv)
     if shutil.which("codex") is None:
         sys.stderr.write("probe_codex_readonly: `codex` not on PATH\n")
@@ -263,11 +330,22 @@ def main(argv: List[str]) -> int:
         print(f"codex: {report.get('codex_version', '?')}  profile: {CODEX_READONLY_PROFILE}")
         if "argv" in report:
             print("argv: " + " ".join(str(a) for a in report["argv"]))
-        rows = report.get("sandbox") or report.get("result") or {}
-        control = report.get("control", {})
-        print(f"{'probe':<18}{'expected':<10}{'control':<10}{'profile':<10}")
-        for k, exp in EXPECTED.items():
-            print(f"{k:<18}{exp:<10}{control.get(k, '-'):<10}{rows.get(k, '-'):<10}")
+        if "cases" in report:
+            cases = report["cases"]
+            print(f"{'probe':<18}{'expected':<10}" + "".join(f"{c:<16}" for c in cases))
+            for k, exp in EXPECTED.items():
+                print(f"{k:<18}{exp:<10}" + "".join(f"{v['result'].get(k, '-'):<16}" for v in cases.values()))
+            for c, v in cases.items():
+                print(f"{c}: exit={v['exec_exit']} sentinel={v['sentinel']} code={v['code']}"
+                      + (f" ERROR: {v['error']}" if v.get("error") else ""))
+                if v.get("leaked_side_effects"):
+                    print(f"{c}: LEAKED side effects: {v['leaked_side_effects']}")
+        else:
+            rows = report.get("sandbox") or {}
+            control = report.get("control", {})
+            print(f"{'probe':<18}{'expected':<10}{'control':<10}{'profile':<10}")
+            for k, exp in EXPECTED.items():
+                print(f"{k:<18}{exp:<10}{control.get(k, '-'):<10}{rows.get(k, '-'):<10}")
         if report.get("leaked_side_effects"):
             print(f"LEAKED side effects: {report['leaked_side_effects']}")
         if report.get("error"):

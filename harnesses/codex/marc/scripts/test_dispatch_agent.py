@@ -920,10 +920,65 @@ def test_codex_readonly_opt_in() -> None:
         t.write_text('[orchestration.routes]\nrev = "auto"\n', encoding="utf-8")
         _r, _e, exc = _capture_stderr(_validate_spec, spec)
         check(isinstance(exc, ReadOnlyRoutingError), f"re-check refuses once team.toml drops the opt-in: {exc!r}")
-        t.write_text(opt, encoding="utf-8")
-        prepared["team_toml"] = None
+        # REV-2: forged native mode + codex. The re-check re-reads `mode` too.
+        t.write_text('[orchestration]\nmode = "native"\n[orchestration.routes]\nrev = "codex"\n',
+                     encoding="utf-8")
         _r, _e, exc = _capture_stderr(_validate_spec, spec)
-        check(isinstance(exc, ReadOnlyRoutingError), f"re-check refuses a spec without team_toml: {exc!r}")
+        check(isinstance(exc, ReadOnlyRoutingError), f"re-check refuses native mode + codex spec: {exc!r}")
+        # REV-2: the spec's recorded team_toml path is not trusted; only the
+        # team.toml discovered from the spec cwd counts.
+        with tempfile.TemporaryDirectory() as other:
+            forged = Path(other) / "team.toml"
+            forged.write_text(opt, encoding="utf-8")
+            t.write_text('[orchestration.routes]\nrev = "auto"\n', encoding="utf-8")
+            prepared["team_toml"] = str(forged)
+            _r, _e, exc = _capture_stderr(_validate_spec, spec)
+            check(isinstance(exc, ReadOnlyRoutingError),
+                  f"re-check ignores a spec team_toml outside the checkout: {exc!r}")
+            # What start_job pre-validates before spawning (never spawned here):
+            # an opt-in from a --team-toml outside the checkout is refused.
+            empty = Path(other) / "checkout"
+            empty.mkdir()
+            pre, _e, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", False, str(forged),
+                                           env_cc, all_which, empty)
+            check(exc is None and pre.get("harness") == "codex", f"--team-toml route prepared: {exc!r}")
+            _r, _e, exc = _capture_stderr(_validate_spec, {"prompt": prompt, "cwd": str(empty.resolve()),
+                                                          "prepared": pre})
+            check(isinstance(exc, ReadOnlyRoutingError),
+                  f"start pre-check refuses a --team-toml opt-in outside the checkout: {exc!r}")
+
+    # REV-3: prepare_dispatch discovers team.toml from `cwd`, not the process cwd.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "team.toml").write_text(opt, encoding="utf-8")
+        prepared, _err, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", True, None,
+                                              env_cc, all_which, Path(d))
+        check(exc is None and prepared.get("harness") == "codex"
+              and prepared["command"][3] == str(Path(d).resolve()),
+              f"team.toml discovered from cwd={d}, not {os.getcwd()}: {prepared.get('harness')} {exc!r}")
+
+    # SEC-3: the effort pin is allowlisted before it reaches the `-c` TOML value.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "agents").mkdir()
+        (Path(d) / "agents" / "review.md").write_text("---\nname: review\n---\nbody\n", encoding="utf-8")
+        for bad in ('high" -c sandbox_mode="danger-full-access', "turbo", ""):
+            (Path(d) / "agents" / "review.toml").write_text(
+                f"model_reasoning_effort = '{bad}'\n", encoding="utf-8")
+            try:
+                body, pins = load_codex_persona("review", plugin_dir=Path(d))
+                check(bad == "" and pins == {}, f"effort {bad!r} rejected or ignored: {pins}")
+            except ReadOnlyRoutingError:
+                check(bad != "", f"effort {bad!r} rejected")
+        for good in ("minimal", "low", "medium", "high", "xhigh"):
+            (Path(d) / "agents" / "review.toml").write_text(
+                f'model_reasoning_effort = "{good}"\n', encoding="utf-8")
+            check(load_codex_persona("review", plugin_dir=Path(d))[1] == {"model_reasoning_effort": good},
+                  f"effort {good!r} accepted")
+        (Path(d) / "agents" / "review.toml").write_text('model = "--full-auto"\n', encoding="utf-8")
+        try:
+            load_codex_persona("review", plugin_dir=Path(d))
+            check(False, "a model pin that parses as a flag should raise")
+        except ReadOnlyRoutingError:
+            check(True, "a model pin that parses as a flag raises")
 
 
 def test_role_normalization_fail_closed() -> None:

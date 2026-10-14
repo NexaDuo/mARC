@@ -266,9 +266,14 @@ detection and fallbacks keep them on Claude Code, as before. The argv is fixed
 bypass/`--full-auto`/`workspace-write`/`danger-full-access`) and the role's
 agent definition is prepended to the prompt, ending in a `verdict:` last line
 for `@sec`/`@rev`. Dispatch from a checkout at the PR HEAD: the reviewer reads
-that tree, it does not create a worktree. Honest limits, same as Claude Code
-reviewers: secrets stay readable, and network on means a reviewer could still
-run `gh pr merge`; only server-side branch protection stops that.
-`scripts/probe_codex_readonly.py` proves the profile under `codex sandbox`;
-live `codex exec` honoring it (and a user `config.toml` override) is
-owner-verified with its `--exec` mode. (origin: #351 · 2026-10-14)
+that tree, it does not create a worktree. The opt-in is read from that same
+checkout's `team.toml`, so a PR can change its own review routing: dispatch
+reviews from a checkout whose `team.toml` you trust (e.g. the base branch).
+Honest limits, same as Claude Code reviewers: secrets stay readable, and
+network on means a reviewer could still run `gh pr merge`; only server-side
+branch protection stops that. The CI probe (`scripts/probe_codex_readonly.py`)
+checks what the profile contains, with the profile named by `codex sandbox -P`;
+it does not prove that `codex exec` selects it via `default_permissions` over a
+user or project `sandbox_mode`. That stays unverified until the owner's
+`--exec` run passes (no config, user config, project config).
+(origin: #351 · 2026-10-14)
