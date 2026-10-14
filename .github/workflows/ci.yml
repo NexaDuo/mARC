@@ -54,6 +54,15 @@ jobs:
           export PATH="$PWD/scripts/ci-codex/node_modules/.bin:$PATH"
           codex --version
           python3 scripts/test_codex_harness.py --cli
+      # Issue #351: the opt-in Codex reviewer profile (fs read-only + network)
+      # must block every write and `git commit` and allow network, under
+      # `codex sandbox` with the exact profile dispatch_agent.py passes to
+      # `codex exec`. No model, no secret. Fails if a Codex upgrade changes the
+      # matrix; exits 2 (also a failure) if the sandbox cannot start here.
+      - name: Codex read-only reviewer boundary probe (no model)
+        run: |
+          export PATH="$PWD/scripts/ci-codex/node_modules/.bin:$PATH"
+          python3 scripts/probe_codex_readonly.py
 
   structural:
     name: Tier 1 — structural
