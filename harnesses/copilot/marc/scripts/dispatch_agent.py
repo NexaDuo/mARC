@@ -61,8 +61,10 @@ Routing resolution:
       under `codex sandbox -P` (no model); it does not prove that `codex exec` selects
       it via `default_permissions` over a user or project `sandbox_mode`, which stays
       unverified until the owner's `--exec` run passes. The opt-in is read from the
-      dispatching checkout's team.toml (a PR can change its own routing), and the
-      `start` re-check re-discovers it from the job's checkout, `mode` included.
+      dispatching checkout's team.toml (a PR can change its own routing). It counts
+      only from the team.toml discovered from that checkout: sync dispatch, `start`
+      and the runner's re-check all re-discover it there (`mode` included) and refuse
+      an opt-in that comes from any other --team-toml, inside or outside the checkout.
 """
 from __future__ import annotations
 
@@ -844,6 +846,13 @@ def prepare_dispatch(
     resolved_harness = route["harness"]
     opt_in = bool(route.get("codex_readonly_opt_in"))
     try:
+        # One rule for sync dispatch, `start` and the runner (#351 REV-7): a
+        # Codex read-only opt-in counts only from the team.toml discovered from
+        # the checkout. Any other --team-toml (inside or outside it) is refused.
+        if opt_in and not _reresolve_codex_opt_in(role, harness, str((cwd or Path.cwd()).resolve())):
+            raise ReadOnlyRoutingError(
+                f"codex read-only opt-in for '{role}' comes from {toml_path}, not from the team.toml "
+                f"discovered from the checkout; refusing (#351)")
         cmd = build_harness_command(resolved_harness, role, prompt,
                                     codex_opt_in=opt_in, cwd=str(cwd) if cwd else None)
     except ReadOnlyRoutingError as e:
@@ -1101,7 +1110,8 @@ def start_job(
         return prepared["exit_code"], {"error": prepared.get("error"), "exit_code": prepared["exit_code"]}
     try:
         # Refuse now, not in the runner, what the runner's re-check would refuse
-        # (e.g. a Codex read-only opt-in from a --team-toml outside the checkout, #351).
+        # (e.g. a Codex read-only opt-in from any --team-toml other than the one
+        # discovered from the checkout, #351).
         _validate_spec({"prompt": prompt, "cwd": str(workdir), "prepared": prepared})
     except ReadOnlyRoutingError as e:
         sys.stderr.write(f"[mARC dispatch] Error: {e}\n")

@@ -254,6 +254,9 @@ for `@sec`/`@rev`. Dispatch from a checkout at the PR HEAD: the reviewer reads
 that tree, it does not create a worktree. The opt-in is read from that same
 checkout's `team.toml`, so a PR can change its own review routing: dispatch
 reviews from a checkout whose `team.toml` you trust (e.g. the base branch).
+The opt-in counts only from the `team.toml` discovered from that checkout:
+sync dispatch and `start` refuse it (exit 2) when it comes from any other
+`--team-toml`, inside the checkout or outside it.
 Honest limits, same as Claude Code reviewers: secrets stay readable, and
 network on means a reviewer could still run `gh pr merge`; only server-side
 branch protection stops that. The CI probe (`scripts/probe_codex_readonly.py`)

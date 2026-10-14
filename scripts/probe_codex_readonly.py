@@ -26,9 +26,10 @@ Usage:
     python3 scripts/probe_codex_readonly.py --json     # machine-readable result
     python3 scripts/probe_codex_readonly.py --exec     # OWNER ONLY, manual: real
         `codex exec` (three model calls) with the reviewer argv, once per case:
-        no config; `sandbox_mode = "danger-full-access"` temporarily added to the
-        user $CODEX_HOME/config.toml (restored afterwards); the same line in a
-        project `.codex/config.toml` inside the probe workspace. Never run in CI.
+        no config; `sandbox_mode = "danger-full-access"` in a user config.toml
+        inside a throwaway CODEX_HOME (the real one is never written; see
+        run_exec_case for the refresh-token caveat); the same line in a project
+        `.codex/config.toml` inside the probe workspace. Never run in CI.
 
 What the default mode proves, and what it does not (#351 SEC-1): it checks what
 the profile CONTAINS, with the profile named explicitly by `codex sandbox -P`.
@@ -48,6 +49,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -229,19 +231,6 @@ OVERRIDE_LINE = 'sandbox_mode = "danger-full-access"'
 EXEC_CASES = ("no-config", "user-config", "project-config")
 
 
-def _with_user_override(text: str) -> str:
-    """User config.toml with a top-level `sandbox_mode = "danger-full-access"` (replacing one if present)."""
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        s = line.strip()
-        if s.startswith("["):
-            break
-        if s.split("=", 1)[0].strip() == "sandbox_mode" and "=" in s:
-            lines[i] = OVERRIDE_LINE
-            return "\n".join(lines) + "\n"
-    return OVERRIDE_LINE + "\n" + text
-
-
 def judge_exec(exit_code: int, stdout: str, effects: Dict[str, bool]) -> Tuple[int, Dict[str, object]]:
     """Fail closed (#351 REV-1): 2 unless exec succeeded, the probe ran and every row is present."""
     result = classify(parse_lines(stdout), effects)
@@ -256,40 +245,83 @@ def judge_exec(exit_code: int, stdout: str, effects: Dict[str, bool]) -> Tuple[i
     return 0, out
 
 
+def _temp_codex_home() -> Path:
+    """A private (0700) throwaway CODEX_HOME for the user-config case (#351 SEC-4).
+
+    Lives under $XDG_RUNTIME_DIR (or ~/.cache), not /tmp. Holds a 0600 copy of
+    the auth file and a config.toml carrying OVERRIDE_LINE. The owner's real
+    $CODEX_HOME is never written.
+    """
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    parent = Path(runtime) if runtime and Path(runtime).is_dir() else Path.home() / ".cache"
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    home = Path(tempfile.mkdtemp(prefix="marc-probe-codex-home-", dir=str(parent)))
+    try:
+        os.chmod(str(home), 0o700)
+        real_auth = _real_codex_home() / "auth.json"
+        if real_auth.is_file():
+            fd = os.open(str(home / "auth.json"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(real_auth.read_bytes())
+        (home / "config.toml").write_text(OVERRIDE_LINE + "\n", encoding="utf-8")
+    except BaseException:
+        shutil.rmtree(str(home), ignore_errors=True)
+        raise
+    return home
+
+
+def _real_codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+class _Terminated(Exception):
+    pass
+
+
+def _raise_terminated(signum: int, _frame: object) -> None:
+    raise _Terminated(f"signal {signum}")
+
+
 def run_exec_case(base: Path, case: str) -> Tuple[int, Dict[str, object]]:
     """One real `codex exec` (one model call) under the reviewer profile, for one config case.
 
     no-config       the user's config as is
-    user-config     $CODEX_HOME/config.toml temporarily carries OVERRIDE_LINE (restored after)
+    user-config     CODEX_HOME points (for that subprocess only) at a throwaway
+                    0700 dir holding a 0600 auth copy and a config.toml with
+                    OVERRIDE_LINE; it is removed afterwards, also on SIGTERM/SIGHUP.
+                    The real $CODEX_HOME/config.toml is never touched (SEC-4).
+                    Caveat: if Codex rotates the refresh token during this run,
+                    the rotation lands in the temp copy and the real auth.json can
+                    go stale; a re-login fixes it.
     project-config  OVERRIDE_LINE in <workspace>/.codex/config.toml (the reviewed checkout)
     Writes and the commit are judged from the filesystem; read_file and network
     come from the model's echo of the probe output.
     """
     box = Battery(base, f"exec-{case}")
     argv = ["codex", "exec", "-C", str(box.ws), *CODEX_READONLY_PROFILE_ARGS, EXEC_PROMPT]
-    user_cfg = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
-    original = None
+    temp_home: "Path | None" = None
+    old = {sig: signal.signal(sig, _raise_terminated) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
+        env = box.env()
         if case == "user-config":
-            original = user_cfg.read_bytes() if user_cfg.exists() else b""
-            user_cfg.write_text(_with_user_override(original.decode("utf-8")), encoding="utf-8")
+            temp_home = _temp_codex_home()
+            env["CODEX_HOME"] = str(temp_home)
         elif case == "project-config":
             (box.ws / ".codex").mkdir()
             (box.ws / ".codex" / "config.toml").write_text(OVERRIDE_LINE + "\n", encoding="utf-8")
         try:
-            e = subprocess.run(argv, cwd=str(box.ws), env=box.env(), capture_output=True, text=True,
+            e = subprocess.run(argv, cwd=str(box.ws), env=env, capture_output=True, text=True,
                                timeout=600)
             code_out = (e.returncode, e.stdout, e.stderr)
         except (OSError, subprocess.SubprocessError) as exc:
             code_out = (127, "", str(exc))
         effects = box.side_effects()
     finally:
-        if original is not None:
-            if original:
-                user_cfg.write_bytes(original)
-            else:
-                user_cfg.unlink()
+        if temp_home is not None:
+            shutil.rmtree(str(temp_home), ignore_errors=True)
         box.cleanup()
+        for sig, handler in old.items():
+            signal.signal(sig, handler)
     code, out = judge_exec(code_out[0], code_out[1], effects)
     if code == 2:
         out["stderr"] = code_out[2][-1000:]

@@ -935,17 +935,33 @@ def test_codex_readonly_opt_in() -> None:
             _r, _e, exc = _capture_stderr(_validate_spec, spec)
             check(isinstance(exc, ReadOnlyRoutingError),
                   f"re-check ignores a spec team_toml outside the checkout: {exc!r}")
-            # What start_job pre-validates before spawning (never spawned here):
-            # an opt-in from a --team-toml outside the checkout is refused.
+            # REV-7: one rule for sync dispatch and `start` (both go through
+            # prepare_dispatch): an opt-in counts only from the team.toml
+            # discovered from the checkout. Any other --team-toml is refused,
+            # outside the checkout or inside it.
             empty = Path(other) / "checkout"
             empty.mkdir()
-            pre, _e, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", False, str(forged),
-                                           env_cc, all_which, empty)
-            check(exc is None and pre.get("harness") == "codex", f"--team-toml route prepared: {exc!r}")
-            _r, _e, exc = _capture_stderr(_validate_spec, {"prompt": prompt, "cwd": str(empty.resolve()),
-                                                          "prepared": pre})
-            check(isinstance(exc, ReadOnlyRoutingError),
-                  f"start pre-check refuses a --team-toml opt-in outside the checkout: {exc!r}")
+            alt = Path(d) / "alt.toml"
+            alt.write_text(opt, encoding="utf-8")
+            for label, toml_arg, where in (("outside", str(forged), empty),
+                                           ("inside (alt.toml)", str(alt), Path(d))):
+                for dry in (True, False):
+                    pre, _e, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", dry, toml_arg,
+                                                   env_cc, all_which, where)
+                    check(exc is None and pre.get("exit_code") == 2 and pre.get("command") == []
+                          and pre.get("harness") is None,
+                          f"--team-toml {label} opt-in refused (dry_run={dry}): {pre.get('exit_code')} {exc!r}")
+                runner = MagicMock()
+                res_d, _e, exc = _capture_stderr(dispatch, "rev", prompt, "auto", 30.0, False, toml_arg,
+                                                 env_cc, all_which, runner)
+                check(res_d is not None and res_d["exit_code"] == 2 and not runner.called,
+                      f"sync dispatch refuses a --team-toml {label} opt-in without running anything")
+            # The discovered team.toml passed explicitly is the same file: allowed.
+            t.write_text(opt, encoding="utf-8")
+            pre, _e, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", True, str(t),
+                                           env_cc, all_which, Path(d))
+            check(exc is None and pre.get("harness") == "codex",
+                  f"--team-toml naming the discovered file keeps the opt-in: {pre.get('harness')} {exc!r}")
 
     # REV-3: prepare_dispatch discovers team.toml from `cwd`, not the process cwd.
     with tempfile.TemporaryDirectory() as d:
