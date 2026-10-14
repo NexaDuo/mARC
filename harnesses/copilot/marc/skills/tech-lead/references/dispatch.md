@@ -53,6 +53,58 @@ python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/dispatch_agent.py" \
   --harness "<auto|native|claude-code|antigravity|copilot|codex>"
 ```
 
+#### Detached dispatch: `start`, then one blocking `wait`
+When the host has no native background agent (Codex today), don't run the
+synchronous form above and then poll it. Start the job, then collect it:
+```bash
+python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/dispatch_agent.py" start \
+  --role dev --prompt-file <scratch>/spec.md --timeout 3600   # prints {"job_id":...}
+python3 "${COPILOT_PLUGIN_DATA:-.}/scripts/dispatch_agent.py" wait <job_id> --timeout 25
+```
+Write the spec to a session scratch dir outside the working tree, mode `0600`, and
+pass `--prompt-file`: `--prompt` puts the whole spec in the process list, and a
+spec file inside the tree can be committed by accident.
+
+Exit codes of `wait`: `0` every job succeeded; `1` a job `failed`, `timed_out` or
+was `lost` (its runner died without a result); `2` usage error, unknown job id or
+an unusable job store; `75` the wait timed out and the job is still `running`.
+Exit `1` is not always terminal for the batch: other ids can still be `running`,
+so check the status lines and keep waiting on those. With `--any`, `wait` exits
+`0` as soon as one job has succeeded, even while others run, and re-issuing the
+same list returns at once; re-`wait` only the ids still `running`. Read the full
+result from `result_path` only when you need it. Job state lives under the clone's
+git common dir (`<git-common-dir>/marc/jobs/`), so it is shared by all worktrees
+and never dirties `git status`; from outside the clone, pass `wait --store <dir>`
+(the directory two levels above `result_path`).
+
+**Sandboxed hosts (Codex):** escalate only the `start` call (and the synchronous
+form, which also launches another agent CLI), one call at a time: `exec_command`
+with `sandbox_permissions: "require_escalated"` and a justification. Under Codex's
+`workspace-write` sandbox the git dir is read-only, so a sandboxed `start` exits
+`2` with "Read-only file system", and a runner spawned inside the sandbox dies
+when the sandbox exits. Run `wait` sandboxed, without escalation: liveness is a
+file lock, not a pid lookup, so it reports `running` correctly from inside the
+sandbox. Never persist an approval for a bare `python3` (or `python3 <anything>`)
+prefix, since that allows every Python command. If a persisted rule is used at
+all, it names the full `python3 <plugin-root>/scripts/dispatch_agent.py start`
+prefix. Turning the sandbox off for the whole session is the user's explicit
+choice, never a default. Codex refuses escalation under some approval policies
+(assumed: `approval_policy = "never"`), and there `start` cannot run.
+<!-- rules:origin-required -->
+- **Collect detached dispatches with `wait`, never with a polling loop.** Fan out
+  with several `start` calls, then issue one `wait` over all job ids (`--any` to
+  react to the first finisher). On exit `75`, issue the same `wait` again. Do not
+  `sleep`, send empty `write_stdin` polls, run `gh ... --watch`, or read specialist
+  transcripts or session logs to check progress: each of those re-sends your
+  whole context and yields no information. Keep each `wait --timeout` below the
+  host's tool-call yield, so the call returns on its own with a status instead of
+  leaving a backgrounded session to poll. On Codex `exec_command`, set
+  `yield_time_ms` to `30000` (the maximum) and use `wait --timeout 25`. What this
+  does not change: `--timeout` on `start` bounds the specialist's wall clock, not
+  its tokens or tool calls, and a long job still costs one `wait` turn per
+  timeout window. (origin: #352 · 2026-10-14)
+<!-- /rules:origin-required -->
+
 **Cost discipline at dispatch time** — model choice and loop bounds are the
 cheapest lever on token budget:
 <!-- rules:origin-required -->

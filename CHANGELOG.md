@@ -8,6 +8,41 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.10.14] - 2026-10-14
+
+### Added
+
+- `dispatch_agent.py start` launches a specialist dispatch as a detached job and
+  prints one JSON line (`job_id`, `pid`, `role`, `harness`, `result_path`).
+  Routing and the #323 read-only guard run before anything is spawned, through
+  the same code path as the synchronous form.
+- `dispatch_agent.py wait <job_id>... [--timeout S] [--any]` blocks silently and
+  prints one compact line per job (`succeeded`, `failed`, `timed_out`, `running`
+  or `lost`). Exit codes: `0` all succeeded, `1` any failure, `2` usage error or
+  unknown job, `75` still running (call `wait` again). Job state and the full
+  result JSON live under `<git-common-dir>/marc/jobs/`, never in a working tree;
+  `wait --store` reads it from elsewhere. Liveness is a file lock the runner
+  holds, so a `wait` inside a sandbox (separate PID namespace) still reports
+  `running`. The runner re-checks the routed command and the #323 guard before
+  exec, runs the harness in its own process group and kills it on exit or
+  termination. An unusable job store (e.g. read-only under a sandbox) is a clean
+  exit `2`. The no-subcommand invocation is unchanged.
+- One shared #323 predicate (`is_forbidden_readonly_route`) backs route
+  resolution, command building and the detached runner. `build_harness_command`
+  now also refuses read-only roles on `copilot`; the synchronous path already
+  re-routed them, so this tightens defense in depth only.
+
+### Changed
+
+- Operator dispatch guidance: on hosts without a native background agent
+  (Codex), `start` each specialist and collect them with one `wait`, re-issued
+  on exit `75`, instead of polling with `sleep`, empty `write_stdin` or
+  transcript reads. On Codex, use `yield_time_ms: 30000` and `wait --timeout 25`,
+  which keeps each call inside the `exec_command` yield cap of codex-cli 0.162.1.
+  Only `start` is escalated out of the Codex sandbox, per call; `wait` runs
+  sandboxed. Specs go in via `--prompt-file` from a scratch dir. `wait` opens
+  the job lock non-blocking and treats a non-regular file as `lost`.
+
 ## [26.10.8] - 2026-10-08
 
 ### Fixed
