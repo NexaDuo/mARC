@@ -8,6 +8,45 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.10.14.1] - 2026-10-14
+
+### Added
+
+- Opt-in Codex read-only reviewers (#351). `sec`, `rev` and `research` may run
+  on `codex` only when `team.toml` `[orchestration.routes]` names `codex` for
+  that role, read from the team.toml discovered in the dispatching checkout.
+  `auto`, the matrix, host detection, native mode, fallbacks and a bare
+  `--harness codex` never opt in, and `bulk-reader` never runs on Codex.
+  Without the opt-in, routing and argv are unchanged.
+- An opted-in reviewer runs `codex exec -C <checkout>` with the
+  `marc_readonly` permissions profile (filesystem read-only, network on, so
+  the reviewer posts its own review marker). Bypass, `--full-auto`,
+  `workspace-write` and `danger-full-access` are never passed. The role's agent
+  definition is carried in the prompt. The effort pin comes from the Codex
+  agent descriptor and is allowlisted.
+- `scripts/probe_codex_readonly.py` checks the profile under `codex sandbox`
+  against an unsandboxed control run, with no model call, in the Codex CI job.
+  Its owner-only `--exec` mode checks that `codex exec` applies the profile
+  with no config, with a user `config.toml` override and with a project
+  `.codex/config.toml` override. It uses a throwaway `CODEX_HOME` and never
+  writes the owner's real one.
+
+### Changed
+
+- The `start` job re-check and synchronous dispatch both re-derive the Codex
+  opt-in from the checkout's team.toml. A `--team-toml` other than the one
+  discovered there cannot opt a read-only role into Codex (exit `2`).
+- Dispatch results and `spec.json` gain the informational fields
+  `codex_readonly_opt_in` and `team_toml`.
+
+### Security
+
+- Secrets stay readable and network is on for a Codex reviewer, the same as a
+  Claude Code reviewer. Dispatch reviews from a checkout whose team.toml you
+  trust. Until #358 lands, do not enable the opt-in on a repo marked trusted in
+  Codex, since a project `.codex/config.toml` there is not yet proven to be
+  overridden.
+
 ## [26.10.14] - 2026-10-14
 
 ### Added
