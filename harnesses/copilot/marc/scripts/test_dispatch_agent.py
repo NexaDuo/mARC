@@ -951,9 +951,16 @@ def test_codex_readonly_opt_in() -> None:
                     check(exc is None and pre.get("exit_code") == 2 and pre.get("command") == []
                           and pre.get("harness") is None,
                           f"--team-toml {label} opt-in refused (dry_run={dry}): {pre.get('exit_code')} {exc!r}")
+                # dispatch() takes no cwd: run it from `where`, so "inside" really
+                # is inside the checkout (REV-9).
                 runner = MagicMock()
-                res_d, _e, exc = _capture_stderr(dispatch, "rev", prompt, "auto", 30.0, False, toml_arg,
-                                                 env_cc, all_which, runner)
+                prev_cwd = os.getcwd()
+                os.chdir(str(where))
+                try:
+                    res_d, _e, exc = _capture_stderr(dispatch, "rev", prompt, "auto", 30.0, False, toml_arg,
+                                                     env_cc, all_which, runner)
+                finally:
+                    os.chdir(prev_cwd)
                 check(res_d is not None and res_d["exit_code"] == 2 and not runner.called,
                       f"sync dispatch refuses a --team-toml {label} opt-in without running anything")
             # The discovered team.toml passed explicitly is the same file: allowed.
@@ -962,6 +969,21 @@ def test_codex_readonly_opt_in() -> None:
                                            env_cc, all_which, Path(d))
             check(exc is None and pre.get("harness") == "codex",
                   f"--team-toml naming the discovered file keeps the opt-in: {pre.get('harness')} {exc!r}")
+            # REV-9 positive: sync dispatch() from a checkout whose own team.toml
+            # opts in runs the fixed Codex reviewer argv.
+            runner = MagicMock(return_value=subprocess.CompletedProcess([], 0, "verdict: PASS\n", ""))
+            prev_cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                res_d, _e, exc = _capture_stderr(dispatch, "rev", prompt, "auto", 30.0, False, None,
+                                                 env_cc, all_which, runner)
+            finally:
+                os.chdir(prev_cwd)
+            ran = runner.call_args[0][0] if runner.called else []
+            check(exc is None and res_d["exit_code"] == 0 and res_d["harness"] == "codex"
+                  and ran[:4] == ["codex", "exec", "-C", str(Path(d).resolve())]
+                  and ran[4:10] == _CODEX_RO_PROFILE,
+                  f"sync dispatch from an opted-in checkout runs codex: {ran[:4]} {exc!r}")
 
     # REV-3: prepare_dispatch discovers team.toml from `cwd`, not the process cwd.
     with tempfile.TemporaryDirectory() as d:

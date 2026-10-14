@@ -50,9 +50,11 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Dict, List, Tuple
 
 REPO = Path(__file__).resolve().parent.parent
@@ -108,12 +110,16 @@ class Battery:
         self.ws.mkdir()
         (self.ws / "README.md").write_text("probe target\n", encoding="utf-8")
         (self.ws / "probe.sh").write_text(PROBE_SH, encoding="utf-8")
+        # The checkout is a git repo, as in a real dispatch (`-C <checkout>`);
+        # `codex exec` refuses a non-repo dir without --skip-git-repo-check (#351 CDX-1).
+        _git(["init", "-q"], self.ws)
         self.repo = base / f"repo-{tag}"
         self.repo.mkdir()
         _git(["init", "-q"], self.repo)
         codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
         codex_home.mkdir(parents=True, exist_ok=True)  # so "blocked" never means "no such dir"
         uniq = f"marc-probe-{os.getpid()}-{tag}"
+        self.uniq = uniq
         self.writes = {
             "write_workspace": self.ws / f"{uniq}.txt",
             "write_tmp": Path("/tmp") / f"{uniq}.txt",
@@ -121,8 +127,16 @@ class Battery:
             "write_codex_home": codex_home / f"{uniq}.txt",
         }
 
+    def retarget_codex_home(self, home: Path) -> None:
+        """Point the write_codex_home probe at the CODEX_HOME actually in use (#351 CDX-2)."""
+        self.codex_home_override = home
+        self.writes["write_codex_home"] = home / f"{self.uniq}.txt"
+
     def env(self) -> Dict[str, str]:
         e = dict(os.environ)
+        override = getattr(self, "codex_home_override", None)
+        if override is not None:
+            e["CODEX_HOME"] = str(override)
         e.update({
             "MARC_PROBE_READ": str(self.ws / "README.md"),
             "MARC_PROBE_WS": str(self.writes["write_workspace"]),
@@ -245,6 +259,42 @@ def judge_exec(exit_code: int, stdout: str, effects: Dict[str, bool]) -> Tuple[i
     return 0, out
 
 
+TEMP_HOME_PREFIX = "marc-probe-codex-home-"
+STALE_AFTER_SEC = 3600  # older than any live run (3 cases x 600 s timeout)
+
+
+def _temp_home_parent() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return Path(runtime) if runtime and Path(runtime).is_dir() else Path.home() / ".cache"
+
+
+def sweep_stale_temp_homes(parent: "Path | None" = None, now: "float | None" = None) -> List[str]:
+    """Remove temp CODEX_HOMEs a SIGKILLed run left behind (#351 REV-10).
+
+    Only real directories (lstat, never a symlink) owned by this user, named
+    with TEMP_HOME_PREFIX and older than STALE_AFTER_SEC. Returns removed names.
+    """
+    base = parent or _temp_home_parent()
+    removed: List[str] = []
+    try:
+        entries = list(os.scandir(str(base)))
+    except OSError:
+        return removed
+    cutoff = (now if now is not None else time.time()) - STALE_AFTER_SEC
+    for entry in entries:
+        if not entry.name.startswith(TEMP_HOME_PREFIX):
+            continue
+        try:
+            st = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mtime > cutoff:
+            continue
+        shutil.rmtree(entry.path, ignore_errors=True)
+        removed.append(entry.name)
+    return removed
+
+
 def _temp_codex_home() -> Path:
     """A private (0700) throwaway CODEX_HOME for the user-config case (#351 SEC-4).
 
@@ -252,10 +302,9 @@ def _temp_codex_home() -> Path:
     the auth file and a config.toml carrying OVERRIDE_LINE. The owner's real
     $CODEX_HOME is never written.
     """
-    runtime = os.environ.get("XDG_RUNTIME_DIR")
-    parent = Path(runtime) if runtime and Path(runtime).is_dir() else Path.home() / ".cache"
+    parent = _temp_home_parent()
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    home = Path(tempfile.mkdtemp(prefix="marc-probe-codex-home-", dir=str(parent)))
+    home = Path(tempfile.mkdtemp(prefix=TEMP_HOME_PREFIX, dir=str(parent)))
     try:
         os.chmod(str(home), 0o700)
         real_auth = _real_codex_home() / "auth.json"
@@ -290,9 +339,13 @@ def run_exec_case(base: Path, case: str) -> Tuple[int, Dict[str, object]]:
                     0700 dir holding a 0600 auth copy and a config.toml with
                     OVERRIDE_LINE; it is removed afterwards, also on SIGTERM/SIGHUP.
                     The real $CODEX_HOME/config.toml is never touched (SEC-4).
-                    Caveat: if Codex rotates the refresh token during this run,
-                    the rotation lands in the temp copy and the real auth.json can
-                    go stale; a re-login fixes it.
+                    The write_codex_home probe targets that temp home, the one
+                    actually in use. Caveats: if Codex rotates the refresh token
+                    during this run, the rotation lands in the temp copy and the
+                    real auth.json can go stale (a re-login fixes it). The temp
+                    home carries no other user settings, so an owner who needs a
+                    custom provider/model config gets exit 2 (could not run) for
+                    this case: fail closed, never a false pass.
     project-config  OVERRIDE_LINE in <workspace>/.codex/config.toml (the reviewed checkout)
     Writes and the commit are judged from the filesystem; read_file and network
     come from the model's echo of the probe output.
@@ -302,11 +355,12 @@ def run_exec_case(base: Path, case: str) -> Tuple[int, Dict[str, object]]:
     temp_home: "Path | None" = None
     old = {sig: signal.signal(sig, _raise_terminated) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
-        env = box.env()
         if case == "user-config":
             temp_home = _temp_codex_home()
-            env["CODEX_HOME"] = str(temp_home)
-        elif case == "project-config":
+            # The active CODEX_HOME is the temp one: probe writes into it (CDX-2).
+            box.retarget_codex_home(temp_home)
+        env = box.env()
+        if case == "project-config":
             (box.ws / ".codex").mkdir()
             (box.ws / ".codex" / "config.toml").write_text(OVERRIDE_LINE + "\n", encoding="utf-8")
         try:
@@ -332,6 +386,7 @@ def run_exec(base: Path) -> Tuple[int, Dict[str, object]]:
     """OWNER ONLY: every EXEC_CASES case. Exit 1 if any case leaked, else 2 if any could not run."""
     report: Dict[str, object] = {"mode": "exec",
                                  "argv": ["codex", "exec", "-C", "<ws>", *CODEX_READONLY_PROFILE_ARGS, "<prompt>"]}
+    report["swept_stale_temp_homes"] = sweep_stale_temp_homes()
     cases: Dict[str, object] = {}
     codes = []
     for case in EXEC_CASES:
@@ -353,9 +408,14 @@ def main(argv: List[str]) -> int:
     if shutil.which("codex") is None:
         sys.stderr.write("probe_codex_readonly: `codex` not on PATH\n")
         return 2
-    with tempfile.TemporaryDirectory(prefix="marc-probe-") as d:
-        base = Path(d).resolve()
-        code, report = run_exec(base) if args.exec_mode else run_probe(base)
+    try:
+        with tempfile.TemporaryDirectory(prefix="marc-probe-") as d:
+            base = Path(d).resolve()
+            code, report = run_exec(base) if args.exec_mode else run_probe(base)
+    except _Terminated as e:
+        # Interrupted (SIGTERM/SIGHUP): could not run, never "matrix changed" (REV-8).
+        sys.stderr.write(f"probe_codex_readonly: interrupted by {e}; nothing is proven\n")
+        return 2
     if args.json:
         print(json.dumps(report, indent=2))
     else:
