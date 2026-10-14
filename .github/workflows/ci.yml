@@ -1097,7 +1097,7 @@ jobs:
           agy plugin install harnesses/antigravity/marc
 
           echo "Asserting plugin registration..."
-          agy plugin list | jq -e '.imports[] | select(.name=="marc")' > /dev/null
+          agy plugin list --json | jq -e '(.imports? // .)[] | select(.name=="marc")' > /dev/null
 
           echo "Asserting all seven components are registered..."
           CONFIG_DIR="$HOME/.gemini/config/plugins/marc"
