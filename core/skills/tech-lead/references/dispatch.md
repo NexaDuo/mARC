@@ -62,16 +62,19 @@ git common dir (`<git-common-dir>/marc/jobs/`), so it is shared by all worktrees
 and never dirties `git status`; from outside the clone, pass `wait --store <dir>`
 (the directory two levels above `result_path`).
 
-**Sandboxed hosts (Codex):** run `start` and `wait` outside the sandbox, as the
-synchronous form already needs (it launches another agent CLI that writes outside
-the workspace). Under Codex's `workspace-write` sandbox the git dir is read-only,
-so a sandboxed `start` exits `2` with "Read-only file system", and a runner spawned
-inside the sandbox dies when the sandbox exits. Request escalation for these
-calls (`exec_command` with `sandbox_permissions: "require_escalated"` and a
-justification), or run the operator session with full access. Codex refuses
-escalation under `approval_policy = "never"`, so that combination cannot dispatch
-at all. A sandboxed `wait` itself is safe: liveness is a file lock, not a pid
-lookup, so it still reports `running` correctly.
+**Sandboxed hosts (Codex):** escalate only the `start` call (and the synchronous
+form, which also launches another agent CLI), one call at a time: `exec_command`
+with `sandbox_permissions: "require_escalated"` and a justification. Under Codex's
+`workspace-write` sandbox the git dir is read-only, so a sandboxed `start` exits
+`2` with "Read-only file system", and a runner spawned inside the sandbox dies
+when the sandbox exits. Run `wait` sandboxed, without escalation: liveness is a
+file lock, not a pid lookup, so it reports `running` correctly from inside the
+sandbox. Never persist an approval for a bare `python3` (or `python3 <anything>`)
+prefix, since that allows every Python command. If a persisted rule is used at
+all, it names the full `python3 <plugin-root>/scripts/dispatch_agent.py start`
+prefix. Turning the sandbox off for the whole session is the user's explicit
+choice, never a default. Codex refuses escalation under some approval policies
+(assumed: `approval_policy = "never"`), and there `start` cannot run.
 <!-- rules:origin-required -->
 - **Collect detached dispatches with `wait`, never with a polling loop.** Fan out
   with several `start` calls, then issue one `wait` over all job ids (`--any` to

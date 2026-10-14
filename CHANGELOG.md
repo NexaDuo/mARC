@@ -35,8 +35,9 @@ date whose `YY.M.D` is already taken.
   on exit `75`, instead of polling with `sleep`, empty `write_stdin` or
   transcript reads. On Codex, use `yield_time_ms: 30000` and `wait --timeout 25`,
   which keeps each call inside the `exec_command` yield cap of codex-cli 0.162.1.
-  `start` and `wait` run outside the Codex sandbox (escalated), and specs go in
-  via `--prompt-file` from a scratch dir.
+  Only `start` is escalated out of the Codex sandbox, per call; `wait` runs
+  sandboxed. Specs go in via `--prompt-file` from a scratch dir. `wait` opens
+  the job lock non-blocking and treats a non-regular file as `lost`.
 
 ## [26.10.8] - 2026-10-08
 

@@ -1062,6 +1062,37 @@ def _start_wait_cases(tmp_p: Path, started_pids: List[int], harness_pids: List[i
         check(r.returncode == 2 and "Traceback" not in r.stderr and "[mARC dispatch] Error" in r.stderr,
               f"unwritable job store exits 2 with a one-line error (got {r.returncode}, {r.stderr!r})")
 
+    # SEC-7: a FIFO planted at `lock` cannot hang wait; it reads as lost.
+    fifo_id = "20000101-000000-cccccccc"
+    (jobs / fifo_id).mkdir()
+    os.mkfifo(str(jobs / fifo_id / "lock"))
+    t0 = _time.monotonic()
+    try:
+        r = _cli(["wait", fifo_id, "--timeout", "2"], repo, env, timeout=20)
+        out = _lines(r.stdout)
+        check(r.returncode == 1 and out and out[0]["status"] == "lost" and _time.monotonic() - t0 < 15,
+              f"FIFO at lock reads lost within --timeout (got {r.returncode}, {r.stdout!r})")
+    except subprocess.TimeoutExpired:
+        check(False, "wait hung on a FIFO at lock")
+
+    # A start that fails after publishing the job leaves nothing behind.
+    import dispatch_agent as _da
+    saved_exe, saved_path = sys.executable, os.environ.get("PATH", "")
+    before = sorted(p.name for p in jobs.iterdir())
+    raised = None
+    try:
+        os.environ["PATH"] = str(bin_dir)
+        _da.sys.executable = str(tmp_p / "no-such-python")  # Popen of the runner fails
+        try:
+            _da.start_job("dev", "x", "claude-code", cwd=repo)
+        except _da.JobStoreError as e:
+            raised = e
+    finally:
+        _da.sys.executable = saved_exe
+        os.environ["PATH"] = saved_path
+    check(raised is not None and sorted(p.name for p in jobs.iterdir()) == before,
+          f"failed spawn raises JobStoreError and removes the published job (got {raised!r})")
+
     # Backward-compatible no-subcommand invocation still runs synchronously.
     r = _cli(["--role", "dev", "--harness", "claude-code", "--prompt", "exit=0", "--json"], repo, env)
     check(r.returncode == 0 and json.loads(r.stdout).get("success") is True,

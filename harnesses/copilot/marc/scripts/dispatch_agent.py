@@ -57,6 +57,7 @@ from pathlib import Path
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -820,12 +821,20 @@ def _read_json(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def _lock_state(job_dir: Path) -> str:
-    """'held' while the runner lives, 'free' once it is gone, 'missing' if never created."""
+    """'held' while the runner lives, 'free' once it is gone, 'missing' if never created,
+    'invalid' if `lock` is not a regular file (e.g. a FIFO or symlink in a foreign store).
+
+    Opened non-blocking so a FIFO planted at `lock` cannot hang `wait` (#352 SEC-7).
+    """
     try:
-        fd = os.open(str(job_dir / LOCK_NAME), os.O_RDONLY | _O_NOFOLLOW)
+        fd = os.open(str(job_dir / LOCK_NAME), os.O_RDONLY | os.O_NONBLOCK | _O_NOFOLLOW)
     except FileNotFoundError:
         return "missing"
+    except OSError:
+        return "invalid"
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return "invalid"
         try:
             fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except (BlockingIOError, PermissionError):
@@ -917,6 +926,10 @@ def start_job(
         except OSError:
             pass  # informational only; liveness comes from the lock
     except OSError as e:
+        # Nothing was spawned: remove the half-built (or already published)
+        # job so it never lingers as `lost` (#352 review).
+        for leftover in (root / f".tmp-{job_id}", job_dir):
+            shutil.rmtree(str(leftover), ignore_errors=True)
         raise JobStoreError(f"cannot create job under {root}: {e.strerror or e}") from e
     finally:
         if lock_fd >= 0:
