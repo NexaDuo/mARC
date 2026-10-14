@@ -19,14 +19,17 @@ Detached jobs (#352): start a dispatch without blocking, then wait with one call
         [--harness ...] [--timeout ...] [--team-toml ...]
       -> prints one JSON line: job_id, pid, role, harness, result_path. Routing and the
          #323 read-only guard run before anything is spawned (refusal exits 2, no job).
-    python3 dispatch_agent.py wait <job_id>... [--timeout S] [--any]
+    python3 dispatch_agent.py wait <job_id>... [--timeout S] [--any] [--store DIR]
       -> silent while blocking; then one JSON line per job: job_id, status
          (succeeded|failed|timed_out|running|lost), exit_code, duration_sec, result_path.
-         Exit 0 all succeeded; 1 any failed/timed_out/lost; 2 usage error or unknown
-         job id; 75 timeout reached with job(s) still running (call wait again).
+         Exit 0 all succeeded; 1 any failed/timed_out/lost (others may still be
+         running); 2 usage error, unknown job id or unusable job store; 75 timeout
+         reached with job(s) still running (call wait again).
     The full dispatch() result JSON is written atomically to result_path, under
     $(git rev-parse --git-common-dir)/marc/jobs/<job_id>/ (outside every working tree),
     or ${XDG_STATE_HOME:-~/.local/state}/marc/jobs/ outside a git repository.
+    Liveness is an flock the runner holds for its lifetime, not a pid lookup, so a
+    `wait` in another PID namespace (e.g. a sandbox) still sees a live job as running.
 
 Routing resolution:
     - Priority 1: Explicit --harness argument (if not 'auto').
@@ -47,15 +50,22 @@ Routing resolution:
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+try:
+    import fcntl
+except ImportError:  # non-POSIX: start/wait report a clean error
+    fcntl = None  # type: ignore[assignment]
 
 ROLE_TO_AGENT: Dict[str, str] = {
     "dev": "engineer",
@@ -650,7 +660,6 @@ def prepare_dispatch(
             "success": True,
             "duration_sec": 0.0,
         })
-        return result
     return result
 
 
@@ -720,6 +729,15 @@ def execute_prepared(
 # Job state lives under `$(git rev-parse --git-common-dir)/marc/jobs/<job_id>/`
 # (shared by every worktree of the clone, never in a working tree), or under
 # `${XDG_STATE_HOME:-~/.local/state}/marc/jobs/` outside a git repository.
+# `wait --store <dir>` overrides the lookup for callers outside the clone.
+#
+# Liveness is a lock, not a pid: the runner holds an exclusive flock on
+# `<job_dir>/lock` for its whole lifetime. `start` takes that lock before the
+# job dir becomes visible and hands the open descriptor to the runner, so a
+# live job is never seen unlocked. `wait` probes with LOCK_SH|LOCK_NB, which
+# works across PID namespaces (a sandboxed `wait` cannot see the runner's pid)
+# and on a read-only mount. Held -> running; free with a result -> finished;
+# free without a result -> lost.
 # ---------------------------------------------------------------------------
 
 # wait exit codes. 75 is EX_TEMPFAIL from sysexits.h: "try again later".
@@ -728,9 +746,23 @@ EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_STILL_RUNNING = 75
 
-JOB_STATUSES = ("succeeded", "failed", "timed_out", "running", "lost")
 _JOB_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
 DEFAULT_WAIT_TIMEOUT = 25.0
+LOCK_NAME = "lock"
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+class JobStoreError(RuntimeError):
+    """The job store cannot be created, read or used on this platform (#352)."""
+
+
+class _RunnerTerminated(Exception):
+    """The runner received a termination signal while the harness was running."""
+
+
+def _require_flock() -> None:
+    if fcntl is None:
+        raise JobStoreError("start/wait need POSIX flock, which this platform does not provide")
 
 
 def jobs_root(cwd: Optional[Path] = None) -> Path:
@@ -749,7 +781,7 @@ def jobs_root(cwd: Optional[Path] = None) -> Path:
     except (OSError, subprocess.SubprocessError):
         pass
     state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(state) / "marc" / "jobs"
+    return Path(state).resolve() / "marc" / "jobs"
 
 
 def _valid_job_id(job_id: str) -> bool:
@@ -761,9 +793,9 @@ def _new_job_id() -> str:
 
 
 def _write_json_atomic(path: Path, data: Dict[str, Any]) -> None:
-    """Write JSON via temp file + fsync + rename, so readers never see a partial file."""
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    """Write JSON via a fresh temp file + fsync + rename; readers never see a partial file."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -787,33 +819,21 @@ def _read_json(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _pid_alive(pid: Any, job_id: str) -> bool:
-    """True if the runner process still exists (zombies count as dead).
-
-    On Linux, also require the job id on the process command line, so a
-    recycled pid is not mistaken for the runner.
-    """
-    if not isinstance(pid, int) or pid <= 0:
-        return False
+def _lock_state(job_dir: Path) -> str:
+    """'held' while the runner lives, 'free' once it is gone, 'missing' if never created."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    except OSError:
-        return False
-    proc_dir = Path("/proc") / str(pid)
-    if proc_dir.is_dir():
+        fd = os.open(str(job_dir / LOCK_NAME), os.O_RDONLY | _O_NOFOLLOW)
+    except FileNotFoundError:
+        return "missing"
+    try:
         try:
-            stat = (proc_dir / "stat").read_text(encoding="utf-8", errors="replace")
-            if stat.rsplit(")", 1)[-1].split()[0] in ("Z", "X"):
-                return False
-            cmdline = (proc_dir / "cmdline").read_bytes().decode("utf-8", errors="replace")
-            return job_id in cmdline
-        except (OSError, IndexError):
-            return False
-    return True
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except (BlockingIOError, PermissionError):
+            return "held"
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return "free"
+    finally:
+        os.close(fd)
 
 
 def _status_of_result(result: Dict[str, Any]) -> str:
@@ -832,7 +852,12 @@ def start_job(
     team_toml: Optional[str] = None,
     cwd: Optional[Path] = None,
 ) -> Tuple[int, Dict[str, Any]]:
-    """Resolve the route and launch a detached runner. Returns (exit_code, summary)."""
+    """Resolve the route and launch a detached runner. Returns (exit_code, summary).
+
+    Raises JobStoreError when the job store cannot be created (e.g. a read-only
+    git dir inside a sandbox).
+    """
+    _require_flock()
     prepared = prepare_dispatch(role=role, prompt=prompt, harness=harness, team_toml=team_toml)
     if "exit_code" in prepared:
         # Fail closed (#323) or unknown role: no job is created, nothing runs.
@@ -842,27 +867,61 @@ def start_job(
     root = jobs_root(workdir)
     job_id = _new_job_id()
     job_dir = root / job_id
-    job_dir.mkdir(parents=True, mode=0o700)
     result_path = job_dir / "result.json"
-    _write_json_atomic(job_dir / "spec.json", {
-        "job_id": job_id,
-        "timeout": timeout,
-        "cwd": str(workdir),
-        "prepared": prepared,
-    })
-    log = open(job_dir / "runner.log", "ab")
+    lock_fd = -1
     try:
-        proc = subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "_run", str(job_dir)],
-            cwd=str(workdir),
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-            close_fds=True,
-            start_new_session=True,
-        )
+        root.parent.parent.mkdir(parents=True, exist_ok=True)
+        for d in (root.parent, root):
+            d.mkdir(mode=0o700, exist_ok=True)
+        # Build the job in a staging dir (invisible to wait), lock it, then
+        # publish it with one rename: wait never sees a half-created job.
+        staging = root / f".tmp-{job_id}"
+        staging.mkdir(mode=0o700)
+        lock_fd = os.open(str(staging / LOCK_NAME), os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        started_at = time.time()
+        _write_json_atomic(staging / "spec.json", {
+            "job_id": job_id,
+            "timeout": timeout,
+            "cwd": str(workdir),
+            "prompt": prompt,
+            "prepared": prepared,
+        })
+        meta = {
+            "job_id": job_id,
+            "pid": None,
+            "role": prepared["role"],
+            "harness": prepared["harness"],
+            "result_path": str(result_path),
+            "started_at": started_at,
+            "timeout": timeout,
+        }
+        _write_json_atomic(staging / "job.json", meta)
+        os.rename(str(staging), str(job_dir))
+        log_fd = os.open(str(job_dir / "runner.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND | _O_NOFOLLOW, 0o600)
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "_run", str(job_dir), "--lock-fd", str(lock_fd)],
+                cwd=str(workdir),
+                stdin=subprocess.DEVNULL,
+                stdout=log_fd,
+                stderr=log_fd,
+                pass_fds=(lock_fd,),
+                start_new_session=True,
+            )
+        finally:
+            os.close(log_fd)
+        meta["pid"] = proc.pid
+        try:
+            _write_json_atomic(job_dir / "job.json", meta)
+        except OSError:
+            pass  # informational only; liveness comes from the lock
+    except OSError as e:
+        raise JobStoreError(f"cannot create job under {root}: {e.strerror or e}") from e
     finally:
-        log.close()
+        if lock_fd >= 0:
+            # The runner now holds the lock through its inherited descriptor.
+            os.close(lock_fd)
     summary = {
         "job_id": job_id,
         "pid": proc.pid,
@@ -870,28 +929,130 @@ def start_job(
         "harness": prepared["harness"],
         "result_path": str(result_path),
     }
-    _write_json_atomic(job_dir / "job.json", dict(summary, started_at=time.time(), timeout=timeout))
     return EXIT_OK, summary
 
 
-def run_job(job_dir: Path) -> int:
-    """Detached runner body: execute the prepared command, write result.json atomically."""
-    spec = _read_json(job_dir / "spec.json") or {}
-    result_path = job_dir / "result.json"
-    prepared = spec.get("prepared")
+# Process group of the running harness, killed on runner exit/termination (#352).
+_HARNESS_PGID: Optional[int] = None
+_PRCTL: Any = None
+
+
+def _kill_harness_group(sig: int = signal.SIGTERM) -> None:
+    pgid = _HARNESS_PGID
+    if pgid:
+        try:
+            os.killpg(pgid, sig)
+        except OSError:
+            pass
+
+
+def _set_pdeathsig() -> None:
+    """In the harness child (Linux): get SIGTERM if the runner dies, even by SIGKILL."""
+    if _PRCTL is not None:
+        try:
+            _PRCTL(1, int(signal.SIGTERM))  # PR_SET_PDEATHSIG
+        except Exception:
+            pass
+
+
+def _run_in_own_group(cmd: List[str], capture_output: bool = True, text: bool = True,
+                      timeout: Optional[float] = None) -> "subprocess.CompletedProcess[str]":
+    """subprocess.run()-compatible runner that puts the harness in its own process group."""
+    global _HARNESS_PGID
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True,
+        preexec_fn=_set_pdeathsig if _PRCTL is not None else None,
+    )
+    _HARNESS_PGID = proc.pid
     try:
-        if not isinstance(prepared, dict) or not prepared.get("command"):
-            raise RuntimeError("job spec missing or unreadable")
-        if prepared["command"][0] not in HARNESS_BINARIES.values():
-            # Only ever run a harness CLI that prepare_dispatch() could have built.
-            raise RuntimeError(f"job spec command {prepared['command'][0]!r} is not a harness CLI")
-        result = execute_prepared(prepared, timeout=float(spec.get("timeout", 300.0)))
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_harness_group(signal.SIGKILL)
+            out, err = proc.communicate()
+            raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+        except BaseException:
+            _kill_harness_group(signal.SIGKILL)
+            proc.wait()
+            raise
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    finally:
+        # Leftover background processes of the harness go with it.
+        _kill_harness_group(signal.SIGTERM)
+        _HARNESS_PGID = None
+
+
+def _on_term_signal(signum: int, _frame: Any) -> None:
+    raise _RunnerTerminated(f"runner terminated by signal {signum}")
+
+
+def _validate_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Re-check a job spec before exec (#352 SEC-1): the routed command, #323 guard included."""
+    prepared = spec.get("prepared")
+    prompt = spec.get("prompt")
+    if not isinstance(prepared, dict) or not isinstance(prompt, str):
+        raise RuntimeError("job spec missing or unreadable")
+    role = normalize_role(str(prepared.get("role", "")))
+    harness = prepared.get("harness")
+    canonical = CANONICAL_ROLES[role]
+    if canonical in READ_ONLY_ROLES and (
+            harness in NON_ENFORCING_HARNESSES
+            or (canonical == "bulk-reader" and harness != READ_ONLY_PREFERRED_HARNESS)):
+        raise ReadOnlyRoutingError(
+            f"job spec routes read-only role '{role}' to '{harness}'; refusing (issue #323)")
+    expected = build_harness_command(str(harness), role, prompt)
+    if prepared.get("command") != expected:
+        raise RuntimeError("job spec command does not match the routed harness command")
+    return prepared
+
+
+def run_job(job_dir_arg: str, lock_fd: Optional[int] = None) -> int:
+    """Detached runner body: validate, execute, write result.json atomically, then release the lock."""
+    global _PRCTL
+    try:
+        _require_flock()
+        job_dir = Path(job_dir_arg).resolve()
+        root = jobs_root()
+        if job_dir.parent != root or not _valid_job_id(job_dir.name):
+            raise JobStoreError(f"job dir {job_dir_arg!r} is not inside the job store {root}")
+        if lock_fd is None:
+            lock_fd = os.open(str(job_dir / LOCK_NAME), os.O_RDWR | _O_NOFOLLOW)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise JobStoreError(f"job {job_dir.name} already has a live runner")
+        if (job_dir / "result.json").exists():
+            raise JobStoreError(f"job {job_dir.name} already finished")
+    except (OSError, JobStoreError) as e:
+        sys.stderr.write(f"[mARC dispatch] Error: {e}\n")
+        return EXIT_USAGE
+    # lock_fd stays open (and locked) until this process exits.
+
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+            _PRCTL = ctypes.CDLL(None, use_errno=True).prctl
+        except Exception:
+            _PRCTL = None
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, _on_term_signal)
+    atexit.register(_kill_harness_group)
+
+    spec = _read_json(job_dir / "spec.json") or {}
+    prepared: Any = spec.get("prepared")
+    try:
+        prepared = _validate_spec(spec)
+        result = execute_prepared(prepared, timeout=float(spec.get("timeout", 300.0)),
+                                  runner_fn=_run_in_own_group)
     except Exception as e:  # never leave a job without a result
-        result = dict(prepared or {}, exit_code=1, stdout="", stderr=str(e),
+        base = prepared if isinstance(prepared, dict) else {}
+        result = dict(base, exit_code=2 if isinstance(e, ReadOnlyRoutingError) else 1,
+                      stdout="", stderr=f"[mARC dispatch] Error: {e}",
                       success=False, error=str(e), duration_sec=0.0)
     result["job_id"] = spec.get("job_id", job_dir.name)
     result["status"] = _status_of_result(result)
-    _write_json_atomic(result_path, result)
+    _write_json_atomic(job_dir / "result.json", result)
     return EXIT_OK
 
 
@@ -901,13 +1062,14 @@ def job_summary(job_id: str, root: Path) -> Dict[str, Any]:
     result_path = job_dir / "result.json"
     result = _read_json(result_path)
     if result is None:
-        meta = _read_json(job_dir / "job.json") or {}
-        if _pid_alive(meta.get("pid"), job_id):
+        if _lock_state(job_dir) == "held":
+            meta = _read_json(job_dir / "job.json") or {}
             started = meta.get("started_at")
             elapsed = round(time.time() - started, 3) if isinstance(started, (int, float)) else None
             return {"job_id": job_id, "status": "running", "exit_code": None,
                     "duration_sec": elapsed, "result_path": str(result_path)}
-        # The runner may have written its result between the two checks.
+        # The runner writes its result before releasing the lock; re-read
+        # in case it finished between the two checks.
         result = _read_json(result_path)
         if result is None:
             return {"job_id": job_id, "status": "lost", "exit_code": None,
@@ -931,8 +1093,10 @@ def wait_jobs(
 
     Exit code: 0 all waited jobs succeeded (with --any: at least one finished,
     and every finished one succeeded); 1 any finished job failed, timed out or
-    was lost; 75 timeout reached with job(s) still running and none failed.
+    was lost (other jobs may still be running: check the status lines); 75
+    timeout reached with job(s) still running and none failed.
     """
+    _require_flock()
     root = root or jobs_root()
     deadline = time.monotonic() + max(0.0, timeout)
     interval = 0.1
@@ -963,7 +1127,7 @@ def _main_start(argv: List[str]) -> int:
     parser.add_argument("--role", required=True)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--prompt")
-    group.add_argument("--prompt-file")
+    group.add_argument("--prompt-file", help="Read the prompt from a file (keeps it out of the process list)")
     parser.add_argument("--harness", default="auto",
                         choices=["auto", "native", "claude-code", "antigravity", "copilot", "codex"])
     parser.add_argument("--timeout", type=float, default=300.0,
@@ -978,7 +1142,11 @@ def _main_start(argv: List[str]) -> int:
             return EXIT_USAGE
     else:
         prompt = args.prompt
-    code, summary = start_job(args.role, prompt, args.harness, args.timeout, args.team_toml)
+    try:
+        code, summary = start_job(args.role, prompt, args.harness, args.timeout, args.team_toml)
+    except JobStoreError as e:
+        sys.stderr.write(f"[mARC dispatch] Error: {e}\n")
+        return EXIT_USAGE
     if code == EXIT_OK:
         print(_compact(summary))
     return code
@@ -994,13 +1162,21 @@ def _main_wait(argv: List[str]) -> int:
     parser.add_argument("--timeout", type=float, default=DEFAULT_WAIT_TIMEOUT,
                         help=f"Seconds to block before returning 75. Default: {DEFAULT_WAIT_TIMEOUT:g}")
     parser.add_argument("--any", action="store_true", help="Return as soon as one job finishes")
+    parser.add_argument("--store", default=None,
+                        help="Job store dir (the parent of the job dir in start's result_path). "
+                             "Default: <git-common-dir>/marc/jobs of the current directory")
     args = parser.parse_args(argv)
-    root = jobs_root()
-    for j in args.job_ids:
-        if not _valid_job_id(j) or not (root / j).is_dir():
-            sys.stderr.write(f"[mARC dispatch] Error: unknown job id {j!r} under {root}\n")
-            return EXIT_USAGE
-    code, summaries = wait_jobs(args.job_ids, args.timeout, args.any, root)
+    try:
+        _require_flock()
+        root = Path(args.store).expanduser().resolve() if args.store else jobs_root()
+        for j in args.job_ids:
+            if not _valid_job_id(j) or not (root / j).is_dir():
+                sys.stderr.write(f"[mARC dispatch] Error: unknown job id {j!r} under {root}\n")
+                return EXIT_USAGE
+        code, summaries = wait_jobs(args.job_ids, args.timeout, args.any, root)
+    except (OSError, JobStoreError) as e:
+        sys.stderr.write(f"[mARC dispatch] Error: cannot read job store: {e}\n")
+        return EXIT_USAGE
     for s in summaries:
         print(_compact(s))
     return code
@@ -1057,8 +1233,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _main_start(argv[1:])
     if argv and argv[0] == "wait":
         return _main_wait(argv[1:])
-    if argv and argv[0] == "_run" and len(argv) == 2:
-        return run_job(Path(argv[1]))
+    if argv and argv[0] == "_run":
+        if len(argv) == 2:
+            return run_job(argv[1])
+        if len(argv) == 4 and argv[2] == "--lock-fd" and argv[3].isdigit():
+            return run_job(argv[1], int(argv[3]))
+        sys.stderr.write("[mARC dispatch] Error: usage: _run <job_dir> [--lock-fd N]\n")
+        return EXIT_USAGE
     args = parse_args(argv)
 
     result = dispatch(

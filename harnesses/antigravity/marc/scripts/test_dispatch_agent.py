@@ -794,10 +794,14 @@ SCRIPT = os.path.join(HERE, "dispatch_agent.py")
 
 # A real, short-lived stub harness CLI (#352): the detached runner execs it, so
 # detachment is exercised for real. Behavior comes from the prompt (last argv):
-# "sleep=<s> exit=<n>".
+# "sleep=<s> exit=<n> pidfile=<path> marker=<path>".
 _STUB_HARNESS = """\
-import sys, time
+import os, sys, time
 opts = dict(t.split("=", 1) for t in sys.argv[-1].split() if "=" in t)
+for key in ("pidfile", "marker"):
+    if key in opts:
+        with open(opts[key], "w") as f:
+            f.write(str(os.getpid()))
 time.sleep(float(opts.get("sleep", "0")))
 print("stub-report: done")
 sys.exit(int(opts.get("exit", "0")))
@@ -823,7 +827,7 @@ def _job_env(bin_dir: Path) -> Dict[str, str]:
     return env
 
 
-def _cli(args: List[str], cwd: Path, env: Dict[str, str], timeout: float = 60) -> "subprocess.CompletedProcess[str]":
+def _cli(args: List[str], cwd: Path, env: Dict[str, str], timeout: float = 90) -> "subprocess.CompletedProcess[str]":
     return subprocess.run([sys.executable, SCRIPT] + args, cwd=str(cwd), env=env,
                           capture_output=True, text=True, timeout=timeout)
 
@@ -840,118 +844,233 @@ def _kill_group(pid: int) -> None:
         pass
 
 
+def _pid_gone(pid: int, within: float) -> bool:
+    import time as _time
+    deadline = _time.monotonic() + within
+    while _time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return True
+        stat = Path(f"/proc/{pid}/stat")
+        try:
+            if stat.read_text().rsplit(")", 1)[-1].split()[0] == "Z":
+                return True
+        except (OSError, IndexError):
+            pass
+        _time.sleep(0.1)
+    return False
+
+
 def test_start_wait_jobs() -> None:
     """start/wait detached jobs with a real stub subprocess (#352)."""
+    import signal
     import time as _time
+    started_pids: List[int] = []
+    harness_pids: List[int] = []
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_p = Path(tmp)
-        repo = tmp_p / "repo"
-        repo.mkdir()
-        bin_dir = tmp_p / "bin"
-        _make_stub_bin(bin_dir, ["claude"])
-        env = _job_env(bin_dir)
-        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
-        common = Path(subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-common-dir"],
-                                     capture_output=True, text=True, env=env).stdout.strip())
-        jobs = (repo / common if not common.is_absolute() else common).resolve() / "marc" / "jobs"
+        try:
+            _start_wait_cases(Path(tmp), started_pids, harness_pids, signal, _time)
+        finally:
+            # Always reap detached runners and stub harnesses, even when a check failed (REV-11).
+            for pid in started_pids + harness_pids:
+                _kill_group(pid)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
 
-        # start returns before the child finishes, with a compact JSON line.
-        t0 = _time.monotonic()
-        r = _cli(["start", "--role", "dev", "--harness", "claude-code", "--prompt", "sleep=2 exit=0"], repo, env)
-        elapsed = _time.monotonic() - t0
-        check(r.returncode == 0, f"start exits 0 (got {r.returncode}, stderr={r.stderr!r})")
-        started = _lines(r.stdout)
-        check(len(started) == 1 and set(started[0]) == {"job_id", "pid", "role", "harness", "result_path"},
-              f"start prints one compact JSON line with the 5 fields (got {r.stdout!r})")
-        job = started[0]
-        check(elapsed < 1.5, f"start returns quickly, without running the harness in-process ({elapsed:.2f}s)")
-        check(not Path(job["result_path"]).exists(), "no result file yet right after start (child still running)")
-        check(Path(job["result_path"]).parent.parent == jobs,
-              "job state lives under $(git rev-parse --git-common-dir)/marc/jobs")
 
-        # wait --timeout returns the still-running code with status running.
-        r = _cli(["wait", job["job_id"], "--timeout", "0.3"], repo, env)
+def _start_wait_cases(tmp_p: Path, started_pids: List[int], harness_pids: List[int],
+                      signal: Any, _time: Any) -> None:
+    repo = tmp_p / "repo"
+    repo.mkdir()
+    bin_dir = tmp_p / "bin"
+    _make_stub_bin(bin_dir, ["claude", "copilot"])
+    env = _job_env(bin_dir)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    common = Path(subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-common-dir"],
+                                 capture_output=True, text=True, env=env).stdout.strip())
+    jobs = (repo / common if not common.is_absolute() else common).resolve() / "marc" / "jobs"
+
+    def start(prompt: str, *extra: str, role: str = "dev") -> Dict[str, Any]:
+        r = _cli(["start", "--role", role, "--harness", "claude-code", *extra, "--prompt", prompt], repo, env)
         out = _lines(r.stdout)
-        check(r.returncode == 75 and out and out[0]["status"] == "running",
-              f"wait --timeout on a live job exits 75 with status running (got {r.returncode}, {r.stdout!r})")
+        if out and "pid" in out[0]:
+            started_pids.append(out[0]["pid"])
+        check(r.returncode == 0 and len(out) == 1, f"start {prompt!r} exits 0 (got {r.returncode}, {r.stderr!r})")
+        return out[0] if out else {"job_id": "missing", "pid": 0, "result_path": "/nonexistent"}
 
-        # wait blocks until done and returns 0; output is compact.
-        r = _cli(["wait", job["job_id"], "--timeout", "30"], repo, env)
-        out = _lines(r.stdout)
-        check(r.returncode == 0 and out and out[0]["status"] == "succeeded" and out[0]["exit_code"] == 0,
-              f"wait blocks until the job succeeds and exits 0 (got {r.returncode}, {r.stdout!r})")
-        check(out and set(out[0]) == {"job_id", "status", "exit_code", "duration_sec", "result_path"},
-              "wait summary carries only the compact fields")
-        check("command" not in r.stdout and "stub-report" not in r.stdout,
-              "wait never prints command/command_str or full stdout")
-        full = json.loads(Path(job["result_path"]).read_text(encoding="utf-8"))
-        check(full.get("success") is True and "stub-report: done" in full.get("stdout", "")
-              and full.get("command", [None])[0] == "claude",
-              "result file holds the full dispatch() result dict")
-        check(not any(p.name.endswith(".tmp") for p in Path(job["result_path"]).parent.iterdir()),
-              "atomic write leaves no temp file behind")
+    # start returns before the child finishes, with a compact JSON line.
+    t0 = _time.monotonic()
+    job = start("sleep=8 exit=0")
+    elapsed = _time.monotonic() - t0
+    check(set(job) == {"job_id", "pid", "role", "harness", "result_path"},
+          f"start prints one compact JSON line with the 5 fields (got {job!r})")
+    check(elapsed < 6, f"start returns well before the 8s child finishes ({elapsed:.2f}s)")
+    check(not Path(job["result_path"]).exists(), "no result file yet right after start (child still running)")
+    check(Path(job["result_path"]).parent.parent == jobs,
+          "job state lives under $(git rev-parse --git-common-dir)/marc/jobs")
+    check(not any(p.name.startswith(".tmp-") for p in jobs.iterdir()), "no staging dir left after start")
 
-        # A failing child reports failed with its non-zero exit.
-        r = _cli(["start", "--role", "dev", "--harness", "claude-code", "--prompt", "exit=3"], repo, env)
-        fail_job = _lines(r.stdout)[0]
-        r = _cli(["wait", fail_job["job_id"], "--timeout", "30"], repo, env)
-        out = _lines(r.stdout)
-        check(r.returncode == 1 and out and out[0]["status"] == "failed" and out[0]["exit_code"] == 3,
-              f"failing child reports failed with exit 3, wait exits 1 (got {r.returncode}, {r.stdout!r})")
+    # wait --timeout returns the still-running code with status running.
+    r = _cli(["wait", job["job_id"], "--timeout", "0.5"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 75 and out and out[0]["status"] == "running",
+          f"wait --timeout on a live job exits 75 with status running (got {r.returncode}, {r.stdout!r})")
 
-        # Harness timeout reports timed_out.
-        r = _cli(["start", "--role", "dev", "--harness", "claude-code", "--timeout", "0.5",
-                  "--prompt", "sleep=10"], repo, env)
-        to_job = _lines(r.stdout)[0]
-        r = _cli(["wait", to_job["job_id"], "--timeout", "30"], repo, env)
-        out = _lines(r.stdout)
-        check(r.returncode == 1 and out and out[0]["status"] == "timed_out",
-              f"harness timeout reports timed_out (got {r.returncode}, {r.stdout!r})")
+    # Liveness does not depend on pid visibility (REV-1): with the stored pid
+    # replaced by one that does not exist, the held lock still reads running.
+    meta_path = jobs / job["job_id"] / "job.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["pid"] = 2 ** 22 + 4321
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    r = _cli(["wait", job["job_id"], "--timeout", "0.5"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 75 and out and out[0]["status"] == "running",
+          f"held lock reads running even when the pid cannot be looked up (got {r.returncode}, {r.stdout!r})")
 
-        # A killed runner with no result reports lost (not running, no hang).
-        r = _cli(["start", "--role", "dev", "--harness", "claude-code", "--prompt", "sleep=30"], repo, env)
-        lost_job = _lines(r.stdout)[0]
-        _kill_group(lost_job["pid"])
-        t0 = _time.monotonic()
-        r = _cli(["wait", lost_job["job_id"], "--timeout", "10"], repo, env)
-        out = _lines(r.stdout)
-        check(r.returncode == 1 and out and out[0]["status"] == "lost",
-              f"killed job with no result reports lost (got {r.returncode}, {r.stdout!r})")
-        check(_time.monotonic() - t0 < 8, "lost detection does not wait out the timeout")
+    # --store lets a caller outside the clone find the job (REV-10).
+    r = _cli(["wait", job["job_id"], "--timeout", "0.2", "--store", str(jobs)], tmp_p, env)
+    check(r.returncode == 75, f"wait --store works from outside the repo (got {r.returncode}, {r.stderr!r})")
 
-        # --any over two jobs returns when the first finishes.
-        r1 = _cli(["start", "--role", "dev", "--harness", "claude-code", "--prompt", "sleep=0.2"], repo, env)
-        r2 = _cli(["start", "--role", "dev", "--harness", "claude-code", "--prompt", "sleep=30"], repo, env)
-        fast, slow = _lines(r1.stdout)[0], _lines(r2.stdout)[0]
-        r = _cli(["wait", fast["job_id"], slow["job_id"], "--any", "--timeout", "20"], repo, env)
-        out = {s["job_id"]: s for s in _lines(r.stdout)}
-        check(r.returncode == 0 and out.get(fast["job_id"], {}).get("status") == "succeeded"
-              and out.get(slow["job_id"], {}).get("status") == "running",
-              f"--any returns 0 once one job succeeds, the other still running (got {r.returncode}, {r.stdout!r})")
-        _kill_group(slow["pid"])
+    # wait blocks until done and returns 0; output is compact.
+    r = _cli(["wait", job["job_id"], "--timeout", "60"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 0 and out and out[0]["status"] == "succeeded" and out[0]["exit_code"] == 0,
+          f"wait blocks until the job succeeds and exits 0 (got {r.returncode}, {r.stdout!r})")
+    check(bool(out) and set(out[0]) == {"job_id", "status", "exit_code", "duration_sec", "result_path"},
+          "wait summary carries only the compact fields")
+    check("command" not in r.stdout and "stub-report" not in r.stdout,
+          "wait never prints command/command_str or full stdout")
+    full = json.loads(Path(job["result_path"]).read_text(encoding="utf-8"))
+    check(full.get("success") is True and "stub-report: done" in full.get("stdout", "")
+          and full.get("command", [None])[0] == "claude",
+          "result file holds the full dispatch() result dict")
+    check(not any(p.name.endswith(".tmp") for p in Path(job["result_path"]).parent.iterdir()),
+          "atomic write leaves no temp file behind")
 
-        # Unknown / malformed job ids are a usage error.
-        r = _cli(["wait", "../../etc", "--timeout", "0"], repo, env)
-        check(r.returncode == 2, f"wait rejects a malformed job id with exit 2 (got {r.returncode})")
+    # A failing child reports failed with its non-zero exit.
+    fail_job = start("exit=3")
+    r = _cli(["wait", fail_job["job_id"], "--timeout", "60"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 1 and out and out[0]["status"] == "failed" and out[0]["exit_code"] == 3,
+          f"failing child reports failed with exit 3, wait exits 1 (got {r.returncode}, {r.stdout!r})")
 
-        # A read-only role routed to a forbidden harness fails closed at start (#323).
-        ro_bin = tmp_p / "ro-bin"
-        _make_stub_bin(ro_bin, ["codex"])  # no `claude` on PATH
-        before = sorted(p.name for p in jobs.iterdir())
-        r = _cli(["start", "--role", "rev", "--harness", "codex", "--prompt", "x"], repo, _job_env(ro_bin))
-        check(r.returncode == 2 and r.stdout.strip() == "" and "#323" in r.stderr,
-              f"read-only role to codex without claude fails closed at start (got {r.returncode}, {r.stderr!r})")
-        check(sorted(p.name for p in jobs.iterdir()) == before, "a refused start creates no job")
+    # Harness timeout reports timed_out.
+    to_job = start("sleep=20", "--timeout", "0.5")
+    r = _cli(["wait", to_job["job_id"], "--timeout", "60"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 1 and out and out[0]["status"] == "timed_out",
+          f"harness timeout reports timed_out (got {r.returncode}, {r.stdout!r})")
 
-        # Backward-compatible no-subcommand invocation still runs synchronously.
-        r = _cli(["--role", "dev", "--harness", "claude-code", "--prompt", "exit=0", "--json"], repo, env)
-        check(r.returncode == 0 and json.loads(r.stdout).get("success") is True,
-              "no-subcommand invocation behaves as before")
+    # SIGKILL on the runner alone: no result -> lost (no hang), and the harness
+    # child does not outlive it (REV-9, PR_SET_PDEATHSIG on Linux).
+    pidfile = tmp_p / "lost.pid"
+    lost_job = start(f"sleep=60 pidfile={pidfile}")
+    for _ in range(100):
+        if pidfile.exists() and pidfile.read_text():
+            break
+        _time.sleep(0.1)
+    harness_pid = int(pidfile.read_text() or 0) if pidfile.exists() else 0
+    if harness_pid:
+        harness_pids.append(harness_pid)
+    os.kill(lost_job["pid"], signal.SIGKILL)
+    t0 = _time.monotonic()
+    r = _cli(["wait", lost_job["job_id"], "--timeout", "30"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 1 and out and out[0]["status"] == "lost",
+          f"killed runner with no result reports lost (got {r.returncode}, {r.stdout!r})")
+    check(_time.monotonic() - t0 < 20, "lost detection does not wait out the timeout")
+    if sys.platform.startswith("linux"):
+        check(harness_pid > 0 and _pid_gone(harness_pid, 10),
+              "harness child dies with a SIGKILLed runner (PDEATHSIG)")
 
-        status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
-                                capture_output=True, text=True, env=env)
-        check(status.returncode == 0 and status.stdout == "",
-              f"git status stays clean after start/wait (got {status.stdout!r})")
+    # SIGTERM on the runner: harness group killed, result written as failed.
+    pidfile = tmp_p / "term.pid"
+    term_job = start(f"sleep=60 pidfile={pidfile}")
+    for _ in range(100):
+        if pidfile.exists() and pidfile.read_text():
+            break
+        _time.sleep(0.1)
+    harness_pid = int(pidfile.read_text() or 0) if pidfile.exists() else 0
+    if harness_pid:
+        harness_pids.append(harness_pid)
+    os.kill(term_job["pid"], signal.SIGTERM)
+    r = _cli(["wait", term_job["job_id"], "--timeout", "30"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 1 and out and out[0]["status"] == "failed",
+          f"SIGTERMed runner records a failed result (got {r.returncode}, {r.stdout!r})")
+    check(harness_pid > 0 and _pid_gone(harness_pid, 10), "runner kills the harness group on SIGTERM")
+
+    # --any over two jobs returns when the first finishes.
+    fast = start("sleep=0.2")
+    slow = start("sleep=60")
+    r = _cli(["wait", fast["job_id"], slow["job_id"], "--any", "--timeout", "60"], repo, env)
+    out = {s["job_id"]: s for s in _lines(r.stdout)}
+    check(r.returncode == 0 and out.get(fast["job_id"], {}).get("status") == "succeeded"
+          and out.get(slow["job_id"], {}).get("status") == "running",
+          f"--any returns 0 once one job succeeds, the other still running (got {r.returncode}, {r.stdout!r})")
+    _kill_group(slow["pid"])
+
+    # Unknown / malformed job ids are a usage error.
+    r = _cli(["wait", "../../etc", "--timeout", "0"], repo, env)
+    check(r.returncode == 2, f"wait rejects a malformed job id with exit 2 (got {r.returncode})")
+
+    # SEC-1: the runner re-applies the #323 guard and the routed command
+    # before exec, and only accepts job dirs inside the store.
+    marker = tmp_p / "tampered.marker"
+    for name, job_id, prepared in (
+        ("read-only role on copilot", "20000101-000000-aaaaaaaa",
+         {"role": "rev", "harness": "copilot", "command": ["copilot", "--prompt", f"marker={marker}"]}),
+        ("command not the routed one", "20000101-000000-bbbbbbbb",
+         {"role": "dev", "harness": "claude-code", "command": ["claude", "-p", f"marker={marker}"]}),
+    ):
+        jdir = jobs / job_id
+        jdir.mkdir()
+        (jdir / "lock").write_text("")
+        (jdir / "spec.json").write_text(json.dumps({"job_id": job_id, "timeout": 30,
+                                                     "prompt": f"marker={marker}", "prepared": prepared}))
+        r = _cli(["_run", str(jdir)], repo, env)
+        res = json.loads((jdir / "result.json").read_text()) if (jdir / "result.json").exists() else {}
+        check(r.returncode == 0 and res.get("status") == "failed" and not marker.exists(),
+              f"runner refuses a tampered spec ({name}) without executing it (got {res.get('error')!r})")
+    outside = tmp_p / "outside-job"
+    outside.mkdir()
+    r = _cli(["_run", str(outside)], repo, env)
+    check(r.returncode == 2 and "not inside the job store" in r.stderr,
+          f"runner refuses a job dir outside the store (got {r.returncode}, {r.stderr!r})")
+
+    # A read-only role routed to a forbidden harness fails closed at start (#323).
+    ro_bin = tmp_p / "ro-bin"
+    _make_stub_bin(ro_bin, ["codex"])  # no `claude` on PATH
+    before = sorted(p.name for p in jobs.iterdir())
+    r = _cli(["start", "--role", "rev", "--harness", "codex", "--prompt", "x"], repo, _job_env(ro_bin))
+    check(r.returncode == 2 and r.stdout.strip() == "" and "#323" in r.stderr,
+          f"read-only role to codex without claude fails closed at start (got {r.returncode}, {r.stderr!r})")
+    check(sorted(p.name for p in jobs.iterdir()) == before, "a refused start creates no job")
+
+    # An unwritable job store is a clean exit 2, not a traceback (REV-1).
+    if os.geteuid() != 0:
+        jobs.chmod(0o500)
+        try:
+            r = _cli(["start", "--role", "dev", "--harness", "claude-code", "--prompt", "x"], repo, env)
+        finally:
+            jobs.chmod(0o700)
+        check(r.returncode == 2 and "Traceback" not in r.stderr and "[mARC dispatch] Error" in r.stderr,
+              f"unwritable job store exits 2 with a one-line error (got {r.returncode}, {r.stderr!r})")
+
+    # Backward-compatible no-subcommand invocation still runs synchronously.
+    r = _cli(["--role", "dev", "--harness", "claude-code", "--prompt", "exit=0", "--json"], repo, env)
+    check(r.returncode == 0 and json.loads(r.stdout).get("success") is True,
+          "no-subcommand invocation behaves as before")
+
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                            capture_output=True, text=True, env=env)
+    check(status.returncode == 0 and status.stdout == "",
+          f"git status stays clean after start/wait (got {status.stdout!r})")
 
 
 def main() -> int:

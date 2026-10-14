@@ -58,15 +58,35 @@ When the host has no native background agent (Codex today), don't run the
 synchronous form above and then poll it. Start the job, then collect it:
 ```bash
 python3 "${AGY_PLUGIN_ROOT:-.}/scripts/dispatch_agent.py" start \
-  --role dev --prompt-file <spec.md> --timeout 3600   # prints {"job_id":...}
+  --role dev --prompt-file <scratch>/spec.md --timeout 3600   # prints {"job_id":...}
 python3 "${AGY_PLUGIN_ROOT:-.}/scripts/dispatch_agent.py" wait <job_id> --timeout 25
 ```
+Write the spec to a session scratch dir outside the working tree, mode `0600`, and
+pass `--prompt-file`: `--prompt` puts the whole spec in the process list, and a
+spec file inside the tree can be committed by accident.
+
 Exit codes of `wait`: `0` every job succeeded; `1` a job `failed`, `timed_out` or
-was `lost` (its runner died without a result); `2` usage error or unknown job id;
-`75` the wait timed out and the job is still `running`. Read the full result from
-`result_path` only when you need it. Job state lives under the clone's git common
-dir (`<git-common-dir>/marc/jobs/`), so it is shared by all worktrees and never
-dirties `git status`.
+was `lost` (its runner died without a result); `2` usage error, unknown job id or
+an unusable job store; `75` the wait timed out and the job is still `running`.
+Exit `1` is not always terminal for the batch: other ids can still be `running`,
+so check the status lines and keep waiting on those. With `--any`, `wait` exits
+`0` as soon as one job has succeeded, even while others run, and re-issuing the
+same list returns at once; re-`wait` only the ids still `running`. Read the full
+result from `result_path` only when you need it. Job state lives under the clone's
+git common dir (`<git-common-dir>/marc/jobs/`), so it is shared by all worktrees
+and never dirties `git status`; from outside the clone, pass `wait --store <dir>`
+(the directory two levels above `result_path`).
+
+**Sandboxed hosts (Codex):** run `start` and `wait` outside the sandbox, as the
+synchronous form already needs (it launches another agent CLI that writes outside
+the workspace). Under Codex's `workspace-write` sandbox the git dir is read-only,
+so a sandboxed `start` exits `2` with "Read-only file system", and a runner spawned
+inside the sandbox dies when the sandbox exits. Request escalation for these
+calls (`exec_command` with `sandbox_permissions: "require_escalated"` and a
+justification), or run the operator session with full access. Codex refuses
+escalation under `approval_policy = "never"`, so that combination cannot dispatch
+at all. A sandboxed `wait` itself is safe: liveness is a file lock, not a pid
+lookup, so it still reports `running` correctly.
 <!-- rules:origin-required -->
 - **Collect detached dispatches with `wait`, never with a polling loop.** Fan out
   with several `start` calls, then issue one `wait` over all job ids (`--any` to

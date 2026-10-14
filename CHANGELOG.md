@@ -20,8 +20,13 @@ date whose `YY.M.D` is already taken.
   prints one compact line per job (`succeeded`, `failed`, `timed_out`, `running`
   or `lost`). Exit codes: `0` all succeeded, `1` any failure, `2` usage error or
   unknown job, `75` still running (call `wait` again). Job state and the full
-  result JSON live under `<git-common-dir>/marc/jobs/`, never in a working tree.
-  The no-subcommand invocation is unchanged.
+  result JSON live under `<git-common-dir>/marc/jobs/`, never in a working tree;
+  `wait --store` reads it from elsewhere. Liveness is a file lock the runner
+  holds, so a `wait` inside a sandbox (separate PID namespace) still reports
+  `running`. The runner re-checks the routed command and the #323 guard before
+  exec, runs the harness in its own process group and kills it on exit or
+  termination. An unusable job store (e.g. read-only under a sandbox) is a clean
+  exit `2`. The no-subcommand invocation is unchanged.
 
 ### Changed
 
@@ -30,6 +35,8 @@ date whose `YY.M.D` is already taken.
   on exit `75`, instead of polling with `sleep`, empty `write_stdin` or
   transcript reads. On Codex, use `yield_time_ms: 30000` and `wait --timeout 25`,
   which keeps each call inside the `exec_command` yield cap of codex-cli 0.162.1.
+  `start` and `wait` run outside the Codex sandbox (escalated), and specs go in
+  via `--prompt-file` from a scratch dir.
 
 ## [26.10.8] - 2026-10-08
 
