@@ -27,9 +27,10 @@ date whose `YY.M.D` is already taken.
 - `scripts/probe_codex_readonly.py` checks the profile under `codex sandbox`
   against an unsandboxed control run, with no model call, in the Codex CI job.
   Its owner-only `--exec` mode checks that `codex exec` applies the profile
-  with no config, with a user `config.toml` override and with a project
-  `.codex/config.toml` override. It uses a throwaway `CODEX_HOME` and never
-  writes the owner's real one.
+  with no config and with a user `config.toml` override, using a throwaway
+  `CODEX_HOME` and never writing the owner's real one. It also runs a project
+  `.codex/config.toml` case, but that case does not yet prove the override is
+  defeated in a trusted project (#358).
 
 ### Changed
 
