@@ -31,6 +31,11 @@ Detached jobs (#352): start a dispatch without blocking, then wait with one call
     Liveness is an flock the runner holds for its lifetime, not a pid lookup, so a
     `wait` in another PID namespace (e.g. a sandbox) still sees a live job as running.
 
+Task pipeline (#361): one task end to end, without the operator in the loop:
+    python3 dispatch_agent.py task <name> <branch> --prompt P --title T --body B --commit-msg M
+    python3 dispatch_agent.py task-usage [--task <name>]
+  See task_pipeline.py for the steps, the exit codes (0-6) and team.toml [task].
+
 Routing resolution:
     - Priority 1: Explicit --harness argument (if not 'auto').
     - Priority 2: User explicit route in team.toml [orchestration.routes].
@@ -1550,6 +1555,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _main_start(argv[1:])
     if argv and argv[0] == "wait":
         return _main_wait(argv[1:])
+    if argv and argv[0] in ("task", "task-usage"):
+        # Codex implements -> suite -> PR -> headless @rev/@sec -> fix rounds (#361).
+        import task_pipeline
+        return (task_pipeline.main if argv[0] == "task" else task_pipeline.usage_main)(argv[1:])
     if argv and argv[0] == "_run":
         if len(argv) == 2:
             return run_job(argv[1])

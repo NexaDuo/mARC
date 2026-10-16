@@ -90,6 +90,34 @@ choice, never a default. Codex refuses escalation under some approval policies
   timeout window. (origin: #352 · 2026-10-14)
 <!-- /rules:origin-required -->
 
+#### Task pipeline: Codex implements, headless reviews, fix rounds
+For an implementation task Codex can do alone, hand the whole loop to one
+command instead of driving each round from this session (each round you drive
+reloads diffs, test output and reports into your context):
+```bash
+python3 "${{{ plugin_root_env }}:-.}/scripts/dispatch_agent.py" task <name> <branch> \
+  --prompt <scratch>/spec.md --title <scratch>/title.txt \
+  --body <scratch>/body.md --commit-msg <scratch>/msg.txt
+```
+Run it from the consuming repo's clone, in the background. It makes a worktree
+from a fresh `origin/<base>`. Codex implements, then the repo's suite runs, and
+Codex fixes failures up to twice. Then it commits, pushes and opens the PR.
+`@rev` and `@sec` review headless and report-only, and their reports are posted
+on the PR with the `## @rev review` / `## @sec review` markers. Any high or medium
+finding gets a Codex fix round, then the suite and both reviews run again, up to
+`--max-rounds` (default 3). It never merges. Read only its last line,
+`RESULT <name> exit=<n> pr=#<n> sha=<sha> rev=... sec=... run_dir=...`:
+`0` both reviews clean (the merge gate is still the user's); `1` findings left
+after the rounds, so read the PR reports and rerun with `--fix <findings.md>` or
+hand it to `@dev`; `2` Codex usage limit, so rerun later (finished steps are not
+redone); `3` the suite still fails, see `<run_dir>/<name>-tests.txt`; `4` a
+reviewer gave no verdict line; `5` nothing to commit; `6` any other error, named
+in `error=`. `dispatch_agent.py task-usage` sums the token ledger per task.
+It needs `team.toml` `[task]` `task_suite_cmd` (or `[validation]
+validation_command`); see `docs/team.toml.example`. The suite runs Codex-written
+code outside any sandbox, with your rights, so use it only in repos where you
+would run that code yourself.
+
 **Cost discipline at dispatch time** — model choice and loop bounds are the
 cheapest lever on token budget:
 <!-- rules:origin-required -->

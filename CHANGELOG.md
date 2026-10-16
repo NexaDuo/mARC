@@ -8,6 +8,30 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Added
+
+- `dispatch_agent.py task` runs one implementation task end to end without
+  the operator in the loop (#361). It makes a worktree from `origin/<base>`.
+  Codex implements, the repo's suite runs (Codex fixes failures up to twice),
+  then the script commits, pushes and opens the PR. `@rev` and `@sec` review
+  headless and report-only, with their marker comments posted on the PR. Codex
+  fix rounds follow until both are clean or `--max-rounds` is reached. One
+  `RESULT` line and exit codes 0-6 tell the operator what happened; it never
+  merges. `dispatch_agent.py task-usage` sums the per-step token ledger.
+- Reviewers read only a clean detached checkout and a diff file. Claude Code
+  runs with no shell, edit, web, skill, agent or MCP tools and user settings
+  only. Codex reviews only for a role team.toml routes to `codex` (the #351
+  opt-in), with `--sandbox read-only` and without the branch's AGENTS.md.
+- The script commits only `task_commit_paths`, never `.github/`. It refuses
+  to push a branch that touches other paths or adds a credential-shaped line,
+  checked on the branch diff (with `--text`, so `.gitattributes` can't hide a
+  file), and it does not post a report that quotes one. A commit made by Codex
+  fails the run. Timeouts kill the whole process tree, and git hooks are off
+  for the script's own git calls.
+- `team.toml` `[task]` (commented out in `docs/team.toml.example`) holds the
+  suite command, optional per-file glob, passing exit codes, commit paths,
+  scratch globs and base branch. It is read from the main clone.
+
 ## [26.10.14.1] - 2026-10-14
 
 ### Added
