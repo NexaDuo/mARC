@@ -475,13 +475,36 @@ class TestLoop(Base):
         self.assertEqual([s for s, _ in t.codex_steps], ["impl", "impl"])
         self.assertTrue(t.file("impl.done").exists())
 
-    def test_a_commit_reviewed_by_an_earlier_run_is_not_reviewed_again(self):
-        t, code = self.run_fake(BLOCK, fix_changes=False)
-        self.assertEqual(t.file("reviewed-sha").read_text().strip(), "sha1")
-        t2 = _task(self.tmp, cls=FakeTask).setup([PASS])
+    def test_rerun_after_a_limit_in_the_fix_round_goes_straight_to_the_fix(self):
+        class LimitInFix(FakeTask):
+            def codex(self, effort, prompt_text, step):
+                if step.startswith("fix") and self.limit_fix:
+                    raise tp.CodexLimit("try again at 2 AM")
+                return super().codex(effort, prompt_text, step)
+
+        t = _task(self.tmp, cls=LimitInFix).setup([BLOCK])
+        t.limit_fix = True
+        t.prompt, t.commit_msg = self.tmp / "p.md", self.tmp / "m.txt"
+        t.prompt.write_text("x")
+        t.commit_msg.write_text("y")
+        self.assertEqual(t.run(), tp.EXIT_LIMIT)
+        t2 = _task(self.tmp, cls=LimitInFix).setup([PASS])
+        t2.limit_fix, t2.commits = False, 1
+        self.assertEqual(t2.run(), tp.EXIT_OK)
+        self.assertEqual(t2.reviewed, ["sha2"])  # sha1's reviews were reused, not redone
+        self.assertEqual([s for s, _ in t2.codex_steps], ["fix-1"])
+
+    def test_rerun_of_a_clean_task_exits_0_without_reviewing(self):
+        t, code = self.run_fake(PASS)
+        self.assertEqual(code, tp.EXIT_OK)
+        t2 = _task(self.tmp, cls=FakeTask).setup([])
         t2.commits = 1
-        self.assertEqual(t2.run(), tp.EXIT_FINDINGS)
+        self.assertEqual(t2.run(), tp.EXIT_OK)
         self.assertEqual(t2.reviewed, [])
+
+    def test_no_verdict_is_not_saved(self):
+        self.run_fake({"rev": "nothing", "sec": PASS["sec"]})
+        self.assertFalse(_task(self.tmp).file("reviews.json").exists())
 
     def test_rerun_fix_commit_message_has_a_body(self):
         self.assertIn("Rerun", _task(self.tmp).fix_commit_message(""))
@@ -685,11 +708,13 @@ class TestSuite(Base):
                             suite_ok_codes=(0, 3))
         self.assertEqual(t.run_suite(), (True, "2 suite runs passed"))
 
-    def test_shell_metacharacters_in_file_names_are_refused(self):
-        t = self.suite_task(suite_files="tests/*.js")
-        (t.worktree / "tests" / "t&calc.js").write_text("")
-        with self.assertRaisesRegex(tp.TaskError, "unusual characters"):
-            t.suite_targets()
+    def test_shell_metacharacters_refused_only_for_windows_cmd_programs(self):
+        t = _task(self.tmp, config=_config(suite_cmd=["C:/node/npm.cmd", "test"]))
+        with mock.patch.object(tp.os, "name", "nt"):
+            with self.assertRaisesRegex(tp.TaskError, "cmd.exe"):
+                t.suite_command("tests/t&calc.js", Path("/x"))
+            t.config.suite_cmd = ["C:/py/python.exe"]
+            self.assertIn("tests/[id] x.py", t.suite_command("tests/[id] x.py", Path("/x"))[0])
 
     def test_glob_matching_nothing_is_a_config_error(self):
         t = self.suite_task(suite_files="spec/*.rb")

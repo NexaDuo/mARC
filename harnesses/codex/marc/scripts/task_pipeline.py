@@ -479,6 +479,8 @@ class Task:
             self.git("worktree", "add", "-q", "-b", self.branch, str(self.worktree),
                      self.base_ref, cwd=self.repo)
             self.say(f"worktree {self.worktree} on {self.branch} from {self.base_ref}")
+            for stale in ("impl.done", "reviews.json"):  # a reused task name starts over
+                self.file(stale).unlink() if self.file(stale).exists() else None
         else:
             current = self.git("rev-parse", "--abbrev-ref", "HEAD")
             if current != self.branch:
@@ -543,11 +545,6 @@ class Task:
                        for p in self.worktree.glob(self.config.suite_files) if p.is_file())
         if not files:
             raise TaskError(f"task_suite_files {self.config.suite_files!r} matches nothing")
-        # On Windows a .cmd/.bat program runs through cmd.exe, which would parse
-        # `&` or `|` in a Codex-chosen file name: plain names only.
-        odd = [f for f in files if not SAFE_FILE_RE.fullmatch(f)]
-        if odd:
-            raise TaskError(f"suite file names with unusual characters: {' '.join(odd)[:300]}")
         # a file Codex named "-x.py" must not parse as an option
         return [f if not f.startswith("-") else f"./{f}" for f in files]
 
@@ -570,6 +567,11 @@ class Task:
             argv.append(self.suite_program(arg) if i == 0 else arg)
         if target and not any("{file}" in a for a in self.config.suite_cmd):
             argv.append(target)
+        # On Windows a .cmd/.bat program runs through cmd.exe, which would parse
+        # `&` or `|` in a Codex-chosen file name: plain names only there.
+        if (target and os.name == "nt" and argv[0].lower().endswith((".cmd", ".bat"))
+                and not SAFE_FILE_RE.fullmatch(target)):
+            raise TaskError(f"suite file name {target!r} has characters cmd.exe would parse")
         return argv, env
 
     def suite_program(self, program: str) -> str:
@@ -835,6 +837,21 @@ class Task:
                 self.post_review(pr, v, sha)
         return verdicts
 
+    def save_reviews(self, sha: str, verdicts: List[Verdict]) -> None:
+        """Only when both gave a verdict: a rerun after exit 4 must review again."""
+        if all(v.ok for v in verdicts):
+            data = {"sha": sha, "verdicts": [{"kind": v.kind, "report": v.report} for v in verdicts]}
+            self.file("reviews.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def load_reviews(self) -> Optional[Tuple[str, List[Verdict]]]:
+        try:
+            data = json.loads(self.file("reviews.json").read_text(encoding="utf-8"))
+            verdicts = [parse_verdict(d["kind"], d["report"]) for d in data["verdicts"]]
+            sha = str(data["sha"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return (sha, verdicts) if [v.kind for v in verdicts] == list(KINDS) else None
+
     def fix_prompt(self, findings: str) -> str:
         return (f"Continue this work (branch {self.branch}, already committed). "
                 f"The reviews requested changes:\n\n{findings}\n\n"
@@ -869,9 +886,8 @@ class Task:
                 self.file("impl.done").write_text(self.git("rev-parse", "HEAD") + "\n", encoding="utf-8")
                 self.say("codex implementation done")
             first_commit = not fix_file and not self.ahead()
-            # the last commit both reviewers gave a verdict on, also from an earlier run
-            seen = self.file("reviewed-sha")
-            reviewed_sha = seen.read_text(encoding="utf-8").strip() if seen.exists() else None
+            prior = self.load_reviews()  # an earlier run's verdicts, reused for the same commit
+            reviewed_sha = None
             for round_no in range(self.max_rounds + 1):
                 self.clean_scratch()
                 if self.dirty():
@@ -911,10 +927,14 @@ class Task:
                 pr = self.ensure_pr()
                 self.say(f"PR #{pr} at {sha}; reviewing "
                          f"(rev={self.reviewer('rev')}, sec={self.reviewer('sec')})")
-                verdicts = self.reviews(pr, sha)
+                if prior and prior[0] == sha:
+                    verdicts = prior[1]
+                    self.say(f"reusing the reviews of {sha} from an earlier run")
+                else:
+                    verdicts = self.reviews(pr, sha)
+                    self.save_reviews(sha, verdicts)
+                prior = None
                 self.say(" ".join(v.short() for v in verdicts))
-                if all(v.ok for v in verdicts):
-                    seen.write_text(sha + "\n", encoding="utf-8")
                 if any(not v.ok for v in verdicts):
                     if any("CODEX LIMIT" in v.error for v in verdicts):
                         return self.finish(EXIT_LIMIT, pr, sha, verdicts)
