@@ -22,12 +22,18 @@ date whose `YY.M.D` is already taken.
   runs with no shell, edit, web, skill, agent or MCP tools and user settings
   only. Codex reviews only for a role team.toml routes to `codex` (the #351
   opt-in), with `--sandbox read-only` and without the branch's AGENTS.md.
+- The suite runs code Codex just wrote, unsandboxed, with the operator's
+  rights; credential-looking environment variables are withheld from it.
+  Review reports are posted under a header the script writes (marker, full
+  SHA, parsed verdict); a run without a verdict gets no gate marker, and
+  `@rev`/`@sec` handles in reports are backticked so they notify nobody.
 - The script commits only `task_commit_paths`, never `.github/`. It refuses
-  to push a branch that touches other paths or adds a credential-shaped line,
+  to push a branch that touches other paths, adds a symlink or adds a
+  credential-shaped line,
   checked on the branch diff (with `--text`, so `.gitattributes` can't hide a
   file), and it does not post a report that quotes one. A commit made by Codex
-  fails the run. Timeouts kill the whole process tree, and git hooks are off
-  for the script's own git calls.
+  fails the run. Scratch cleanup never follows a symlink. Timeouts kill the
+  whole process tree, and git hooks are off for the script's own git calls.
 - `team.toml` `[task]` (commented out in `docs/team.toml.example`) holds the
   suite command, optional per-file glob, passing exit codes, commit paths,
   scratch globs and base branch. It is read from the main clone.

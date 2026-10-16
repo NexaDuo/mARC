@@ -180,13 +180,17 @@ research = "claude-code"
 # suite runs, @rev/@sec review headless, Codex fixes. It reads this section
 # from the MAIN clone's team.toml, so the branch it works on cannot change it.
 # Without task_suite_cmd it runs [validation] validation_command through the
-# shell. The suite runs the Codex-written code outside any sandbox.
+# shell. The suite runs code Codex just wrote, outside any sandbox, with
+# your rights (credential-looking environment variables are withheld, your
+# files are not): use it only where you would run that code yourself.
 # [task]
 # Argv list (no shell). Placeholders: {file} (one file, with task_suite_files),
 # {tmp} (an empty temp dir per run), {repo} (the main clone), {worktree}. A
 # shell string also works; it gets the same values only as environment
 # variables (MARC_TASK_FILE, MARC_TASK_TMP, MARC_TASK_REPO, MARC_TASK_WORKTREE),
-# never spliced into the command line.
+# never spliced into the command line. A bare program name is looked up on
+# the absolute PATH entries and a relative path is taken from the main clone,
+# never from the worktree Codex writes.
 # task_suite_cmd = ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "{file}", "--basetemp", "{tmp}"]
 # Run the suite command once per matching file (a large suite in one process
 # can grow to many GB). Omit to run it once.
@@ -205,7 +209,8 @@ research = "claude-code"
 # Branch the worktree starts from and the PR targets.
 # task_base = "main"
 # Reviewers are Claude Code headless unless [orchestration.routes] sends
-# rev/sec to "codex" (the #351 opt-in).
+# rev/sec to "codex" (the #351 opt-in). A Codex reviewer can read the whole
+# disk and its report is posted on the PR, so prefer Claude here.
 
 # --- Release-phase facts (what "done" requires in THIS repo) ---
 [release]

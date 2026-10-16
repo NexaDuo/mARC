@@ -29,9 +29,18 @@ Reviewers run headless and report-only on a clean detached checkout plus a
 diff file: Claude Code (`--agent marc:review` / `marc:security`, no shell,
 edit, web or MCP tools, user settings only), or Codex (`--sandbox read-only`,
 the branch's AGENTS.md not loaded) only for a role team.toml routes to codex
-(the #351 opt-in). The suite runs the Codex-written code outside any sandbox,
-with the operator's rights; `.github/` is never committed or pushed by this
-script, and git hooks are off for its git calls.
+(the #351 opt-in). Reports are posted under a header the script writes
+(marker, full SHA, parsed verdict), and a run without a verdict gets no
+marker.
+
+The suite runs code Codex just wrote, outside any sandbox, with the
+operator's rights: it can read the operator's files and change the main
+clone. Credential-looking environment variables are not passed to it, which
+narrows the exposure but is no sandbox. Use this only where you would run
+that code yourself. The checks before a push (only the commit paths, never
+`.github/`, no new symlinks, no credential-shaped added line) are defense in
+depth after that point, and the pushed branch still runs in the repo's
+existing CI. Git hooks and fsmonitor are off for the script's git calls.
 
 Every Codex and Claude run appends its token usage to <run-dir>/usage.jsonl.
 """
@@ -162,6 +171,10 @@ def load_config(repo: Path) -> TaskConfig:
         val = data.get("validation", {}) if isinstance(data, dict) else {}
         raw = val.get("validation_command") if isinstance(val, dict) else None
     argv = _as_list(raw)
+    if argv is None and isinstance(raw, str) and raw.strip().startswith("["):
+        # the fallback parser (no tomllib) only reads one-line, double-quoted arrays
+        raise TaskError("task_suite_cmd looks like an array but did not parse: write it on one "
+                        "line with double quotes, or run Python 3.11+ (tomllib)")
     if argv is not None:
         if not argv or not all(isinstance(a, str) and a for a in argv):
             raise TaskError("task_suite_cmd must be a non-empty list of strings")
@@ -352,6 +365,17 @@ def run_to_file(cmd: Union[List[str], str], *, stdin: Optional[Path], out: Path,
             return "timeout"
 
 
+# Credentials in the operator's environment are not handed to the suite, which
+# runs code Codex just wrote. Files such as ~/.config/gh/hosts.yml stay readable:
+# this narrows the exposure, it is not a sandbox.
+SECRET_ENV_RE = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY"
+                           r"|^AWS_|^AZURE_|^GOOGLE_APPLICATION|^SSH_AUTH_SOCK$|^GH_|^GITHUB_", re.IGNORECASE)
+
+
+def suite_environ() -> Dict[str, str]:
+    return {k: v for k, v in os.environ.items() if not SECRET_ENV_RE.search(k)}
+
+
 def lower_priority_kwargs() -> Dict[str, Any]:
     """Child processes (and theirs) inherit the priority: a full suite
     otherwise makes the operator's machine lag."""
@@ -362,7 +386,7 @@ def lower_priority_kwargs() -> Dict[str, Any]:
 
 def main_repo(start: Optional[Path] = None) -> Path:
     """The main clone, also when run from one of its worktrees."""
-    r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    r = subprocess.run([which("git"), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                        cwd=start or Path.cwd(), capture_output=True, text=True)
     if r.returncode or not r.stdout.strip():
         raise TaskError("not inside a git repository")
@@ -409,7 +433,9 @@ class Task:
 
     def git(self, *args: str, cwd: Optional[Path] = None, check: bool = True) -> str:
         # The suite runs unsandboxed and could set core.fsmonitor/hooksPath in .git/config.
-        safe = ["-c", "core.fsmonitor=false", "-c", f"core.hooksPath={self.run_dir / 'no-hooks'}"]
+        # quotePath=false: a quoted non-ASCII name must not slip past allowed_path.
+        safe = ["-c", "core.fsmonitor=false", "-c", f"core.hooksPath={self.run_dir / 'no-hooks'}",
+                "-c", "core.quotePath=false"]
         r = subprocess.run([which("git"), *safe, *args], cwd=cwd or self.worktree, capture_output=True,
                            text=True, encoding="utf-8", errors="replace")
         if check and r.returncode:
@@ -485,10 +511,22 @@ class Task:
             raise TaskError(f"codex {step} committed although told not to; reset or review by hand")
         return out.read_text(encoding="utf-8", errors="replace") if out.exists() else ""
 
+    def inside_worktree(self, p: Path) -> bool:
+        """No symlinked folder on the way from the worktree to p: a glob follows
+        them, and a Codex-made `build -> $HOME` would point the cleanup at $HOME."""
+        rel = p.relative_to(self.worktree)
+        return not any((self.worktree.joinpath(*rel.parts[:i])).is_symlink()
+                       for i in range(1, len(rel.parts)))
+
     def clean_scratch(self) -> None:
         for pattern in self.config.scratch:
             for p in self.worktree.glob(pattern):
-                shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink()
+                if not self.inside_worktree(p):
+                    continue
+                if p.is_symlink() or not p.is_dir():
+                    p.unlink()  # a symlink itself, never its target
+                else:
+                    shutil.rmtree(p, ignore_errors=True)
 
     def suite_targets(self) -> List[Optional[str]]:
         """One run per matching file, or one run of the whole suite."""
@@ -507,20 +545,29 @@ class Task:
         file names come from the Codex-written tree."""
         values = {"{file}": target or "", "{tmp}": str(tmp), "{repo}": str(self.repo),
                   "{worktree}": str(self.worktree)}
-        env = {**os.environ, "MARC_TASK_FILE": target or "", "MARC_TASK_TMP": str(tmp),
+        env = {**suite_environ(), "MARC_TASK_FILE": target or "", "MARC_TASK_TMP": str(tmp),
                "MARC_TASK_REPO": str(self.repo), "MARC_TASK_WORKTREE": str(self.worktree)}
         if isinstance(self.config.suite_cmd, str):
             return self.config.suite_cmd, env
         argv = []
-        for arg in self.config.suite_cmd:
+        for i, arg in enumerate(self.config.suite_cmd):
             if arg == "{file}" and not target:
                 continue
             for k, v in values.items():
                 arg = arg.replace(k, v)
-            argv.append(arg)
+            argv.append(self.suite_program(arg) if i == 0 else arg)
         if target and not any("{file}" in a for a in self.config.suite_cmd):
             argv.append(target)
         return argv, env
+
+    def suite_program(self, program: str) -> str:
+        """A bare name from the absolute PATH entries (never the Codex-written
+        worktree, and with PATHEXT on Windows); a relative path from the main clone."""
+        if Path(program).is_absolute():
+            return program
+        if "/" not in program and "\\" not in program:
+            return which(program)
+        return str(self.repo / program)
 
     def run_suite(self) -> Tuple[bool, str]:
         """Decided by exit codes only; each run's log is in <run-dir>/<name>-suite/."""
@@ -573,10 +620,18 @@ class Task:
     def check_branch(self) -> None:
         """Before anything goes public: commits may come from Codex or from the
         unsandboxed suite, not only from commit(), so check the branch itself."""
-        names = self.git("diff", "--name-only", "--no-renames", f"{self.base_ref}...HEAD").splitlines()
+        names = [n for n in self.git("diff", "--name-only", "-z", "--no-renames",
+                                      f"{self.base_ref}...HEAD").split("\0") if n]
         bad = [n for n in names if not self.allowed_path(n)]
         if bad:
             raise TaskError(f"branch touches paths this script never commits: {' '.join(bad)[:300]}")
+        # A new symlink in the reviewer's checkout could point its reads (and so
+        # its public report) at files outside the repo.
+        raw = self.git("diff", "--raw", "-z", "--no-renames", f"{self.base_ref}...HEAD").split("\0")
+        links = [raw[i + 1] for i in range(0, len(raw) - 1, 2)
+                 if raw[i].split(" ")[1:2] == ["120000"]]
+        if links:
+            raise TaskError(f"branch adds symlinks: {' '.join(links)[:300]}; not pushed")
         added = "\n".join(ln for ln in self.branch_diff().splitlines() if ln.startswith("+"))
         m = SECRET_RE.search(added)
         if m:
@@ -719,11 +774,21 @@ class Task:
         return parse_verdict(kind, text)
 
     def post_review(self, pr: str, v: Verdict, sha: str) -> None:
-        body = v.report.strip() or f"(empty report: {v.error})"
-        marker = f"## @{v.kind} review"
-        if not body.startswith(marker):
-            who = "Claude Code headless" if self.reviewer(v.kind) == "claude" else "Codex"
-            body = f"{marker} ({who}, {sha})\n\n{body}"
+        """The header is the script's, not the reviewer's: the report is model
+        output steered by the diff it read, so it must not choose the marker,
+        the SHA or the verdict a merge-gate reader sees."""
+        who = "Claude Code headless" if self.reviewer(v.kind) == "claude" else "Codex"
+        full = self.git("rev-parse", f"{sha}^{{commit}}")
+        report = v.report.strip() or f"(empty report: {v.error})"
+        # `@rev`/`@sec` in backticks: bare handles would notify GitHub users of that name
+        report = re.sub(r"(?<![`\w])@(rev|sec)\b", r"`@\1`", report)
+        if v.ok:
+            head = f"## @{v.kind} review\nreviewed-sha: {full}\nverdict: {v.verdict}"
+        else:  # no gate marker: a failed run must not read as a review
+            head = f"## task pipeline: `@{v.kind}` reviewer gave no verdict\nreviewed-sha: {full}"
+        body = (f"{head} (high={v.high} medium={v.medium} low={v.low}; parsed by the task "
+                f"pipeline from the report's last line)\nreviewer: {who}, task pipeline (#361)\n\n"
+                f"---\n\n{report}") if v.ok else f"{head}\nreviewer: {who}\n\n---\n\n{report}"
         f = self.file(f"review-{v.kind}-comment.md")
         f.write_text(body + "\n", encoding="utf-8")
         self.gh("pr", "comment", pr, "--body-file", str(f))
@@ -764,7 +829,8 @@ class Task:
                 f"End with a 3-line summary.")
 
     def fix_commit_message(self, summary: str) -> str:
-        return f"fix: address the review\n\n{summary.strip()[:1200]}\n"
+        summary = summary.strip()[:1200] or "Rerun after an interrupted round; see the reviews on the PR."
+        return f"fix: address the review\n\n{summary}\n"
 
     # ---- the loop ------------------------------------------------------
     def run(self, fix_file: Optional[Path] = None, skip_impl: bool = False) -> int:
@@ -778,7 +844,8 @@ class Task:
                 fix_summary = self.codex("medium", self.fix_prompt(fix_file.read_text(encoding="utf-8")),
                                          "fix-manual")
                 self.say("codex fix done")
-            elif not skip_impl and not self.ahead():
+            elif not skip_impl and not self.ahead() and not self.dirty():
+                # a rerun after a failed suite/limit/error keeps the uncommitted work
                 if not self.prompt:
                     raise TaskError("--prompt is required for the first implementation")
                 self.codex("high", self.prompt.read_text(encoding="utf-8") + "\n\nDo NOT commit.",
@@ -800,6 +867,7 @@ class Task:
                         self.codex("medium", "The full suite failed:\n\n" + failures[-4000:] +
                                    "\n\nFix the failures (do NOT commit).", f"fixtests-{round_no}-{attempt}")
                         self.clean_scratch()
+                    self.clean_scratch()  # the green suite's own output must not be committed
                     if first_commit:
                         if not self.commit_msg:
                             raise TaskError("--commit-msg is required for the first commit")
@@ -813,6 +881,10 @@ class Task:
                     return self.finish(EXIT_NO_CHANGES, pr, sha, verdicts)
                 sha = self.git("rev-parse", "--short", "HEAD")
                 if sha == reviewed_sha:
+                    left = [ln[3:] for ln in self.git("status", "--porcelain").splitlines()]
+                    if left:
+                        raise TaskError(f"codex fix changed only paths outside the commit paths: "
+                                        f"{' '.join(left)[:300]}")
                     self.say("codex fix changed nothing; not re-reviewing the same commit")
                     return self.finish(EXIT_FINDINGS, pr, sha, verdicts)
                 reviewed_sha = sha
@@ -952,8 +1024,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         repo = main_repo()
         config = load_config(repo)
-    except TaskError as e:
-        print(f"RESULT {a.name} exit={EXIT_ERROR} pr=#- sha=- reviews=none error={e}", flush=True)
+    except Exception as e:  # TaskError or anything else: still one RESULT line, exit 6
+        error = str(e) if isinstance(e, TaskError) else f"{type(e).__name__}: {e}"
+        print(f"RESULT {a.name} exit={EXIT_ERROR} pr=#- sha=- reviews=none error={error}", flush=True)
         return EXIT_ERROR
     root = tasks_root(repo)
     wt_root = a.worktree_root or Path(os.environ.get("MARC_TASK_WORKTREE_ROOT") or root)

@@ -114,9 +114,12 @@ redone); `3` the suite still fails, see `<run_dir>/<name>-tests.txt`; `4` a
 reviewer gave no verdict line; `5` nothing to commit; `6` any other error, named
 in `error=`. `dispatch_agent.py task-usage` sums the token ledger per task.
 It needs `team.toml` `[task]` `task_suite_cmd` (or `[validation]
-validation_command`); see `docs/team.toml.example`. The suite runs Codex-written
-code outside any sandbox, with your rights, so use it only in repos where you
-would run that code yourself.
+validation_command`); see `docs/team.toml.example`. The suite runs code Codex
+just wrote (from a spec that may carry injected text) outside any sandbox, with
+your rights; credential-looking environment variables are withheld, your files
+are not. Use it only in repos where you would run that code yourself. A Codex
+reviewer (the #351 opt-in) can read the whole disk, and its report is posted
+publicly behind only a narrow credential pattern; prefer the Claude reviewer.
 
 **Cost discipline at dispatch time** — model choice and loop bounds are the
 cheapest lever on token budget:
