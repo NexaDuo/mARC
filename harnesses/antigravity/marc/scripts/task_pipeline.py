@@ -111,7 +111,7 @@ VERDICT_RE = re.compile(
     r"[\s`*_.]*$",
     re.IGNORECASE | re.MULTILINE)
 LIMIT_RE = re.compile(r"try again at ([^.\"\n]*)", re.IGNORECASE)
-SAFE_FILE_RE = re.compile(r"[A-Za-z0-9._/+-]+")
+SAFE_FILE_RE = re.compile(r"[\w./+@()\[\]-]+")
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 BRANCH_RE = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")
 # A workflow edit would run in CI with the repo's secrets on push.
@@ -567,11 +567,10 @@ class Task:
             argv.append(self.suite_program(arg) if i == 0 else arg)
         if target and not any("{file}" in a for a in self.config.suite_cmd):
             argv.append(target)
-        # On Windows a .cmd/.bat program runs through cmd.exe, which would parse
-        # `&` or `|` in a Codex-chosen file name: plain names only there.
-        if (target and os.name == "nt" and argv[0].lower().endswith((".cmd", ".bat"))
-                and not SAFE_FILE_RE.fullmatch(target)):
-            raise TaskError(f"suite file name {target!r} has characters cmd.exe would parse")
+        # A .cmd/.bat (cmd.exe) or a `sh -c "... {file}"` argv parses the name as
+        # shell: no metacharacters or spaces in a Codex-chosen file name, ever.
+        if target and not SAFE_FILE_RE.fullmatch(target):
+            raise TaskError(f"suite file name {target!r} has characters a shell would parse")
         return argv, env
 
     def suite_program(self, program: str) -> str:
@@ -929,6 +928,7 @@ class Task:
                          f"(rev={self.reviewer('rev')}, sec={self.reviewer('sec')})")
                 if prior and prior[0] == sha:
                     verdicts = prior[1]
+                    self.reused = True
                     self.say(f"reusing the reviews of {sha} from an earlier run")
                 else:
                     verdicts = self.reviews(pr, sha)
@@ -958,6 +958,7 @@ class Task:
     def finish(self, code: int, pr: str, sha: str, verdicts: List[Verdict], error: str = "") -> int:
         reviews = " ".join(v.short() for v in verdicts) or "reviews=none"
         error = f" error={' '.join(error.split())[:300]}" if error else ""
+        reviews += " reused=1" if getattr(self, "reused", False) else ""  # not reviewed this run
         self.out(f"RESULT {self.name} exit={code} pr=#{pr} sha={sha} {reviews} "
                  f"run_dir={self.run_dir}{error}", flush=True)
         return code

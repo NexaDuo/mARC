@@ -501,6 +501,7 @@ class TestLoop(Base):
         t2.commits = 1
         self.assertEqual(t2.run(), tp.EXIT_OK)
         self.assertEqual(t2.reviewed, [])
+        self.assertIn("reused=1", t2.lines[-1])
 
     def test_no_verdict_is_not_saved(self):
         self.run_fake({"rev": "nothing", "sec": PASS["sec"]})
@@ -708,13 +709,13 @@ class TestSuite(Base):
                             suite_ok_codes=(0, 3))
         self.assertEqual(t.run_suite(), (True, "2 suite runs passed"))
 
-    def test_shell_metacharacters_refused_only_for_windows_cmd_programs(self):
-        t = _task(self.tmp, config=_config(suite_cmd=["C:/node/npm.cmd", "test"]))
-        with mock.patch.object(tp.os, "name", "nt"):
-            with self.assertRaisesRegex(tp.TaskError, "cmd.exe"):
-                t.suite_command("tests/t&calc.js", Path("/x"))
-            t.config.suite_cmd = ["C:/py/python.exe"]
-            self.assertIn("tests/[id] x.py", t.suite_command("tests/[id] x.py", Path("/x"))[0])
+    def test_shell_metacharacters_in_file_names_are_refused(self):
+        t = _task(self.tmp, config=_config(suite_cmd=["/bin/sh", "-c", "run {file}"]))
+        for bad in ("tests/t&calc.js", "tests/a;b.py", "tests/a b.py", "tests/$(x).py"):
+            with self.assertRaisesRegex(tp.TaskError, "shell", msg=bad):
+                t.suite_command(bad, Path("/x"))
+        self.assertIn("run tests/[id]/page@2.test.js",
+                      t.suite_command("tests/[id]/page@2.test.js", Path("/x"))[0])
 
     def test_glob_matching_nothing_is_a_config_error(self):
         t = self.suite_task(suite_files="spec/*.rb")
