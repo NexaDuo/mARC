@@ -242,6 +242,10 @@ class TestConfig(Base):
                    '[orchestration]\nmode = "hybrid"\n[orchestration.routes]\nsec = "codex"\n')
         self.assertEqual(tp.load_config(self.tmp).codex_review, {"rev": False, "sec": True})
 
+    def test_shell_test_bracket_is_a_shell_string(self):
+        self.write('[task]\ntask_suite_cmd = "[ -x ./ci.sh ] && ./ci.sh"\n')
+        self.assertEqual(tp.load_config(self.tmp).suite_cmd, "[ -x ./ci.sh ] && ./ci.sh")
+
     def test_fallback_parser_arrays(self):
         self.assertEqual(tp._as_list('["a", "b"]'), ["a", "b"])
         self.assertIsNone(tp._as_list("npm test"))
@@ -357,6 +361,8 @@ class TestReviewer(Base):
         self.assertTrue(body.startswith("## @sec review\nreviewed-sha: " + "f" * 40 + "\nverdict: BLOCK"))
         self.assertNotIn("\n@sec", body)  # handles in the report are backticked
         self.assertIn("`@sec` verdict: BLOCK", body)
+        body = self.posted_body(tp.parse_verdict("rev", "ask @dev and @techlead\n" + PASS["rev"]))
+        self.assertIn("ask `@dev` and `@techlead`", body)
 
     def test_a_failed_review_gets_no_gate_marker(self):
         body = self.posted_body(tp.Verdict(kind="rev", report="## @rev review\nlooks fine", error="x"))
@@ -448,12 +454,34 @@ class TestLoop(Base):
 
     def test_rerun_with_uncommitted_work_does_not_reimplement(self):
         t = _task(self.tmp, cls=FakeTask).setup([PASS])
-        t.changed = True  # the previous run stopped at the suite or the Codex limit
+        t.changed = True  # the previous run finished the implementation, then stopped at the suite
+        t.file("impl.done").write_text("x")
         t.commit_msg = self.tmp / "m.txt"
         t.commit_msg.write_text("feat: demo")
         self.assertEqual(t.run(), tp.EXIT_OK)
         self.assertEqual(t.codex_steps, [])
         self.assertEqual(t.commits, 1)
+
+    def test_interrupted_implementation_is_redone_not_shipped(self):
+        t = _task(self.tmp, cls=FakeTask).setup([PASS], impl_limit=True)
+        t.changed = True
+        t.prompt, t.commit_msg = self.tmp / "p.md", self.tmp / "m.txt"
+        t.prompt.write_text("x")
+        t.commit_msg.write_text("y")
+        self.assertEqual(t.run(), tp.EXIT_LIMIT)  # limit mid-implementation: no marker
+        self.assertFalse(t.file("impl.done").exists())
+        t.impl_limit = False
+        self.assertEqual(t.run(), tp.EXIT_OK)
+        self.assertEqual([s for s, _ in t.codex_steps], ["impl", "impl"])
+        self.assertTrue(t.file("impl.done").exists())
+
+    def test_a_commit_reviewed_by_an_earlier_run_is_not_reviewed_again(self):
+        t, code = self.run_fake(BLOCK, fix_changes=False)
+        self.assertEqual(t.file("reviewed-sha").read_text().strip(), "sha1")
+        t2 = _task(self.tmp, cls=FakeTask).setup([PASS])
+        t2.commits = 1
+        self.assertEqual(t2.run(), tp.EXIT_FINDINGS)
+        self.assertEqual(t2.reviewed, [])
 
     def test_rerun_fix_commit_message_has_a_body(self):
         self.assertIn("Rerun", _task(self.tmp).fix_commit_message(""))
@@ -657,6 +685,12 @@ class TestSuite(Base):
                             suite_ok_codes=(0, 3))
         self.assertEqual(t.run_suite(), (True, "2 suite runs passed"))
 
+    def test_shell_metacharacters_in_file_names_are_refused(self):
+        t = self.suite_task(suite_files="tests/*.js")
+        (t.worktree / "tests" / "t&calc.js").write_text("")
+        with self.assertRaisesRegex(tp.TaskError, "unusual characters"):
+            t.suite_targets()
+
     def test_glob_matching_nothing_is_a_config_error(self):
         t = self.suite_task(suite_files="spec/*.rb")
         with self.assertRaisesRegex(tp.TaskError, "matches nothing"):
@@ -694,9 +728,10 @@ class TestSuite(Base):
     def test_suite_does_not_get_credentials_from_the_environment(self):
         t = _task(self.tmp)
         with mock.patch.dict(os.environ, {"GH_TOKEN": "x", "OPENAI_API_KEY": "y",
-                                          "AWS_PROFILE": "z", "LANG": "C"}):
+                                          "AWS_PROFILE": "z", "DATABASE_URL": "pg://u:p@h",
+                                          "MY_PAT": "p", "LANG": "C"}):
             _, env = t.suite_command(None, Path("/x"))
-        self.assertFalse({"GH_TOKEN", "OPENAI_API_KEY", "AWS_PROFILE"} & set(env))
+        self.assertFalse({"GH_TOKEN", "OPENAI_API_KEY", "AWS_PROFILE", "DATABASE_URL", "MY_PAT"} & set(env))
         self.assertEqual(env["LANG"], "C")
         self.assertIn("PATH", env)
 

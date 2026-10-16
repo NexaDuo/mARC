@@ -111,6 +111,7 @@ VERDICT_RE = re.compile(
     r"[\s`*_.]*$",
     re.IGNORECASE | re.MULTILINE)
 LIMIT_RE = re.compile(r"try again at ([^.\"\n]*)", re.IGNORECASE)
+SAFE_FILE_RE = re.compile(r"[A-Za-z0-9._/+-]+")
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 BRANCH_RE = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")
 # A workflow edit would run in CI with the repo's secrets on push.
@@ -171,7 +172,7 @@ def load_config(repo: Path) -> TaskConfig:
         val = data.get("validation", {}) if isinstance(data, dict) else {}
         raw = val.get("validation_command") if isinstance(val, dict) else None
     argv = _as_list(raw)
-    if argv is None and isinstance(raw, str) and raw.strip().startswith("["):
+    if argv is None and isinstance(raw, str) and re.match(r"\s*\[\s*['\"]", raw):
         # the fallback parser (no tomllib) only reads one-line, double-quoted arrays
         raise TaskError("task_suite_cmd looks like an array but did not parse: write it on one "
                         "line with double quotes, or run Python 3.11+ (tomllib)")
@@ -369,6 +370,7 @@ def run_to_file(cmd: Union[List[str], str], *, stdin: Optional[Path], out: Path,
 # runs code Codex just wrote. Files such as ~/.config/gh/hosts.yml stay readable:
 # this narrows the exposure, it is not a sandbox.
 SECRET_ENV_RE = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY"
+                           r"|_PAT$|_DSN$|^DATABASE_URL$|_URI$|^KUBECONFIG$"
                            r"|^AWS_|^AZURE_|^GOOGLE_APPLICATION|^SSH_AUTH_SOCK$|^GH_|^GITHUB_", re.IGNORECASE)
 
 
@@ -519,14 +521,19 @@ class Task:
                        for i in range(1, len(rel.parts)))
 
     def clean_scratch(self) -> None:
+        root = self.worktree.resolve()
         for pattern in self.config.scratch:
-            for p in self.worktree.glob(pattern):
-                if not self.inside_worktree(p):
+            for p in list(self.worktree.glob(pattern)):  # listed first: deleting while globbing
+                # the resolved parent catches Windows junctions, which is_symlink() misses
+                if not self.inside_worktree(p) or root not in (p.parent.resolve(), *p.parent.resolve().parents):
                     continue
-                if p.is_symlink() or not p.is_dir():
-                    p.unlink()  # a symlink itself, never its target
-                else:
-                    shutil.rmtree(p, ignore_errors=True)
+                try:
+                    if p.is_symlink() or not p.is_dir():
+                        p.unlink()  # a symlink itself, never its target
+                    else:
+                        shutil.rmtree(p, ignore_errors=True)
+                except FileNotFoundError:
+                    pass  # inside a folder an earlier match removed
 
     def suite_targets(self) -> List[Optional[str]]:
         """One run per matching file, or one run of the whole suite."""
@@ -536,6 +543,11 @@ class Task:
                        for p in self.worktree.glob(self.config.suite_files) if p.is_file())
         if not files:
             raise TaskError(f"task_suite_files {self.config.suite_files!r} matches nothing")
+        # On Windows a .cmd/.bat program runs through cmd.exe, which would parse
+        # `&` or `|` in a Codex-chosen file name: plain names only.
+        odd = [f for f in files if not SAFE_FILE_RE.fullmatch(f)]
+        if odd:
+            raise TaskError(f"suite file names with unusual characters: {' '.join(odd)[:300]}")
         # a file Codex named "-x.py" must not parse as an option
         return [f if not f.startswith("-") else f"./{f}" for f in files]
 
@@ -780,8 +792,9 @@ class Task:
         who = "Claude Code headless" if self.reviewer(v.kind) == "claude" else "Codex"
         full = self.git("rev-parse", f"{sha}^{{commit}}")
         report = v.report.strip() or f"(empty report: {v.error})"
-        # `@rev`/`@sec` in backticks: bare handles would notify GitHub users of that name
-        report = re.sub(r"(?<![`\w])@(rev|sec)\b", r"`@\1`", report)
+        # team handles in backticks: bare ones would notify GitHub users of that name
+        report = re.sub(r"(?<![`\w])@(rev|sec|dev|sre|design|research|techlead|scribe)\b",
+                        r"`@\1`", report)
         if v.ok:
             head = f"## @{v.kind} review\nreviewed-sha: {full}\nverdict: {v.verdict}"
         else:  # no gate marker: a failed run must not read as a review
@@ -844,15 +857,21 @@ class Task:
                 fix_summary = self.codex("medium", self.fix_prompt(fix_file.read_text(encoding="utf-8")),
                                          "fix-manual")
                 self.say("codex fix done")
-            elif not skip_impl and not self.ahead() and not self.dirty():
-                # a rerun after a failed suite/limit/error keeps the uncommitted work
+            elif not skip_impl and not self.ahead() and not self.file("impl.done").exists():
+                # Not "tree is dirty": an implementation cut off by the limit, a
+                # crash or a timeout leaves partial work that must not ship as done.
                 if not self.prompt:
                     raise TaskError("--prompt is required for the first implementation")
-                self.codex("high", self.prompt.read_text(encoding="utf-8") + "\n\nDo NOT commit.",
-                           "impl")
+                partial = ("\n\nThe worktree may hold a partial attempt from an interrupted run; "
+                           "check it and finish the task." if self.dirty() else "")
+                self.codex("high", self.prompt.read_text(encoding="utf-8") + partial +
+                           "\n\nDo NOT commit.", "impl")
+                self.file("impl.done").write_text(self.git("rev-parse", "HEAD") + "\n", encoding="utf-8")
                 self.say("codex implementation done")
             first_commit = not fix_file and not self.ahead()
-            reviewed_sha = None
+            # the last commit both reviewers gave a verdict on, also from an earlier run
+            seen = self.file("reviewed-sha")
+            reviewed_sha = seen.read_text(encoding="utf-8").strip() if seen.exists() else None
             for round_no in range(self.max_rounds + 1):
                 self.clean_scratch()
                 if self.dirty():
@@ -894,6 +913,8 @@ class Task:
                          f"(rev={self.reviewer('rev')}, sec={self.reviewer('sec')})")
                 verdicts = self.reviews(pr, sha)
                 self.say(" ".join(v.short() for v in verdicts))
+                if all(v.ok for v in verdicts):
+                    seen.write_text(sha + "\n", encoding="utf-8")
                 if any(not v.ok for v in verdicts):
                     if any("CODEX LIMIT" in v.error for v in verdicts):
                         return self.finish(EXIT_LIMIT, pr, sha, verdicts)

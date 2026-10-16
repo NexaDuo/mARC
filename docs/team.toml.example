@@ -210,7 +210,8 @@ research = "claude-code"
 # task_base = "main"
 # Reviewers are Claude Code headless unless [orchestration.routes] sends
 # rev/sec to "codex" (the #351 opt-in). A Codex reviewer can read the whole
-# disk and its report is posted on the PR, so prefer Claude here.
+# disk and its report is posted on the PR, so prefer Claude here; see #358
+# for the open question of a trusted project .codex/config.toml.
 
 # --- Release-phase facts (what "done" requires in THIS repo) ---
 [release]
