@@ -13,6 +13,7 @@ Feeds `dispatch_agent.py` synthetic fixtures and asserts:
   * Timeout handling and error reporting
   * Dry-run mode and JSON serialization contract
   * Read-only roles never route to antigravity; fail closed when no enforcing harness (#323)
+  * Detached `start`/`wait` jobs against a real stub harness subprocess (#352)
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,7 +40,14 @@ from dispatch_agent import (  # noqa: E402
     ROLE_TO_AGENT,
     ReadOnlyRoutingError,
     UnknownRoleError,
+    _validate_spec,
+    build_codex_readonly_prompt,
     build_harness_command,
+    codex_readonly_opt_in,
+    is_forbidden_readonly_route,
+    load_codex_persona,
+    prepare_dispatch,
+    resolve_route_detailed,
     detect_native_harness,
     dispatch,
     main as dispatch_main,
@@ -103,9 +112,17 @@ def test_command_generation() -> None:
             check(True, f"antigravity command for read-only '{r}' raises")
 
     # 3. copilot
-    for r in ["dev", "sre", "design", "sec", "rev", "research"]:
+    for r in ["dev", "sre", "design"]:
         cmd = build_harness_command("copilot", r, prompt)
         check(cmd == ["copilot", "--prompt", prompt], f"copilot command for role '{r}': {cmd}")
+    # Read-only roles never get a copilot command either: one shared #323
+    # predicate (is_forbidden_readonly_route) now backs every call site (#352).
+    for r in ["sec", "rev", "research", "bulk-reader"]:
+        try:
+            build_harness_command("copilot", r, prompt)
+            check(False, f"copilot command for read-only '{r}' should raise")
+        except ReadOnlyRoutingError:
+            check(True, f"copilot command for read-only '{r}' raises")
 
     # 4. Codex writers use an explicit sandbox; read-only roles are routed away.
     for r in ["dev", "sre", "design"]:
@@ -743,6 +760,265 @@ def test_read_only_roles_fail_closed() -> None:
     check("#323" not in err, "no #323 warning for claude-code dispatch")
 
 
+# Literal, not imported: a drift in the shipped profile must fail this test (#351).
+_CODEX_RO_PROFILE = [
+    "-c", 'default_permissions="marc_readonly"',
+    "-c", 'permissions.marc_readonly.filesystem={":root"="read"}',
+    "-c", "permissions.marc_readonly.network.enabled=true",
+]
+_CODEX_FORBIDDEN_FLAGS = ("--dangerously-bypass-approvals-and-sandbox", "--full-auto",
+                          "workspace-write", "danger-full-access", "--worktree", "--sandbox",
+                          "--approve-for-me", "--add-dir")
+
+
+def test_codex_readonly_opt_in() -> None:
+    print("\n--- Test: opt-in Codex read-only reviewers (#351) ---")
+    prompt = "Review PR #42"
+    ro = ["sec", "security", "rev", "review", "research", "bulk-reader"]
+
+    # 1. Default (no opt-in): every read-only role still refuses on codex.
+    for r in ro:
+        check(is_forbidden_readonly_route(r, "codex"), f"'{r}' on codex forbidden without opt-in")
+        try:
+            build_harness_command("codex", r, prompt)
+            check(False, f"codex command for read-only '{r}' without opt-in should raise")
+        except ReadOnlyRoutingError:
+            check(True, f"codex command for read-only '{r}' without opt-in raises")
+    # bulk-reader never opts in; the opt-in never unlocks another non-enforcing harness.
+    check(is_forbidden_readonly_route("bulk-reader", "codex", True), "bulk-reader on codex forbidden even with opt-in")
+    for h in ("antigravity", "copilot"):
+        check(is_forbidden_readonly_route("rev", h, True), f"opt-in does not unlock '{h}'")
+    try:
+        build_harness_command("codex", "bulk-reader", prompt, codex_opt_in=True)
+        check(False, "bulk-reader codex command with opt-in should raise")
+    except ReadOnlyRoutingError:
+        check(True, "bulk-reader codex command with opt-in raises")
+
+    # 2. Opt-in: exact argv. -C <checkout>, fixed profile, effort pin from the
+    #    Codex descriptor, persona-first prompt. No forbidden flag anywhere.
+    # Effort pins come from the Codex agent descriptors, present in `core/`
+    # (agent-configs/codex) and the Codex plugin (agents/*.toml) only; this
+    # test also runs from the other harness copies, which ship none.
+    plugin = Path(HERE).parent
+    has_descriptors = (plugin / "agent-configs" / "codex").is_dir() or (plugin / "agents" / "review.toml").is_file()
+    efforts = {"rev": "high", "review": "high", "sec": "high", "security": "high", "research": "medium"}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        checkout = str(Path(tmpdir).resolve())
+        for r, effort in efforts.items():
+            agent = ROLE_TO_AGENT[r]
+            body, pins = load_codex_persona(agent)
+            want = {"model_reasoning_effort": effort} if has_descriptors else {}
+            check(pins == want, f"codex pins for '{r}': {pins}")
+            pin_args = ["-c", f'model_reasoning_effort="{effort}"'] if has_descriptors else []
+            cmd = build_harness_command("codex", r, prompt, codex_opt_in=True, cwd=tmpdir)
+            expected = (["codex", "exec", "-C", checkout] + _CODEX_RO_PROFILE + pin_args
+                        + [build_codex_readonly_prompt(r, agent, body, prompt)])
+            check(cmd == expected, f"opt-in codex argv for '{r}': {cmd[:12]}")
+            check(not any(f in a for a in cmd[:-1] for f in _CODEX_FORBIDDEN_FLAGS),
+                  f"opt-in codex argv for '{r}' carries no bypass/write flag")
+            p = cmd[-1]
+            check(f'<agent-definition name="{agent}">\n' in p and body in p,
+                  f"persona body for '{r}' prepended to the prompt")
+            check(p.index("<agent-definition") < p.index("Task:\n"), f"persona precedes the task for '{r}'")
+            check(p.endswith(f"Task:\n{prompt}"), f"task prompt last for '{r}'")
+            check("\nname: " not in body and not body.startswith("---"), f"front matter stripped for '{r}'")
+            has_verdict = "make the LAST line of your final response the verdict line" in p
+            check(has_verdict == (CANONICAL_ROLES[r] in ("rev", "sec")),
+                  f"verdict-last-line contract for '{r}': {has_verdict}")
+
+    # 3. A missing persona fails closed.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            load_codex_persona("review", plugin_dir=Path(tmpdir))
+            check(False, "missing persona should raise")
+        except ReadOnlyRoutingError:
+            check(True, "missing persona raises ReadOnlyRoutingError")
+
+    # 4. codex_readonly_opt_in only accepts the literal "codex" route.
+    check(codex_readonly_opt_in("sec", {"sec": "codex"}), "routes sec=codex opts in")
+    check(codex_readonly_opt_in("@REV", {"rev": "codex"}), "normalized @REV opts in")
+    for routes in ({}, None, {"sec": "auto"}, {"sec": "native"}, {"sec": "claude-code"}, {"rev": "codex"}):
+        check(not codex_readonly_opt_in("sec", routes), f"no opt-in for sec with routes {routes}")
+    check(not codex_readonly_opt_in("bulk-reader", {"bulk-reader": "codex"}), "bulk-reader never opts in")
+    check(not codex_readonly_opt_in("dev", {"dev": "codex"}), "writer roles are not read-only opt-ins")
+
+    # 5. Resolution: only the explicit team.toml route opts in.
+    env_cc = {"CLAUDE_PROJECT_DIR": "/x"}
+    env_codex = {"CODEX_PROJECT_DIR": "/x"}
+
+    def all_which(b):
+        return f"/bin/{b}"
+
+    def no_codex(b):
+        return None if b == "codex" else f"/bin/{b}"
+
+    def only_codex(b):
+        return "/bin/codex" if b == "codex" else None
+
+    def res(role, harness, toml_text, env, which):
+        """Returns (route_dict_or_None, exception_or_None)."""
+        with tempfile.TemporaryDirectory() as d:
+            t = None
+            if toml_text is not None:
+                t = Path(d) / "team.toml"
+                t.write_text(toml_text, encoding="utf-8")
+            out, _err, exc = _capture_stderr(resolve_route_detailed, role, harness, t, env, which)
+            return out or {}, exc
+
+    opt = '[orchestration.routes]\nsec = "codex"\nrev = "codex"\nresearch = "codex"\nbulk-reader = "codex"\n'
+    for env in (env_cc, env_codex):
+        for r in ("sec", "rev", "research"):
+            d, _ = res(r, "auto", opt, env, all_which)
+            check(d.get("harness") == "codex" and d.get("codex_readonly_opt_in") is True
+                  and not d.get("policy_reroute"),
+                  f"team.toml route codex opts '{r}' in (host {env}): {d.get('harness')}")
+            d, _ = res(r, "codex", opt, env, all_which)
+            check(d.get("harness") == "codex" and d.get("codex_readonly_opt_in") is True,
+                  f"--harness codex + team.toml route opts '{r}' in: {d.get('harness')}")
+        d, _ = res("bulk-reader", "auto", opt, env, all_which)
+        check(d.get("harness") == "claude-code" and d.get("policy_reroute"), "bulk-reader route codex re-routed")
+    for r in ("sec", "rev", "research"):
+        # --harness codex alone is NOT an opt-in.
+        for toml_text in (None, f'[orchestration.routes]\n{r} = "auto"\n'):
+            d, _ = res(r, "codex", toml_text, env_cc, all_which)
+            check(d.get("harness") == "claude-code" and d.get("policy_reroute")
+                  and not d.get("codex_readonly_opt_in"),
+                  f"--harness codex without team.toml opt-in re-routes '{r}': {d.get('harness')}")
+        # auto / host detection / matrix / native on a codex host never pick codex.
+        cases = [
+            ("auto", None, "codex host matrix"),
+            ("auto", f'[orchestration.routes]\n{r} = "native"\n', "route native on codex host"),
+            ("auto", f'[orchestration]\nmode = "native"\n[orchestration.routes]\n{r} = "codex"\n',
+             "native mode on codex host"),
+            ("native", opt, "--harness native on codex host"),
+            ("claude-code", opt, "explicit --harness claude-code"),
+        ]
+        for harness, toml_text, label in cases:
+            d, _ = res(r, harness, toml_text, env_codex, all_which)
+            check(d.get("harness") == "claude-code", f"{label} keeps '{r}' on claude-code: {d.get('harness')}")
+        # Fallbacks never pick codex: codex missing -> claude-code; nothing enforcing -> refuse.
+        d, _ = res(r, "auto", opt, env_codex, no_codex)
+        check(d.get("harness") == "claude-code" and d.get("cli_fallback") and not d.get("codex_readonly_opt_in"),
+              f"opted-in '{r}' with codex missing falls back to claude-code")
+        d, exc = res(r, "auto", None, env_codex, only_codex)
+        check(isinstance(exc, ReadOnlyRoutingError),
+              f"'{r}' with only codex available and no opt-in refuses: {exc!r}")
+
+    # 6. prepare_dispatch + the `start` job-spec re-check (#352 SEC-1) re-derive
+    #    the opt-in from team.toml, never from the spec's own field.
+    with tempfile.TemporaryDirectory() as d:
+        t = Path(d) / "team.toml"
+        t.write_text(opt, encoding="utf-8")
+        prepared, _err, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", False, str(t),
+                                              env_cc, all_which, Path(d))
+        check(exc is None and prepared["command"][:4] == ["codex", "exec", "-C", str(Path(d).resolve())],
+              f"prepared opt-in command: {(prepared or {}).get('command', [])[:4]} {exc!r}")
+        spec = {"prompt": prompt, "cwd": str(Path(d).resolve()), "prepared": prepared}
+        _r, _e, exc = _capture_stderr(_validate_spec, spec)
+        check(exc is None, f"job spec re-check accepts the opted-in codex reviewer: {exc!r}")
+        prepared["codex_readonly_opt_in"] = True  # a forged flag must not matter
+        t.write_text('[orchestration.routes]\nrev = "auto"\n', encoding="utf-8")
+        _r, _e, exc = _capture_stderr(_validate_spec, spec)
+        check(isinstance(exc, ReadOnlyRoutingError), f"re-check refuses once team.toml drops the opt-in: {exc!r}")
+        # REV-2: forged native mode + codex. The re-check re-reads `mode` too.
+        t.write_text('[orchestration]\nmode = "native"\n[orchestration.routes]\nrev = "codex"\n',
+                     encoding="utf-8")
+        _r, _e, exc = _capture_stderr(_validate_spec, spec)
+        check(isinstance(exc, ReadOnlyRoutingError), f"re-check refuses native mode + codex spec: {exc!r}")
+        # REV-2: the spec's recorded team_toml path is not trusted; only the
+        # team.toml discovered from the spec cwd counts.
+        with tempfile.TemporaryDirectory() as other:
+            forged = Path(other) / "team.toml"
+            forged.write_text(opt, encoding="utf-8")
+            t.write_text('[orchestration.routes]\nrev = "auto"\n', encoding="utf-8")
+            prepared["team_toml"] = str(forged)
+            _r, _e, exc = _capture_stderr(_validate_spec, spec)
+            check(isinstance(exc, ReadOnlyRoutingError),
+                  f"re-check ignores a spec team_toml outside the checkout: {exc!r}")
+            # REV-7: one rule for sync dispatch and `start` (both go through
+            # prepare_dispatch): an opt-in counts only from the team.toml
+            # discovered from the checkout. Any other --team-toml is refused,
+            # outside the checkout or inside it.
+            empty = Path(other) / "checkout"
+            empty.mkdir()
+            alt = Path(d) / "alt.toml"
+            alt.write_text(opt, encoding="utf-8")
+            for label, toml_arg, where in (("outside", str(forged), empty),
+                                           ("inside (alt.toml)", str(alt), Path(d))):
+                for dry in (True, False):
+                    pre, _e, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", dry, toml_arg,
+                                                   env_cc, all_which, where)
+                    check(exc is None and pre.get("exit_code") == 2 and pre.get("command") == []
+                          and pre.get("harness") is None,
+                          f"--team-toml {label} opt-in refused (dry_run={dry}): {pre.get('exit_code')} {exc!r}")
+                # dispatch() takes no cwd: run it from `where`, so "inside" really
+                # is inside the checkout (REV-9).
+                runner = MagicMock()
+                prev_cwd = os.getcwd()
+                os.chdir(str(where))
+                try:
+                    res_d, _e, exc = _capture_stderr(dispatch, "rev", prompt, "auto", 30.0, False, toml_arg,
+                                                     env_cc, all_which, runner)
+                finally:
+                    os.chdir(prev_cwd)
+                check(res_d is not None and res_d["exit_code"] == 2 and not runner.called,
+                      f"sync dispatch refuses a --team-toml {label} opt-in without running anything")
+            # The discovered team.toml passed explicitly is the same file: allowed.
+            t.write_text(opt, encoding="utf-8")
+            pre, _e, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", True, str(t),
+                                           env_cc, all_which, Path(d))
+            check(exc is None and pre.get("harness") == "codex",
+                  f"--team-toml naming the discovered file keeps the opt-in: {pre.get('harness')} {exc!r}")
+            # REV-9 positive: sync dispatch() from a checkout whose own team.toml
+            # opts in runs the fixed Codex reviewer argv.
+            runner = MagicMock(return_value=subprocess.CompletedProcess([], 0, "verdict: PASS\n", ""))
+            prev_cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                res_d, _e, exc = _capture_stderr(dispatch, "rev", prompt, "auto", 30.0, False, None,
+                                                 env_cc, all_which, runner)
+            finally:
+                os.chdir(prev_cwd)
+            ran = runner.call_args[0][0] if runner.called else []
+            check(exc is None and res_d["exit_code"] == 0 and res_d["harness"] == "codex"
+                  and ran[:4] == ["codex", "exec", "-C", str(Path(d).resolve())]
+                  and ran[4:10] == _CODEX_RO_PROFILE,
+                  f"sync dispatch from an opted-in checkout runs codex: {ran[:4]} {exc!r}")
+
+    # REV-3: prepare_dispatch discovers team.toml from `cwd`, not the process cwd.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "team.toml").write_text(opt, encoding="utf-8")
+        prepared, _err, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", True, None,
+                                              env_cc, all_which, Path(d))
+        check(exc is None and prepared.get("harness") == "codex"
+              and prepared["command"][3] == str(Path(d).resolve()),
+              f"team.toml discovered from cwd={d}, not {os.getcwd()}: {prepared.get('harness')} {exc!r}")
+
+    # SEC-3: the effort pin is allowlisted before it reaches the `-c` TOML value.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "agents").mkdir()
+        (Path(d) / "agents" / "review.md").write_text("---\nname: review\n---\nbody\n", encoding="utf-8")
+        for bad in ('high" -c sandbox_mode="danger-full-access', "turbo", ""):
+            (Path(d) / "agents" / "review.toml").write_text(
+                f"model_reasoning_effort = '{bad}'\n", encoding="utf-8")
+            try:
+                body, pins = load_codex_persona("review", plugin_dir=Path(d))
+                check(bad == "" and pins == {}, f"effort {bad!r} rejected or ignored: {pins}")
+            except ReadOnlyRoutingError:
+                check(bad != "", f"effort {bad!r} rejected")
+        for good in ("minimal", "low", "medium", "high", "xhigh"):
+            (Path(d) / "agents" / "review.toml").write_text(
+                f'model_reasoning_effort = "{good}"\n', encoding="utf-8")
+            check(load_codex_persona("review", plugin_dir=Path(d))[1] == {"model_reasoning_effort": good},
+                  f"effort {good!r} accepted")
+        (Path(d) / "agents" / "review.toml").write_text('model = "--full-auto"\n', encoding="utf-8")
+        try:
+            load_codex_persona("review", plugin_dir=Path(d))
+            check(False, "a model pin that parses as a flag should raise")
+        except ReadOnlyRoutingError:
+            check(True, "a model pin that parses as a flag raises")
+
+
 def test_role_normalization_fail_closed() -> None:
     """Regression for #323 review: near-miss role spellings can't bypass the guard."""
     print("\n--- Test: role normalization and unknown-role rejection (#323) ---")
@@ -788,6 +1064,393 @@ def test_role_normalization_fail_closed() -> None:
     check(exc is None and code == 2, f"CLI main() exits 2 for unknown role (got {code}, {exc!r})")
 
 
+SCRIPT = os.path.join(HERE, "dispatch_agent.py")
+
+# A real, short-lived stub harness CLI (#352): the detached runner execs it, so
+# detachment is exercised for real. Behavior comes from the prompt (last argv):
+# "sleep=<s> exit=<n> pidfile=<path> marker=<path>".
+_STUB_HARNESS = """\
+import os, sys, time
+opts = dict(t.split("=", 1) for t in sys.argv[-1].split() if "=" in t)
+for key in ("pidfile", "marker"):
+    if key in opts:
+        with open(opts[key], "w") as f:
+            f.write(str(os.getpid()))
+time.sleep(float(opts.get("sleep", "0")))
+print("stub-report: done")
+sys.exit(int(opts.get("exit", "0")))
+"""
+
+
+def _make_stub_bin(bin_dir: Path, names: List[str]) -> None:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    git = shutil.which("git")
+    if git:
+        os.symlink(git, bin_dir / "git")
+    for name in names:
+        p = bin_dir / name
+        p.write_text(f"#!{sys.executable}\n" + _STUB_HARNESS, encoding="utf-8")
+        p.chmod(0o755)
+
+
+def _job_env(bin_dir: Path) -> Dict[str, str]:
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("CLAUDE_", "COPILOT_", "AGY_", "ANTIGRAVITY_", "CODEX_"))
+           and k not in ("PLUGIN_ROOT", "XDG_STATE_HOME")}
+    env["PATH"] = str(bin_dir)
+    return env
+
+
+def _cli(args: List[str], cwd: Path, env: Dict[str, str], timeout: float = 90) -> "subprocess.CompletedProcess[str]":
+    return subprocess.run([sys.executable, SCRIPT] + args, cwd=str(cwd), env=env,
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def _lines(out: str) -> List[Dict[str, Any]]:
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+
+def _kill_group(pid: int) -> None:
+    import signal
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def _pid_gone(pid: int, within: float) -> bool:
+    import time as _time
+    deadline = _time.monotonic() + within
+    while _time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return True
+        stat = Path(f"/proc/{pid}/stat")
+        try:
+            if stat.read_text().rsplit(")", 1)[-1].split()[0] == "Z":
+                return True
+        except (OSError, IndexError):
+            pass
+        _time.sleep(0.1)
+    return False
+
+
+def test_start_wait_jobs() -> None:
+    """start/wait detached jobs with a real stub subprocess (#352)."""
+    import signal
+    import time as _time
+    started_pids: List[int] = []
+    harness_pids: List[int] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            _start_wait_cases(Path(tmp), started_pids, harness_pids, signal, _time)
+        finally:
+            # Always reap detached runners and stub harnesses, even when a check failed (REV-11).
+            for pid in started_pids + harness_pids:
+                _kill_group(pid)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+
+
+def _start_wait_cases(tmp_p: Path, started_pids: List[int], harness_pids: List[int],
+                      signal: Any, _time: Any) -> None:
+    repo = tmp_p / "repo"
+    repo.mkdir()
+    bin_dir = tmp_p / "bin"
+    _make_stub_bin(bin_dir, ["claude", "copilot"])
+    env = _job_env(bin_dir)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+    common = Path(subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-common-dir"],
+                                 capture_output=True, text=True, env=env).stdout.strip())
+    jobs = (repo / common if not common.is_absolute() else common).resolve() / "marc" / "jobs"
+
+    def start(prompt: str, *extra: str, role: str = "dev") -> Dict[str, Any]:
+        r = _cli(["start", "--role", role, "--harness", "claude-code", *extra, "--prompt", prompt], repo, env)
+        out = _lines(r.stdout)
+        if out and "pid" in out[0]:
+            started_pids.append(out[0]["pid"])
+        check(r.returncode == 0 and len(out) == 1, f"start {prompt!r} exits 0 (got {r.returncode}, {r.stderr!r})")
+        return out[0] if out else {"job_id": "missing", "pid": 0, "result_path": "/nonexistent"}
+
+    # start returns before the child finishes, with a compact JSON line.
+    t0 = _time.monotonic()
+    job = start("sleep=8 exit=0")
+    elapsed = _time.monotonic() - t0
+    check(set(job) == {"job_id", "pid", "role", "harness", "result_path"},
+          f"start prints one compact JSON line with the 5 fields (got {job!r})")
+    check(elapsed < 6, f"start returns well before the 8s child finishes ({elapsed:.2f}s)")
+    check(not Path(job["result_path"]).exists(), "no result file yet right after start (child still running)")
+    check(Path(job["result_path"]).parent.parent == jobs,
+          "job state lives under $(git rev-parse --git-common-dir)/marc/jobs")
+    check(not any(p.name.startswith(".tmp-") for p in jobs.iterdir()), "no staging dir left after start")
+
+    # wait --timeout returns the still-running code with status running.
+    r = _cli(["wait", job["job_id"], "--timeout", "0.5"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 75 and out and out[0]["status"] == "running",
+          f"wait --timeout on a live job exits 75 with status running (got {r.returncode}, {r.stdout!r})")
+
+    # Liveness does not depend on pid visibility (REV-1): with the stored pid
+    # replaced by one that does not exist, the held lock still reads running.
+    meta_path = jobs / job["job_id"] / "job.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["pid"] = 2 ** 22 + 4321
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    r = _cli(["wait", job["job_id"], "--timeout", "0.5"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 75 and out and out[0]["status"] == "running",
+          f"held lock reads running even when the pid cannot be looked up (got {r.returncode}, {r.stdout!r})")
+
+    # --store lets a caller outside the clone find the job (REV-10).
+    r = _cli(["wait", job["job_id"], "--timeout", "0.2", "--store", str(jobs)], tmp_p, env)
+    check(r.returncode == 75, f"wait --store works from outside the repo (got {r.returncode}, {r.stderr!r})")
+
+    # wait blocks until done and returns 0; output is compact.
+    r = _cli(["wait", job["job_id"], "--timeout", "60"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 0 and out and out[0]["status"] == "succeeded" and out[0]["exit_code"] == 0,
+          f"wait blocks until the job succeeds and exits 0 (got {r.returncode}, {r.stdout!r})")
+    check(bool(out) and set(out[0]) == {"job_id", "status", "exit_code", "duration_sec", "result_path"},
+          "wait summary carries only the compact fields")
+    check("command" not in r.stdout and "stub-report" not in r.stdout,
+          "wait never prints command/command_str or full stdout")
+    full = json.loads(Path(job["result_path"]).read_text(encoding="utf-8"))
+    check(full.get("success") is True and "stub-report: done" in full.get("stdout", "")
+          and full.get("command", [None])[0] == "claude",
+          "result file holds the full dispatch() result dict")
+    check(not any(p.name.endswith(".tmp") for p in Path(job["result_path"]).parent.iterdir()),
+          "atomic write leaves no temp file behind")
+
+    # A failing child reports failed with its non-zero exit.
+    fail_job = start("exit=3")
+    r = _cli(["wait", fail_job["job_id"], "--timeout", "60"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 1 and out and out[0]["status"] == "failed" and out[0]["exit_code"] == 3,
+          f"failing child reports failed with exit 3, wait exits 1 (got {r.returncode}, {r.stdout!r})")
+
+    # Harness timeout reports timed_out.
+    to_job = start("sleep=20", "--timeout", "0.5")
+    r = _cli(["wait", to_job["job_id"], "--timeout", "60"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 1 and out and out[0]["status"] == "timed_out",
+          f"harness timeout reports timed_out (got {r.returncode}, {r.stdout!r})")
+    to_full = json.loads(Path(to_job["result_path"]).read_text(encoding="utf-8"))
+    check(to_full.get("timed_out") is True, "timeout is a structured timed_out field, not an error string")
+
+    # SIGKILL on the runner alone: no result -> lost (no hang), and the harness
+    # child does not outlive it (REV-9, PR_SET_PDEATHSIG on Linux).
+    pidfile = tmp_p / "lost.pid"
+    lost_job = start(f"sleep=60 pidfile={pidfile}")
+    for _ in range(100):
+        if pidfile.exists() and pidfile.read_text():
+            break
+        _time.sleep(0.1)
+    harness_pid = int(pidfile.read_text() or 0) if pidfile.exists() else 0
+    if harness_pid:
+        harness_pids.append(harness_pid)
+    os.kill(lost_job["pid"], signal.SIGKILL)
+    t0 = _time.monotonic()
+    r = _cli(["wait", lost_job["job_id"], "--timeout", "30"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 1 and out and out[0]["status"] == "lost",
+          f"killed runner with no result reports lost (got {r.returncode}, {r.stdout!r})")
+    check(_time.monotonic() - t0 < 20, "lost detection does not wait out the timeout")
+    if sys.platform.startswith("linux"):
+        check(harness_pid > 0 and _pid_gone(harness_pid, 10),
+              "harness child dies with a SIGKILLed runner (PDEATHSIG)")
+
+    # SIGTERM on the runner: harness group killed, result written as failed.
+    pidfile = tmp_p / "term.pid"
+    term_job = start(f"sleep=60 pidfile={pidfile}")
+    for _ in range(100):
+        if pidfile.exists() and pidfile.read_text():
+            break
+        _time.sleep(0.1)
+    harness_pid = int(pidfile.read_text() or 0) if pidfile.exists() else 0
+    if harness_pid:
+        harness_pids.append(harness_pid)
+    os.kill(term_job["pid"], signal.SIGTERM)
+    r = _cli(["wait", term_job["job_id"], "--timeout", "30"], repo, env)
+    out = _lines(r.stdout)
+    check(r.returncode == 1 and out and out[0]["status"] == "failed",
+          f"SIGTERMed runner records a failed result (got {r.returncode}, {r.stdout!r})")
+    check(harness_pid > 0 and _pid_gone(harness_pid, 10), "runner kills the harness group on SIGTERM")
+
+    # --any over two jobs returns when the first finishes.
+    fast = start("sleep=0.2")
+    slow = start("sleep=60")
+    r = _cli(["wait", fast["job_id"], slow["job_id"], "--any", "--timeout", "60"], repo, env)
+    out = {s["job_id"]: s for s in _lines(r.stdout)}
+    check(r.returncode == 0 and out.get(fast["job_id"], {}).get("status") == "succeeded"
+          and out.get(slow["job_id"], {}).get("status") == "running",
+          f"--any returns 0 once one job succeeds, the other still running (got {r.returncode}, {r.stdout!r})")
+    _kill_group(slow["pid"])
+
+    # Unknown / malformed job ids are a usage error.
+    r = _cli(["wait", "../../etc", "--timeout", "0"], repo, env)
+    check(r.returncode == 2, f"wait rejects a malformed job id with exit 2 (got {r.returncode})")
+
+    # SEC-1: the runner re-applies the #323 guard and the routed command
+    # before exec, and only accepts job dirs inside the store.
+    marker = tmp_p / "tampered.marker"
+    for name, job_id, prepared in (
+        ("read-only role on copilot", "20000101-000000-aaaaaaaa",
+         {"role": "rev", "harness": "copilot", "command": ["copilot", "--prompt", f"marker={marker}"]}),
+        ("command not the routed one", "20000101-000000-bbbbbbbb",
+         {"role": "dev", "harness": "claude-code", "command": ["claude", "-p", f"marker={marker}"]}),
+    ):
+        jdir = jobs / job_id
+        jdir.mkdir()
+        (jdir / "lock").write_text("")
+        (jdir / "spec.json").write_text(json.dumps({"job_id": job_id, "timeout": 30,
+                                                     "prompt": f"marker={marker}", "prepared": prepared}))
+        r = _cli(["_run", str(jdir)], repo, env)
+        res = json.loads((jdir / "result.json").read_text()) if (jdir / "result.json").exists() else {}
+        check(r.returncode == 0 and res.get("status") == "failed" and not marker.exists(),
+              f"runner refuses a tampered spec ({name}) without executing it (got {res.get('error')!r})")
+    outside = tmp_p / "outside-job"
+    outside.mkdir()
+    r = _cli(["_run", str(outside)], repo, env)
+    check(r.returncode == 2 and "not inside the job store" in r.stderr,
+          f"runner refuses a job dir outside the store (got {r.returncode}, {r.stderr!r})")
+
+    # Read-only roles routed to any forbidden harness fail closed, on both the
+    # synchronous and the start path (#323), through one shared predicate.
+    import dispatch_agent as _da
+    for h in sorted(NON_ENFORCING_HARNESSES):
+        for role in ("rev", "sec", "research", "bulk-reader"):
+            check(_da.is_forbidden_readonly_route(role, h), f"{role} on {h} is a forbidden route")
+    check(not _da.is_forbidden_readonly_route("dev", "copilot"), "writer on copilot is allowed")
+    check(_da.is_forbidden_readonly_route("bulk-reader", "native"), "bulk-reader off claude-code is forbidden")
+    check(not _da.is_forbidden_readonly_route("rev", "claude-code"), "read-only on claude-code is allowed")
+    ro_bin = tmp_p / "ro-bin"
+    _make_stub_bin(ro_bin, ["codex", "copilot", "agy"])  # no `claude` on PATH
+    before = sorted(p.name for p in jobs.iterdir())
+    for h in ("antigravity", "copilot", "codex"):
+        for role in ("rev", "bulk-reader"):
+            r = _cli(["start", "--role", role, "--harness", h, "--prompt", "x"], repo, _job_env(ro_bin))
+            check(r.returncode == 2 and r.stdout.strip() == "" and "#323" in r.stderr,
+                  f"start: read-only {role} to {h} without claude fails closed (got {r.returncode}, {r.stderr!r})")
+            r = _cli(["--role", role, "--harness", h, "--prompt", "x", "--json"], repo, _job_env(ro_bin))
+            res = json.loads(r.stdout) if r.stdout.strip() else {}
+            check(r.returncode == 2 and res.get("command") == [] and res.get("harness") is None,
+                  f"sync: read-only {role} to {h} without claude fails closed (got {r.returncode})")
+    check(sorted(p.name for p in jobs.iterdir()) == before, "a refused start creates no job")
+
+    # An unwritable job store is a clean exit 2, not a traceback (REV-1).
+    if os.geteuid() != 0:
+        jobs.chmod(0o500)
+        try:
+            r = _cli(["start", "--role", "dev", "--harness", "claude-code", "--prompt", "x"], repo, env)
+        finally:
+            jobs.chmod(0o700)
+        check(r.returncode == 2 and "Traceback" not in r.stderr and "[mARC dispatch] Error" in r.stderr,
+              f"unwritable job store exits 2 with a one-line error (got {r.returncode}, {r.stderr!r})")
+
+    # SEC-7: a FIFO planted at `lock` cannot hang wait; it reads as lost.
+    fifo_id = "20000101-000000-cccccccc"
+    (jobs / fifo_id).mkdir()
+    os.mkfifo(str(jobs / fifo_id / "lock"))
+    t0 = _time.monotonic()
+    try:
+        r = _cli(["wait", fifo_id, "--timeout", "2"], repo, env, timeout=20)
+        out = _lines(r.stdout)
+        check(r.returncode == 1 and out and out[0]["status"] == "lost" and _time.monotonic() - t0 < 15,
+              f"FIFO at lock reads lost within --timeout (got {r.returncode}, {r.stdout!r})")
+    except subprocess.TimeoutExpired:
+        check(False, "wait hung on a FIFO at lock")
+
+    # A start that fails before publishing leaves no `.tmp-<id>` staging dir.
+    saved_write, saved_path = _da._write_json_atomic, os.environ.get("PATH", "")
+    before = sorted(p.name for p in jobs.iterdir())
+    raised = None
+
+    def _failing_write(path: Path, data: Dict[str, Any]) -> None:
+        raise OSError(28, "No space left on device")
+    try:
+        os.environ["PATH"] = str(bin_dir)
+        _da._write_json_atomic = _failing_write
+        try:
+            _da.start_job("dev", "x", "claude-code", cwd=repo)
+        except _da.JobStoreError as e:
+            raised = e
+    finally:
+        _da._write_json_atomic = saved_write
+        os.environ["PATH"] = saved_path
+    check(raised is not None and "cannot create job" in str(raised)
+          and sorted(p.name for p in jobs.iterdir()) == before,
+          f"failed staging write removes the staging dir (got {raised!r})")
+
+    # Termination signals outside the harness run are deferred, not raised,
+    # so the final result.json write cannot be interrupted (#352 review).
+    saved_pgid, saved_pending = _da._HARNESS_PGID, _da._TERM_PENDING
+    try:
+        _da._HARNESS_PGID = None
+        try:
+            _da._on_term_signal(15, None)
+            check(_da._TERM_PENDING == 15, "signal outside the harness run is recorded, not raised")
+        except _da._RunnerTerminated:
+            check(False, "signal outside the harness run must not raise")
+        _da._HARNESS_PGID = 999999
+        try:
+            _da._on_term_signal(15, None)
+            check(False, "signal during the harness run should raise")
+        except _da._RunnerTerminated:
+            check(True, "signal during the harness run interrupts it")
+    finally:
+        _da._HARNESS_PGID, _da._TERM_PENDING = saved_pgid, saved_pending
+
+    # wait parses a finished job's result once, not on every poll.
+    calls: Dict[str, int] = {}
+    saved_summary = _da.job_summary
+
+    def _counting_summary(job_id: str, root: Path) -> Dict[str, Any]:
+        calls[job_id] = calls.get(job_id, 0) + 1
+        return saved_summary(job_id, root)
+    slow2 = start("sleep=60")
+    try:
+        _da.job_summary = _counting_summary
+        code, _ = _da.wait_jobs([job["job_id"], slow2["job_id"]], timeout=1.5, root=jobs)
+    finally:
+        _da.job_summary = saved_summary
+        _kill_group(slow2["pid"])
+    check(code == 75 and calls.get(job["job_id"]) == 1 and calls.get(slow2["job_id"], 0) > 1,
+          f"finished summaries are cached across polls (calls={calls})")
+
+    # A start that fails after publishing the job leaves nothing behind.
+    saved_exe, saved_path = sys.executable, os.environ.get("PATH", "")
+    before = sorted(p.name for p in jobs.iterdir())
+    raised = None
+    try:
+        os.environ["PATH"] = str(bin_dir)
+        _da.sys.executable = str(tmp_p / "no-such-python")  # Popen of the runner fails
+        try:
+            _da.start_job("dev", "x", "claude-code", cwd=repo)
+        except _da.JobStoreError as e:
+            raised = e
+    finally:
+        _da.sys.executable = saved_exe
+        os.environ["PATH"] = saved_path
+    check(raised is not None and "failed to spawn runner" in str(raised)
+          and sorted(p.name for p in jobs.iterdir()) == before,
+          f"failed spawn says so and removes the published job (got {raised!r})")
+
+    # Backward-compatible no-subcommand invocation still runs synchronously.
+    r = _cli(["--role", "dev", "--harness", "claude-code", "--prompt", "exit=0", "--json"], repo, env)
+    check(r.returncode == 0 and json.loads(r.stdout).get("success") is True,
+          "no-subcommand invocation behaves as before")
+
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                            capture_output=True, text=True, env=env)
+    check(status.returncode == 0 and status.stdout == "",
+          f"git status stays clean after start/wait (got {status.stdout!r})")
+
+
 def main() -> int:
     test_command_generation()
     test_default_hybrid_matrix()
@@ -799,6 +1462,8 @@ def main() -> int:
     test_json_and_cli_interface()
     test_read_only_roles_fail_closed()
     test_role_normalization_fail_closed()
+    test_codex_readonly_opt_in()
+    test_start_wait_jobs()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")

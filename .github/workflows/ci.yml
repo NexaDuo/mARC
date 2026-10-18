@@ -54,6 +54,29 @@ jobs:
           export PATH="$PWD/scripts/ci-codex/node_modules/.bin:$PATH"
           codex --version
           python3 scripts/test_codex_harness.py --cli
+      # Issue #351: the opt-in Codex reviewer profile (fs read-only + network)
+      # must block every write and `git commit` and allow network, under
+      # `codex sandbox` with the exact profile dispatch_agent.py passes to
+      # `codex exec`. No model, no secret. Fails if a Codex upgrade changes the
+      # matrix; exits 2 (also a failure) if the sandbox cannot start here.
+      #
+      # Ubuntu 24.04 runners ship kernel.apparmor_restrict_unprivileged_userns=1,
+      # which makes Codex's bubblewrap sandbox fail to start ("bwrap: setting
+      # up uid map: Permission denied"). Lift it on this ephemeral runner only,
+      # so the probe tests the profile instead of the runner's AppArmor policy.
+      - name: Allow unprivileged user namespaces for the Codex sandbox
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Codex read-only reviewer boundary probe (no model)
+        run: |
+          export PATH="$PWD/scripts/ci-codex/node_modules/.bin:$PATH"
+          python3 scripts/probe_codex_readonly.py
+      # The owner-only --exec mode must fail closed; tested against a stub
+      # `codex` (no model call, temp HOME/CODEX_HOME).
+      - name: Probe --exec fail-closed self-test (stub codex)
+        run: python3 scripts/test_probe_codex_readonly.py
 
   structural:
     name: Tier 1 — structural
@@ -463,6 +486,23 @@ jobs:
           shellcheck scripts/test_benchmark_loss_accounting.sh
           bash scripts/test_benchmark_loss_accounting.sh
 
+      - name: changelog-section.sh — regex injection test
+        run: |
+          shellcheck scripts/test_changelog_section.sh
+          bash scripts/test_changelog_section.sh
+
+      # 6a1c2. Issue #346: the Codex arm. Parser self-test on synthetic
+      #        rollouts (cumulative vs per-request counters, duplicates,
+      #        `compacted`, poll turns, specialist role/round) plus the
+      #        script's gating matrix and an end-to-end run against fake
+      #        `codex`/`claude` binaries. The paid path is never reachable
+      #        here: it needs LOCAL_RUN=true + an explicit real_run dispatch.
+      - name: run_token_benchmark.sh — Codex arm self-test (free path only)
+        run: |
+          shellcheck scripts/test_run_token_benchmark_codex.sh
+          python3 scripts/test_codex_rollout_tokens.py
+          bash scripts/test_run_token_benchmark_codex.sh
+
       # 6a1d. Issue #295: scripts/benchmark_report.py must surface each
       #       (task, arm) cell's sample count against --iterations and fail
       #       loudly (non-zero exit) rather than silently reporting a median
@@ -829,6 +869,10 @@ jobs:
       - name: cross-harness dispatch self-test
         run: python3 core/scripts/test_dispatch_agent.py
 
+      # 8c-task. Task pipeline self-test (issue #361): real temp git repo, fake agents.
+      - name: task pipeline self-test
+        run: python3 core/scripts/test_task_pipeline.py
+
       # 8c-review-trust. Regression test for operator association filtering (issue #216).
       - name: review trust filter self-test
         run: bash core/scripts/test_review_trust.sh
@@ -1080,7 +1124,7 @@ jobs:
           agy plugin install harnesses/antigravity/marc
 
           echo "Asserting plugin registration..."
-          agy plugin list | jq -e '.imports[] | select(.name=="marc")' > /dev/null
+          agy plugin list --json | jq -e '(.imports? // .)[] | select(.name=="marc")' > /dev/null
 
           echo "Asserting all seven components are registered..."
           CONFIG_DIR="$HOME/.gemini/config/plugins/marc"
