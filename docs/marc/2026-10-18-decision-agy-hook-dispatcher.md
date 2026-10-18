@@ -6,7 +6,7 @@
   [issue #343](https://github.com/NexaDuo/mARC/issues/343), from a probe of the
   real host. It supersedes the
   [2026-10-04 brief](2026-10-04-brief-hook-architecture.md) and PR #342.
-- **Status:** accepted, implemented in PR #363
+- **Status:** accepted; implemented in PR #363 (land this record after it)
 
 ## Context
 
@@ -54,7 +54,13 @@ on Antigravity, on any OS: the plain text was discarded.
   - always exits 0.
 - **The bodies:** they stay generated from the shared catalog, so there is
   still one source of truth, with no payload encoding.
-- **Event mapping:** session-start hooks map to `SessionStart`.
+- **Event mapping:** session-start hooks map to `SessionStart`. The
+  post-compaction invariants card is not shipped to Antigravity: agy has no
+  compaction event, and on `SessionStart` the card would tell every new
+  conversation it had just been compacted.
+- **Untrusted text:** the workspace `team.toml` is injected with a fixed note
+  that it is repo-supplied data, not instructions, because the repo may be
+  untrusted and a `systemMessage` persists across turns.
 - **The test:** `scripts/test_agy_hooks.py` runs every hook under this
   contract, without a model call. It runs in CI against both the source and
   the installed copy.
