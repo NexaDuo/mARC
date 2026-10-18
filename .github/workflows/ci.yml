@@ -865,6 +865,11 @@ jobs:
       - name: board_reconcile digest contract self-test
         run: python3 core/scripts/test_board_reconcile.py
 
+      # 8c-agy-hooks. Antigravity hook contract on the compiled source (issue #343):
+      #     no secret needed, the installed copy is checked again in Tier 2.
+      - name: Antigravity hook contract (source)
+        run: python3 scripts/test_agy_hooks.py
+
       # 8c-dispatch. Cross-harness dispatch self-test (issue #239).
       - name: cross-harness dispatch self-test
         run: python3 core/scripts/test_dispatch_agent.py
@@ -1162,12 +1167,11 @@ jobs:
 
           echo "Antigravity harness check: OK (plugin installed, all seven components registered, bundled scripts resolve against the installed copy). Hooks are asserted in the next step."
 
-      # Hooks (issue #167 AC#2, fixed by #173/#170, #197). harnesses/antigravity/marc/
-      # emits hooks.json at the plugin root ($CONFIG_DIR/hooks.json) per Antigravity
-      # plugin specification (#197), while referenced scripts live in hooks/. This step
-      # asserts against the INSTALLED copy, using Antigravity's own declared vars
-      # (compile.json: project_dir_env=AGY_PROJECT_DIR,
-      # plugin_root_env=AGY_PLUGIN_ROOT) and native named hook schema.
+      # Hooks (issue #167 AC#2, #173/#170, #197, #343). harnesses/antigravity/marc/
+      # emits hooks.json at the plugin root ($CONFIG_DIR/hooks.json); every
+      # command is `bash hooks/agy-hook.sh <id> <Event>` and the bodies live in
+      # hooks/agy/. This step runs them against the INSTALLED copy under the
+      # contract agy actually applies (scripts/test_agy_hooks.py).
       #
       # `continue-on-error` REMOVED (#170 AC#3): this assertion previously
       # went red because the shared hooks.json hardcoded Claude Code's
@@ -1175,7 +1179,7 @@ jobs:
       # commands. #173/#170 fixed that at the source (core/hooks/
       # hooks.spec.json renders each harness's own plugin_root_env), so this
       # assertion is now load-bearing like every other Tier 2 step.
-      - name: Tier 2 — Antigravity hook-resolution assertion (issue #167 AC#2, #170, #197)
+      - name: Tier 2 — Antigravity hook contract on the installed copy (issue #167 AC#2, #170, #197, #343)
         id: antigravity_hooks
         if: steps.antigravity_install.outcome == 'success'
         env:
@@ -1189,88 +1193,14 @@ jobs:
           test -d "$CONFIG_DIR/hooks" || { echo "::error::installed copy has no hooks/ directory — if hooks were genuinely removed from the harness, replace this assertion; do not silently drop coverage"; exit 1; }
           test -f "$HOOKS_JSON" || { echo "::error::hooks.json is missing at $HOOKS_JSON"; exit 1; }
 
-          echo "== assert hooks.json declares Antigravity's own confirmed-compatible trigger name =="
-          jq -e '."team-toml-dump".PreInvocation' "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json has no .team-toml-dump.PreInvocation entry — Antigravity native hooks schema requires named hook objects with PreInvocation/PostToolUse/Stop"; exit 1; }
+          echo "== assert hooks.json declares Antigravity's once-per-session trigger =="
+          jq -e '."team-toml-dump".SessionStart' "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json has no .team-toml-dump.SessionStart entry"; exit 1; }
 
-          echo "== assert every hook command's referenced script resolves to a real file UNDER ANTIGRAVITY'S OWN DECLARED ENV VARS (AGY_PLUGIN_ROOT / AGY_PROJECT_DIR per compile.json) — not Claude Code's =="
-
-          # Match quoted ${VAR...}/path references ending in ".sh" specifically
-          # — i.e. the actual hook-script invocation each command makes. This
-          # deliberately does NOT match the team.toml/team.config config-path
-          # lookups some commands also embed (that discovery path is #166's
-          # contested territory, out of scope here); anchoring on ".sh" keeps
-          # this assertion scoped to "does the hook's own script resolve". Not
-          # every hook command invokes an external script (one SessionStart
-          # entry is pure inline shell with no .sh reference) — that is a
-          # legitimate case, not a failure, so it is only counted, not flagged.
-          fail=0
-          total_refs=0
-          while IFS= read -r -d '' cmd; do
-            [ -z "$cmd" ] && continue
-            refs="$(grep -oE '"\$\{[A-Z_]+(:-[^}]*)?\}[^"]*\.sh"' <<< "$cmd")" || true
-            [ -z "$refs" ] && continue
-            while IFS= read -r ref; do
-              [ -z "$ref" ] && continue
-              total_refs=$((total_refs + 1))
-              path_expr="${ref#\"}"
-              path_expr="${path_expr%\"}"
-
-              # Resolve WITHOUT ever invoking a shell on file-derived content
-              # (no `bash -c`/eval). A crafted hooks.json command could embed
-              # shell metacharacters in this expression; refuse those outright
-              # rather than let them reach any interpreter. Only the two
-              # variables Antigravity itself declares (compile.json:
-              # plugin_root_env=AGY_PLUGIN_ROOT, project_dir_env=
-              # AGY_PROJECT_DIR) are substituted with real values — anything
-              # else (including CLAUDE_PLUGIN_ROOT/CLAUDE_PROJECT_DIR, which is
-              # exactly what the real hardcoded hooks.json uses) is an
-              # unexpected variable and is reported as a finding, not silently
-              # resolved.
-              case "$path_expr" in
-                *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*$'\n'*|*'>'*|*'<'*)
-                  echo "::error::hook script reference contains shell metacharacters and will not be evaluated — '$path_expr' (from command: $cmd) is refused outright rather than resolved, since injecting shell syntax into a hook-script path reference is itself a security finding"
-                  fail=1
-                  continue
-                  ;;
-              esac
-
-              if [[ "$path_expr" =~ ^\$\{([A-Z_]+)(:-([^}]*))?\}(.*)$ ]]; then
-                var_name="${BASH_REMATCH[1]}"
-                var_default="${BASH_REMATCH[3]}"
-                path_rest="${BASH_REMATCH[4]}"
-                case "$var_name" in
-                  AGY_PLUGIN_ROOT) var_value="$CONFIG_DIR" ;;
-                  AGY_PROJECT_DIR) var_value="$PWD" ;;
-                  *)
-                    echo "::error::hook script reference does NOT resolve under Antigravity's own declared env vars — '$path_expr' (from command: $cmd) references '\$$var_name', which Antigravity's compile.json does not declare (only AGY_PLUGIN_ROOT/AGY_PROJECT_DIR are expected). Antigravity does not set Claude-Code-only variables, so this reference cannot resolve at runtime. This is the tracked product defect: hooks/hooks.json (shared via the PR #80 symlink) still hardcodes CLAUDE_PLUGIN_ROOT with no fallback; COMPATIBILITY.md's own 'Action Needed' column says this env-var adaptation was required but it was never applied."
-                    fail=1
-                    continue
-                    ;;
-                esac
-                resolved="${var_value}${path_rest}"
-              else
-                echo "::error::hook script reference '$path_expr' (from command: $cmd) does not match the expected \${VAR}/path.sh or \${VAR:-default}/path.sh form — refusing to resolve"
-                fail=1
-                continue
-              fi
-
-              if [ -f "$resolved" ]; then
-                echo "OK: '$path_expr' (from command: $cmd) resolves to a real file ($resolved) under Antigravity's own env vars"
-              else
-                echo "::error::hook script reference does NOT resolve under Antigravity's own declared env vars — '$path_expr' (from command: $cmd) expands to '$resolved' (not a real file) when only AGY_PLUGIN_ROOT/AGY_PROJECT_DIR are set and no CLAUDE_PLUGIN_ROOT/CLAUDE_PROJECT_DIR are present (Antigravity does not set Claude-Code-only variables). This is the tracked product defect: hooks/hooks.json (shared via the PR #80 symlink) still hardcodes CLAUDE_PLUGIN_ROOT with no fallback; COMPATIBILITY.md's own 'Action Needed' column says this env-var adaptation was required but it was never applied."
-                fail=1
-              fi
-            done <<< "$refs"
-          done < <(jq --raw-output0 '.. | .command? // empty' "$HOOKS_JSON")
-
-          test "$total_refs" -gt 0 || { echo "::error::found no \${VAR}/path.sh hook-script references anywhere in installed hooks.json — this assertion would be vacuous"; exit 1; }
-          echo "Checked $total_refs hook-script reference(s)."
-
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::Antigravity hook-resolution assertion FAILED. This step has no continue-on-error (removed, #170 AC#3) — it is load-bearing and fails the job. This is a real regression in harnesses/antigravity/marc + harnesses/claude-code/marc/hooks, not a test bug — do not weaken this assertion to force a pass."
-            exit 1
-          fi
-          echo "Antigravity hook-resolution check: all hook commands resolve to real files under Antigravity's own declared env vars."
+          # Run every installed hook the way agy runs it (origin: #343): sh -c,
+          # cwd = plugin root, no AGY_* env, workspace only in the stdin JSON,
+          # a JSON object required on stdout. The old assertion here assumed
+          # agy exports AGY_PLUGIN_ROOT/AGY_PROJECT_DIR, which it does not.
+          python3 scripts/test_agy_hooks.py "$CONFIG_DIR"
 
       # Always-visible status for the Antigravity step above, regardless of
       # whether it ran, was skipped (fork PR — expected, honest SKIP), or
@@ -1299,7 +1229,7 @@ jobs:
             skipped) echo "Antigravity hook-resolution coverage: SKIPPED (install step did not succeed — see above)." ;;
             failure) {
                 echo "### :red_circle: Antigravity hook-resolution coverage: FAILED"
-                echo "Antigravity's compiled hooks.json (core/hooks/hooks.spec.json -> scripts/compile_prompts.py, #173/#170, #197) no longer resolves under Antigravity's own env vars. This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
+                echo "Antigravity's installed hooks no longer meet the agy hook contract (scripts/test_agy_hooks.py: plain dispatcher command, JSON on stdout, workspace team.toml found; #343). This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
               } >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "Antigravity hook-resolution coverage: outcome '${{ steps.antigravity_hooks.outcome }}' unrecognized." ;;
           esac

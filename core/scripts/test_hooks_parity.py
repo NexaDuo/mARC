@@ -83,7 +83,7 @@ def validate_hook_schema(harness: str, dialect: str, hooks_obj: dict) -> None:
             check(isinstance(events, dict), f"{harness}: hook '{hook_id}' maps to an event dict")
             for event_name, handlers in events.items():
                 check(
-                    event_name in {"PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop"},
+                    event_name in {"SessionStart", "PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop"},
                     f"{harness}: hook '{hook_id}' event '{event_name}' is a valid Antigravity event",
                 )
                 check(isinstance(handlers, list), f"{harness}: hook '{hook_id}' event '{event_name}' is a list")
