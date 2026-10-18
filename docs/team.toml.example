@@ -175,6 +175,44 @@ sec = "claude-code"
 rev = "claude-code"
 research = "claude-code"
 
+# --- Task pipeline (optional, OFF unless you uncomment it, origin: #361) ---
+# `dispatch_agent.py task` runs one task end to end: Codex implements, the
+# suite runs, @rev/@sec review headless, Codex fixes. It reads this section
+# from the MAIN clone's team.toml, so the branch it works on cannot change it.
+# Without task_suite_cmd it runs [validation] validation_command through the
+# shell. The suite runs code Codex just wrote, outside any sandbox, with
+# your rights (credential-looking environment variables are withheld, your
+# files are not): use it only where you would run that code yourself.
+# [task]
+# Argv list (no shell). Placeholders: {file} (one file, with task_suite_files),
+# {tmp} (an empty temp dir per run), {repo} (the main clone), {worktree}. A
+# shell string also works; it gets the same values only as environment
+# variables (MARC_TASK_FILE, MARC_TASK_TMP, MARC_TASK_REPO, MARC_TASK_WORKTREE),
+# never spliced into the command line. A bare program name is looked up on
+# the absolute PATH entries and a relative path is taken from the main clone,
+# never from the worktree Codex writes.
+# task_suite_cmd = ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "{file}", "--basetemp", "{tmp}"]
+# Run the suite command once per matching file (a large suite in one process
+# can grow to many GB). Omit to run it once.
+# task_suite_files = "tests/test_*.py"
+# Exit codes that count as passing (pytest exits 5 for a file with no tests).
+# task_suite_ok_codes = [0, 5]
+# Seconds per suite run before its whole process tree is killed.
+# task_suite_timeout = 1800
+# Told to Codex as the way to run focused tests (it never runs the full suite).
+# task_focused_hint = "`python -m pytest -q <files>`"
+# Paths the script commits; default the whole repo. `.github/` is never
+# committed or pushed, whatever this says.
+# task_commit_paths = ["src", "tests", "docs", "README.md"]
+# Globs deleted from the worktree before the suite runs and before committing.
+# task_scratch = [".test-tmp*"]
+# Branch the worktree starts from and the PR targets.
+# task_base = "main"
+# Reviewers are Claude Code headless unless [orchestration.routes] sends
+# rev/sec to "codex" (the #351 opt-in). A Codex reviewer can read the whole
+# disk and its report is posted on the PR, so prefer Claude here; see #358
+# for the open question of a trusted project .codex/config.toml.
+
 # --- Release-phase facts (what "done" requires in THIS repo) ---
 [release]
 # Does a real staging->prod pipeline exist? (true/false)
