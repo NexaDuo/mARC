@@ -65,6 +65,8 @@ practice).
 - [2026-09-08-brief-ai-memory-2-evaluation.md](2026-09-08-brief-ai-memory-2-evaluation.md) — research brief: architectural evaluation of `akitaonrails/ai-memory` 2.0 (OKF, in-process Candle embeddings, single-writer serialization, baton passing, and typed relations). Verdict CONFIRM: reaffirm #175 rejection of mandatory daemon dependency; borrow OKF frontmatter, static CI typed relation checks, and slot/baton conventions.
 - [2026-09-08-decision-ai-memory-2-reaffirmation.md](2026-09-08-decision-ai-memory-2-reaffirmation.md) — decision record: reaffirmation of Decision #175 — mARC does not adopt `akitaonrails/ai-memory` 2.0 as a dependency; adopt zero-dependency conventions natively.
 - [2026-10-08-decision-review-token-efficiency.md](2026-10-08-decision-review-token-efficiency.md) — decision record: review and dispatch token efficiency (conditional optional review passes, compact handoffs, git-computed re-review deltas).
+- [2026-10-04-brief-hook-architecture.md](2026-10-04-brief-hook-architecture.md) — research brief: hook-resolution architectures in other CLI plugin systems (#343). Superseded by the decision record below.
+- [2026-10-18-decision-agy-hook-dispatcher.md](2026-10-18-decision-agy-hook-dispatcher.md) — decision record: Antigravity hooks run as `bash hooks/agy-hook.sh <id> <Event>`, a dispatcher that follows the host contract probed on agy 1.3.5/1.3.2: `cmd /c`/`sh -c`, cwd = plugin root, no `AGY_*` env, workspace in stdin, JSON on stdout (#343, PR #363).
 
 ## Landing process (write policy)
 
