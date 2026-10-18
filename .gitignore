@@ -43,3 +43,10 @@ tmp/
 .serena/
 __pycache__/
 *.pyc
+
+# Codex benchmark results (paid local runs, #346). Numbers only, but never
+# swept into a commit by accident; review before copying anything to docs/marc/.
+/bench-results/
+/codex_*.jsonl
+/codex_manifest.json
+/codex_iterations.txt

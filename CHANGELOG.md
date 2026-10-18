@@ -8,6 +8,130 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Added
+
+- `dispatch_agent.py task` runs one implementation task end to end without
+  the operator in the loop (#361). It makes a worktree from `origin/<base>`.
+  Codex implements, the repo's suite runs (Codex fixes failures up to twice),
+  then the script commits, pushes and opens the PR. `@rev` and `@sec` review
+  headless and report-only, with their marker comments posted on the PR. Codex
+  fix rounds follow until both are clean or `--max-rounds` is reached. One
+  `RESULT` line and exit codes 0-6 tell the operator what happened; it never
+  merges. `dispatch_agent.py task-usage` sums the per-step token ledger.
+- Reviewers read only a clean detached checkout and a diff file. Claude Code
+  runs with no shell, edit, web, skill, agent or MCP tools and user settings
+  only. Codex reviews only for a role team.toml routes to `codex` (the #351
+  opt-in), with `--sandbox read-only` and without the branch's AGENTS.md.
+- The suite runs code Codex just wrote, unsandboxed, with the operator's
+  rights; credential-looking environment variables are withheld from it.
+  Review reports are posted under a header the script writes (marker, full
+  SHA, parsed verdict); a run without a verdict gets no gate marker, and
+  `@rev`/`@sec` handles in reports are backticked so they notify nobody.
+- The script commits only `task_commit_paths`, never `.github/`. It refuses
+  to push a branch that touches other paths, adds a symlink or adds a
+  credential-shaped line,
+  checked on the branch diff (with `--text`, so `.gitattributes` can't hide a
+  file), and it does not post a report that quotes one. A commit made by Codex
+  fails the run. Scratch cleanup never follows a symlink. Timeouts kill the
+  whole process tree, and git hooks are off for the script's own git calls.
+- `team.toml` `[task]` (commented out in `docs/team.toml.example`) holds the
+  suite command, optional per-file glob, passing exit codes, commit paths,
+  scratch globs and base branch. It is read from the main clone.
+
+## [26.10.14.1] - 2026-10-14
+
+### Added
+
+- Opt-in Codex read-only reviewers (#351). `sec`, `rev` and `research` may run
+  on `codex` only when `team.toml` `[orchestration.routes]` names `codex` for
+  that role, read from the team.toml discovered in the dispatching checkout.
+  `auto`, the matrix, host detection, native mode, fallbacks and a bare
+  `--harness codex` never opt in, and `bulk-reader` never runs on Codex.
+  Without the opt-in, routing and argv are unchanged.
+- An opted-in reviewer runs `codex exec -C <checkout>` with the
+  `marc_readonly` permissions profile (filesystem read-only, network on, so
+  the reviewer posts its own review marker). Bypass, `--full-auto`,
+  `workspace-write` and `danger-full-access` are never passed. The role's agent
+  definition is carried in the prompt. The effort pin comes from the Codex
+  agent descriptor and is allowlisted.
+- `scripts/probe_codex_readonly.py` checks the profile under `codex sandbox`
+  against an unsandboxed control run, with no model call, in the Codex CI job.
+  Its owner-only `--exec` mode checks that `codex exec` applies the profile
+  with no config and with a user `config.toml` override, using a throwaway
+  `CODEX_HOME` and never writing the owner's real one. It also runs a project
+  `.codex/config.toml` case, but that case does not yet prove the override is
+  defeated in a trusted project (#358).
+
+### Changed
+
+- The `start` job re-check and synchronous dispatch both re-derive the Codex
+  opt-in from the checkout's team.toml. A `--team-toml` other than the one
+  discovered there cannot opt a read-only role into Codex (exit `2`).
+- Dispatch results and `spec.json` gain the informational fields
+  `codex_readonly_opt_in` and `team_toml`.
+
+### Security
+
+- Secrets stay readable and network is on for a Codex reviewer, the same as a
+  Claude Code reviewer. Dispatch reviews from a checkout whose team.toml you
+  trust. Until #358 lands, do not enable the opt-in on a repo marked trusted in
+  Codex, since a project `.codex/config.toml` there is not yet proven to be
+  overridden.
+
+## [26.10.14] - 2026-10-14
+
+### Added
+
+- `dispatch_agent.py start` launches a specialist dispatch as a detached job and
+  prints one JSON line (`job_id`, `pid`, `role`, `harness`, `result_path`).
+  Routing and the #323 read-only guard run before anything is spawned, through
+  the same code path as the synchronous form.
+- `dispatch_agent.py wait <job_id>... [--timeout S] [--any]` blocks silently and
+  prints one compact line per job (`succeeded`, `failed`, `timed_out`, `running`
+  or `lost`). Exit codes: `0` all succeeded, `1` any failure, `2` usage error or
+  unknown job, `75` still running (call `wait` again). Job state and the full
+  result JSON live under `<git-common-dir>/marc/jobs/`, never in a working tree;
+  `wait --store` reads it from elsewhere. Liveness is a file lock the runner
+  holds, so a `wait` inside a sandbox (separate PID namespace) still reports
+  `running`. The runner re-checks the routed command and the #323 guard before
+  exec, runs the harness in its own process group and kills it on exit or
+  termination. An unusable job store (e.g. read-only under a sandbox) is a clean
+  exit `2`. The no-subcommand invocation is unchanged.
+- One shared #323 predicate (`is_forbidden_readonly_route`) backs route
+  resolution, command building and the detached runner. `build_harness_command`
+  now also refuses read-only roles on `copilot`; the synchronous path already
+  re-routed them, so this tightens defense in depth only.
+
+### Changed
+
+- Operator dispatch guidance: on hosts without a native background agent
+  (Codex), `start` each specialist and collect them with one `wait`, re-issued
+  on exit `75`, instead of polling with `sleep`, empty `write_stdin` or
+  transcript reads. On Codex, use `yield_time_ms: 30000` and `wait --timeout 25`,
+  which keeps each call inside the `exec_command` yield cap of codex-cli 0.162.1.
+  Only `start` is escalated out of the Codex sandbox, per call; `wait` runs
+  sandboxed. Specs go in via `--prompt-file` from a scratch dir. `wait` opens
+  the job lock non-blocking and treats a non-regular file as `lost`.
+
+## [26.10.8] - 2026-10-08
+
+### Fixed
+
+- Read dispatch guidance once per session/version, with invalidation after lost
+  context or routing changes, instead of before every specialist dispatch.
+- Make optional review skills conditional on a concrete question and verified
+  target/tool boundaries. Carry structural failures across rounds and retry only
+  after a relevant configuration fix; independent manual reviews still apply.
+- Request compact operator handoffs and delta continuation state while retaining
+  complete findings, current-HEAD verdicts, and read-only reviewer boundaries.
+  See `docs/marc/2026-10-08-decision-review-token-efficiency.md` for scope and
+  measurement limitations.
+- Restore the `[review].hot_surfaces` escalation (the operator runs
+  `/code-review` at `high`), which the condensed `@rev` wording had dropped.
+- Reviewers compute re-review deltas from git and fall back to a full review when
+  the prior SHA is not an ancestor of HEAD. Findings carry stable `SEC-n`/`REV-n`
+  IDs. The per-dispatch checklist names the read-only routing rule directly.
+
 ## [26.10.3] - 2026-10-04
 
 ### Fixed
