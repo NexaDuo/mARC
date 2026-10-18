@@ -59,13 +59,15 @@ def main() -> int:
         (Path(ws) / ".agents" / "team.toml").write_text(f'[github]\ngh_org = "x"\nmarker = "{MARKER}"\n')
         stdin = json.dumps({"conversationId": "contract-test", "workspacePaths": [ws],
                             "transcriptPath": "/nonexistent", "modelName": "auto"})
-        state = tempfile.mkdtemp()
+        state = os.path.join(ws, ".state")  # removed with the workspace
         env = {k: v for k, v in os.environ.items() if not k.startswith(("AGY_", "CLAUDE_"))}
         env.update({"OLDPWD": "/", "MARC_STATE_DIR": state, "HOME": state})
         for hook_id, event, command in entries:
             m = COMMAND_RE.fullmatch(command)
-            check(bool(m) and m.group(1) == hook_id and m.group(2) == event,
-                  f"{hook_id}/{event}: command is the plain dispatcher form ({command!r})")
+            plain = bool(m) and m.group(1) == hook_id and m.group(2) == event
+            check(plain, f"{hook_id}/{event}: command is the plain dispatcher form ({command!r})")
+            if not plain:
+                continue  # never hand an unexpected command to a shell
             check((plugin / "hooks" / "agy" / f"{hook_id}.sh").is_file(),
                   f"{hook_id}: hooks/agy/{hook_id}.sh is shipped")
             r = subprocess.run(["sh", "-c", command], cwd=plugin, input=stdin, capture_output=True,
@@ -81,6 +83,8 @@ def main() -> int:
                 steps = out.get("injectSteps") or [{}]
                 text = steps[0].get("systemMessage", {}).get("systemMessage", "")
                 check(MARKER in text, f"{hook_id}: the workspace's team.toml reaches injectSteps")
+                check(text.startswith("[mARC] The block below is this repository's own configuration"),
+                      f"{hook_id}: repo-supplied text is framed as data")
     if failures:
         print(f"\n{len(failures)} failure(s)")
         return 1

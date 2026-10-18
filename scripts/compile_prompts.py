@@ -196,9 +196,9 @@ _COPILOT_EVENT_MAP = {
 _AGY_EVENT_MAP = {
     # SessionStart fires once per conversation (PreInvocation fires before
     # every model call, which re-injected session-start text every turn).
-    # Antigravity has no compaction event; the compact card rides SessionStart.
+    # No session_start_compact: Antigravity has no compaction event, and the
+    # post-compaction card would tell every new conversation it was compacted.
     "session_start": "SessionStart",
-    "session_start_compact": "SessionStart",
     "pre_invocation": "PreInvocation",
     "post_invocation": "PostInvocation",
     "pre_tool_use": "PreToolUse",

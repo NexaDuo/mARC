@@ -15,14 +15,6 @@
       }
     ]
   },
-  "invariants-card": {
-    "SessionStart": [
-      {
-        "type": "command",
-        "command": "bash hooks/agy-hook.sh invariants-card SessionStart"
-      }
-    ]
-  },
   "token-guard": {
     "PostToolUse": [
       {

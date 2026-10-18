@@ -24,6 +24,12 @@ date whose `YY.M.D` is already taken.
   and wraps its text in the JSON each event expects.
 - Session-start hooks move from `PreInvocation` (before every model call) to
   `SessionStart` (once per conversation).
+- The post-compaction invariants card is no longer shipped to Antigravity,
+  which has no compaction event; it would have told every new conversation it
+  had just been compacted.
+- The workspace `team.toml` is now injected as a `systemMessage` with a fixed
+  note that it is repo-supplied data, not instructions. It had never reached
+  the model on Antigravity before, and it may come from an untrusted repo.
 - `scripts/test_agy_hooks.py` runs every hook under that contract with no
   model call, in Tier 1 on the source and in Tier 2 on the installed copy. It
   replaces an assertion that assumed agy sets `AGY_PLUGIN_ROOT`.

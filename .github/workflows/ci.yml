@@ -1179,7 +1179,7 @@ jobs:
       # commands. #173/#170 fixed that at the source (core/hooks/
       # hooks.spec.json renders each harness's own plugin_root_env), so this
       # assertion is now load-bearing like every other Tier 2 step.
-      - name: Tier 2 — Antigravity hook-resolution assertion (issue #167 AC#2, #170, #197)
+      - name: Tier 2 — Antigravity hook contract on the installed copy (issue #167 AC#2, #170, #197, #343)
         id: antigravity_hooks
         if: steps.antigravity_install.outcome == 'success'
         env:
@@ -1229,7 +1229,7 @@ jobs:
             skipped) echo "Antigravity hook-resolution coverage: SKIPPED (install step did not succeed — see above)." ;;
             failure) {
                 echo "### :red_circle: Antigravity hook-resolution coverage: FAILED"
-                echo "Antigravity's compiled hooks.json (core/hooks/hooks.spec.json -> scripts/compile_prompts.py, #173/#170, #197) no longer resolves under Antigravity's own env vars. This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
+                echo "Antigravity's installed hooks no longer meet the agy hook contract (scripts/test_agy_hooks.py: plain dispatcher command, JSON on stdout, workspace team.toml found; #343). This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
               } >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "Antigravity hook-resolution coverage: outcome '${{ steps.antigravity_hooks.outcome }}' unrecognized." ;;
           esac
