@@ -8,6 +8,26 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Fixed
+
+- Antigravity hooks now work, on Windows and elsewhere (#343). Probed on agy
+  1.3.5 (Windows) and 1.3.2 (Linux), and checked against the contract
+  documented inside the agy binary:
+  - Every hook's stdout was plain text, which Antigravity rejects ("failed to
+    unmarshal result"), so no hook output ever reached the model.
+  - On Windows, `cmd /c` broke every quoted command.
+  - agy exports neither `AGY_PLUGIN_ROOT` nor `AGY_PROJECT_DIR`, and `OLDPWD`
+    is not the workspace.
+- Each hooks.json command is now `bash hooks/agy-hook.sh <id> <Event>`. The
+  dispatcher takes the workspace from the stdin `workspacePaths` (converting
+  Windows paths with `cygpath`/`wslpath`), runs the body from `hooks/agy/`,
+  and wraps its text in the JSON each event expects.
+- Session-start hooks move from `PreInvocation` (before every model call) to
+  `SessionStart` (once per conversation).
+- `scripts/test_agy_hooks.py` runs every hook under that contract with no
+  model call, in Tier 1 on the source and in Tier 2 on the installed copy. It
+  replaces an assertion that assumed agy sets `AGY_PLUGIN_ROOT`.
+
 ### Added
 
 - `dispatch_agent.py task` runs one implementation task end to end without
