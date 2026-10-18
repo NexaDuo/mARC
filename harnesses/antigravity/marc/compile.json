@@ -15,7 +15,6 @@
   "hook_ids": [
     "team-toml-dump",
     "outdated-check",
-    "invariants-card",
     "token-guard",
     "outdated-recheck",
     "token-telemetry"
