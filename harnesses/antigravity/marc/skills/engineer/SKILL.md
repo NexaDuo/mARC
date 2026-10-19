@@ -106,7 +106,7 @@ repository, not in this plugin. At the start of a task, discover them at runtime
   tmp state), treat old and new versions as running concurrently: version the state
   path — or add a tolerant, `schema_version`-aware reader — and make migrations of
   shared artifacts additive and reversible (supersede, never destructively rewrite or
-  delete). Keep hook entrypoints pinned via `${AGY_PLUGIN_ROOT}`, never a `latest`
+  delete). Keep hook entrypoints pinned via the dispatcher `hooks/agy-hook.sh` (agy launches it from the installed plugin root and it exports `${AGY_PLUGIN_ROOT}` to hook bodies only; the model's shell gets no plugin-root variable), never a `latest`
   symlink. Outside this trigger (no shared un-versioned state, no shared-artifact
   migration), add no cross-version ceremony. (origin: #78 · 2026-07-13)
 - **Stage explicit file paths only.** `git add <path> <path> ...` the specific

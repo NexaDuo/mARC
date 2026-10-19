@@ -17,7 +17,7 @@ When `@rev` reports a diff touching `team.toml`'s `[review].hot_surfaces`, run
 **Verifying a version bump actually shipped** — one call replaces the
 `gh api .../git/refs/tags`/`gh run list`/`gh release view` sequence:
 ```bash
-python3 "${{{ plugin_root_env }}:-.}/scripts/release_verify.py" --json
+python3 "{{ bundled_scripts_dir }}/release_verify.py" --json
 ```
 Defaults to `plugin.json`'s version. Non-zero exit = NOT fully verified — read
 which check failed before reporting shipped.

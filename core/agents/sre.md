@@ -94,7 +94,7 @@ deployable, and recoverable.
   tmp state), treat old and new versions as running concurrently: version the state
   path — or add a tolerant, `schema_version`-aware reader — and make migrations of
   shared artifacts additive and reversible (supersede, never destructively rewrite or
-  delete). Keep hook entrypoints pinned via `${{{ plugin_root_env }}}`, never a `latest`
+  delete). Keep hook entrypoints pinned via {{ hook_entrypoint_pin }}, never a `latest`
   symlink. Outside this trigger (no shared un-versioned state, no shared-artifact
   migration), add no cross-version ceremony. (origin: #78 · 2026-07-13)
 - **Stage explicit file paths only.** `git add <path> <path> ...` the specific

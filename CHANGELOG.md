@@ -8,6 +8,16 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Fixed
+
+- Antigravity: the tech-lead references now run bundled scripts
+  (`dispatch_agent.py`, `board.py`, `release_verify.py`) from the installed
+  plugin, resolved at run time from `agy plugin list --json` (#364). They used
+  `${AGY_PLUGIN_ROOT:-.}/scripts`, but agy exports no such variable to the
+  model's shell, so the fallback ran the workspace's own `./scripts`. When the
+  plugin root can't be resolved the command now fails with a `[mARC]` error
+  instead of falling back to the workspace.
+
 ## [26.10.18] - 2026-10-18
 
 ### Added

@@ -17,7 +17,7 @@ When `@rev` reports a diff touching `team.toml`'s `[review].hot_surfaces`, run
 **Verifying a version bump actually shipped** — one call replaces the
 `gh api .../git/refs/tags`/`gh run list`/`gh release view` sequence:
 ```bash
-python3 "${AGY_PLUGIN_ROOT:-.}/scripts/release_verify.py" --json
+python3 "$(agy plugin list --json | python3 -c 'import json,os,sys; t=sys.stdin.read(); d=json.loads(t) if t.strip()[:1] in ("[","{") else []; d=d.get("imports",[]) if isinstance(d,dict) else d; r=[os.path.join(p["path"],"scripts") for p in d if isinstance(p,dict) and p.get("name")=="marc" and isinstance(p.get("path"),str) and os.path.isabs(p["path"]) and os.path.isdir(os.path.join(p["path"],"scripts"))]; r or sys.stderr.write("[mARC] cannot resolve the installed marc plugin root from the plugin list; refusing to fall back to the workspace\n"); print(r[0] if r else "/marc-plugin-root-unresolved")')/release_verify.py" --json
 ```
 Defaults to `plugin.json`'s version. Non-zero exit = NOT fully verified — read
 which check failed before reporting shipped.

@@ -870,6 +870,12 @@ jobs:
       - name: Antigravity hook contract (source)
         run: python3 scripts/test_agy_hooks.py
 
+      # 8c-agy-script-root. Antigravity bundled-script resolution (issue #364):
+      #     compiled skills resolve scripts from `agy plugin list --json`, never
+      #     from the workspace, and fail closed when the root can't be found.
+      - name: Antigravity bundled-script root (source)
+        run: python3 scripts/test_agy_script_root.py
+
       # 8c-dispatch. Cross-harness dispatch self-test (issue #239).
       - name: cross-harness dispatch self-test
         run: python3 core/scripts/test_dispatch_agent.py
@@ -1149,20 +1155,46 @@ jobs:
           }
 
           # Bundled-script resolution against the INSTALLED copy (issue #167
-          # AC#1). Antigravity's plugin-root equivalent is AGY_PLUGIN_ROOT
-          # (compile.json); the installed on-disk equivalent is CONFIG_DIR
-          # above (verified: `agy plugin install` places the plugin at
-          # $HOME/.gemini/config/plugins/marc, mirroring Claude Code's cache
-          # layout).
-          echo "== assert bundled scripts resolve via \${AGY_PLUGIN_ROOT} against the INSTALLED copy =="
-          SCRIPT_REFS="$(grep -rhoE '\$\{AGY_PLUGIN_ROOT:-\.\}/scripts/[A-Za-z0-9_.-]+' "$CONFIG_DIR"/skills/ | sed -E 's#.*/scripts/##' | sort -u)"
-          test -n "$SCRIPT_REFS" || { echo "::error::no \${AGY_PLUGIN_ROOT}/scripts/* references found in installed SKILL.md files"; exit 1; }
+          # AC#1, #364). agy exports no plugin-root variable to the model's
+          # shell, so compiled skills resolve the scripts dir at run time from
+          # `agy plugin list --json` (the compiler's `bundled_scripts_dir`).
+          # This runs that exact compiled expression from a scratch cwd that
+          # holds decoy ./scripts/*.py and asserts it lands on CONFIG_DIR
+          # (verified: `agy plugin install` places the plugin at
+          # $HOME/.gemini/config/plugins/marc).
+          echo "== assert bundled scripts resolve via agy plugin list --json to the INSTALLED copy =="
+          if grep -rqF 'AGY_PLUGIN_ROOT:-.' "$CONFIG_DIR"/skills/; then
+            echo "::error::installed skills still resolve bundled scripts via a workspace fallback (AGY_PLUGIN_ROOT:-.)"; exit 1
+          fi
+          SCRIPTS_EXPR="$(python3 -c 'import json,sys; sys.path.insert(0, "scripts"); import compile_prompts as c; print(c.apply_derived_defaults(json.load(open("harnesses/antigravity/marc/compile.json")))["bundled_scripts_dir"])')"
+          export SCRIPTS_EXPR
+          SCRIPT_REFS="$(python3 - "$CONFIG_DIR/skills" <<'PY'
+          import os, re, sys
+          pat = re.compile('python3 "' + re.escape(os.environ["SCRIPTS_EXPR"]) + r'/([A-Za-z0-9_.-]+[.]py)"')
+          names = set()
+          for root, _, files in os.walk(sys.argv[1]):
+              for f in files:
+                  if f.endswith(".md"):
+                      with open(os.path.join(root, f), encoding="utf-8") as fh:
+                          names |= set(pat.findall(fh.read()))
+          print("\n".join(sorted(names)))
+          PY
+          )"
+          test -n "$SCRIPT_REFS" || { echo "::error::no plugin-list-resolved scripts/* references found in installed SKILL.md files"; exit 1; }
+          PROBE_CWD="$(mktemp -d)"
+          mkdir -p "$PROBE_CWD/scripts"
+          printf 'printf "%%s" "%s"\n' "$SCRIPTS_EXPR" > "$PROBE_CWD/resolve.sh"
+          RESOLVED_DIR="$(cd "$PROBE_CWD" && bash resolve.sh)"
+          [ "$(realpath "$RESOLVED_DIR")" = "$(realpath "$CONFIG_DIR/scripts")" ] \
+            || { echo "::error::compiled resolver gave '$RESOLVED_DIR', expected the installed $CONFIG_DIR/scripts"; exit 1; }
           while IFS= read -r name; do
             resolved="$CONFIG_DIR/scripts/$name"
             test -f "$resolved" || { echo "::error::installed script '$name' referenced from SKILL.md is missing at $resolved"; exit 1; }
-            python3 "$resolved" --help > /dev/null \
-              || { echo "::error::installed script '$name' at $resolved is not executable via python3 (--help failed)"; exit 1; }
-            echo "OK: \${AGY_PLUGIN_ROOT}/scripts/$name resolves and runs from the installed copy ($resolved)"
+            echo 'raise SystemExit("decoy: resolved against the workspace")' > "$PROBE_CWD/scripts/$name"
+            printf 'python3 "%s/%s" --help\n' "$SCRIPTS_EXPR" "$name" > "$PROBE_CWD/run.sh"
+            (cd "$PROBE_CWD" && bash run.sh > /dev/null) \
+              || { echo "::error::compiled invocation of '$name' did not run the installed copy (--help failed)"; exit 1; }
+            echo "OK: $name resolves via agy plugin list --json and runs from the installed copy ($resolved)"
           done <<< "$SCRIPT_REFS"
 
           echo "Antigravity harness check: OK (plugin installed, all seven components registered, bundled scripts resolve against the installed copy). Hooks are asserted in the next step."

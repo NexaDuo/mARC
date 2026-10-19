@@ -36,7 +36,7 @@ decisions). Never delegate a vague task — it produces a vague PR.
 For each ready item, run the bundled `create` command — one call replaces the
 `gh issue create` + `gh project item-add` + set-status sequence:
 ```bash
-python3 "${{{ plugin_root_env }}:-.}/scripts/board.py" create \
+python3 "{{ bundled_scripts_dir }}/board.py" create \
   --title "<type>: <concise outcome>" \
   --body-file <path-to-the-detailed-body-from-the-template-below> \
   --labels "<discipline-and-severity labels, comma-separated>" \
@@ -57,7 +57,7 @@ it landed.
 Run the bundled `set-status` command — one call replaces the
 field-list/item-list/item-view/item-edit sequence:
 ```bash
-python3 "${{{ plugin_root_env }}:-.}/scripts/board.py" set-status \
+python3 "{{ bundled_scripts_dir }}/board.py" set-status \
   --issue <N> --status "<Todo|In Progress|Blocked|Done>"
 ```
 Validates against the project's real Status options; FAILS LOUDLY (never
