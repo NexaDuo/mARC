@@ -22,8 +22,12 @@ Repo facts come from the main clone's team.toml `[task]` section (a branch
 cannot change them): task_suite_cmd (argv list, or a shell string), optional
 task_suite_files (a glob: the suite command runs once per file),
 task_suite_ok_codes, task_suite_timeout, task_focused_hint, task_commit_paths,
-task_scratch, task_base. Without task_suite_cmd, `[validation]
-validation_command` runs through the shell. See docs/team.toml.example.
+task_scratch, task_base, task_codex_profile (a Codex config profile the
+implement/fix runs use, `codex exec -p <profile>`), task_codex_fallback_profile
+(on a Codex usage limit, that implement/fix step is retried once on this
+profile, and the rest of the run stays on it). Without task_suite_cmd,
+`[validation] validation_command` runs through the shell. See
+docs/team.toml.example. The profile keys never reach the reviewers.
 
 Reviewers run headless and report-only on a clean detached checkout plus a
 diff file: Claude Code (`--agent marc:review` / `marc:security`, no shell,
@@ -114,6 +118,8 @@ LIMIT_RE = re.compile(r"try again at ([^.\"\n]*)", re.IGNORECASE)
 SAFE_FILE_RE = re.compile(r"[\w./+@()\[\]-]+")
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 BRANCH_RE = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")
+# A Codex config profile name (`codex exec -p <name>`): never option-shaped.
+PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 # A workflow edit would run in CI with the repo's secrets on push.
 NEVER_COMMIT = ".github"
 
@@ -160,6 +166,8 @@ class TaskConfig:
     scratch: List[str] = field(default_factory=list)
     base: str = "main"
     codex_review: Dict[str, bool] = field(default_factory=lambda: {k: False for k in KINDS})
+    codex_profile: str = ""                   # implement/fix runs only; "" = Codex's default
+    codex_fallback_profile: str = ""          # retried on after a Codex usage limit
 
 
 def load_config(repo: Path) -> TaskConfig:
@@ -220,6 +228,15 @@ def load_config(repo: Path) -> TaskConfig:
         cfg.base = str(sec["task_base"]).strip()
         if not BRANCH_RE.fullmatch(cfg.base) or ".." in cfg.base:
             raise TaskError("task_base must be a plain branch name")
+    for key, attr in (("task_codex_profile", "codex_profile"),
+                      ("task_codex_fallback_profile", "codex_fallback_profile")):
+        if key in sec:
+            value = sec[key]
+            # fail closed: it lands in Codex's argv, so no stripping, no option shapes
+            if not isinstance(value, str) or not PROFILE_RE.fullmatch(value):
+                raise TaskError(f"{key} must be a plain profile name "
+                                f"(letters, digits, '_', '.', '-'; not starting with '-')")
+            setattr(cfg, attr, value)
     # The #351 opt-in, re-derived from the team.toml discovered in the main
     # clone (mode included), exactly as dispatch_agent's detached runner does.
     cfg.codex_review = {k: _reresolve_codex_opt_in(k, "auto", str(repo)) for k in KINDS}
@@ -417,6 +434,11 @@ class Task:
     test_fix_attempts: int = 2
     out = print  # replaced in tests
 
+    def __post_init__(self) -> None:
+        # The Codex profile of the implement/fix runs; switches to the fallback
+        # after a usage limit and stays there for the rest of the run.
+        self.profile: Optional[str] = self.config.codex_profile or None
+
     # ---- helpers -------------------------------------------------------
     @property
     def base_ref(self) -> str:
@@ -497,12 +519,10 @@ class Task:
             out.unlink()  # never read a previous round's message
         head = self.git("rev-parse", "HEAD")
         started = time.monotonic()
-        code = run_to_file([which("codex"), "exec", "--json", "-c",
-                            f"model_reasoning_effort={effort}", "--sandbox", "workspace-write",
-                            "-C", str(self.worktree), "-o", str(out), "-"],
-                           stdin=prompt_file, out=log, timeout=AGENT_TIMEOUT)
+        code = run_to_file(self.codex_cmd(effort, out), stdin=prompt_file, out=log,
+                           timeout=AGENT_TIMEOUT)
         text = log.read_text(encoding="utf-8", errors="replace")
-        self.record({"step": step, "harness": "codex", "effort": effort,
+        self.record({"step": step, "harness": "codex", "effort": effort, "profile": self.profile,
                      "seconds": round(time.monotonic() - started), "exit": code,
                      **codex_usage(text)})
         limit = codex_limit_message(text)
@@ -514,6 +534,28 @@ class Task:
             # its commit would skip the suite (the tree is clean afterwards)
             raise TaskError(f"codex {step} committed although told not to; reset or review by hand")
         return out.read_text(encoding="utf-8", errors="replace") if out.exists() else ""
+
+    def codex_cmd(self, effort: str, out: Path) -> List[str]:
+        """The implement/fix argv; without a profile exactly as before #373."""
+        profile = ["-p", self.profile] if self.profile else []
+        return [which("codex"), "exec", *profile, "--json", "-c",
+                f"model_reasoning_effort={effort}", "--sandbox", "workspace-write",
+                "-C", str(self.worktree), "-o", str(out), "-"]
+
+    def codex_step(self, effort: str, prompt_text: str, step: str) -> str:
+        """An implement/fix run. On a usage limit it is retried once on
+        task_codex_fallback_profile, which the rest of the run then keeps."""
+        try:
+            return self.codex(effort, prompt_text, step)
+        except CodexLimit as e:
+            fallback = self.config.codex_fallback_profile
+            if not fallback or self.profile == fallback:
+                raise
+            self.say(f"codex limit ({e}), retrying {step} on profile {fallback}")
+            self.profile = fallback
+        return self.codex(effort, prompt_text + "\n\nAn earlier attempt at this step stopped "
+                          "early; the worktree may hold its partial changes. Check them and "
+                          "finish the task.", step)
 
     def inside_worktree(self, p: Path) -> bool:
         """No symlinked folder on the way from the worktree to p: a glob follows
@@ -870,8 +912,9 @@ class Task:
             self.ensure_worktree()
             fix_summary = ""
             if fix_file:
-                fix_summary = self.codex("medium", self.fix_prompt(fix_file.read_text(encoding="utf-8")),
-                                         "fix-manual")
+                fix_summary = self.codex_step("medium",
+                                              self.fix_prompt(fix_file.read_text(encoding="utf-8")),
+                                              "fix-manual")
                 self.say("codex fix done")
             elif not skip_impl and not self.ahead() and not self.file("impl.done").exists():
                 # Not "tree is dirty": an implementation cut off by the limit, a
@@ -880,8 +923,8 @@ class Task:
                     raise TaskError("--prompt is required for the first implementation")
                 partial = ("\n\nThe worktree may hold a partial attempt from an interrupted run; "
                            "check it and finish the task." if self.dirty() else "")
-                self.codex("high", self.prompt.read_text(encoding="utf-8") + partial +
-                           "\n\nDo NOT commit.", "impl")
+                self.codex_step("high", self.prompt.read_text(encoding="utf-8") + partial +
+                                "\n\nDo NOT commit.", "impl")
                 self.file("impl.done").write_text(self.git("rev-parse", "HEAD") + "\n", encoding="utf-8")
                 self.say("codex implementation done")
             first_commit = not fix_file and not self.ahead()
@@ -898,8 +941,9 @@ class Task:
                         if attempt == self.test_fix_attempts:
                             return self.finish(EXIT_TESTS, pr, sha, verdicts)
                         failures = self.file("tests.txt").read_text(encoding="utf-8")
-                        self.codex("medium", "The full suite failed:\n\n" + failures[-4000:] +
-                                   "\n\nFix the failures (do NOT commit).", f"fixtests-{round_no}-{attempt}")
+                        self.codex_step("medium", "The full suite failed:\n\n" + failures[-4000:] +
+                                        "\n\nFix the failures (do NOT commit).",
+                                        f"fixtests-{round_no}-{attempt}")
                         self.clean_scratch()
                     self.clean_scratch()  # the green suite's own output must not be committed
                     if first_commit:
@@ -944,7 +988,7 @@ class Task:
                 if round_no == self.max_rounds:
                     break
                 findings = "\n\n".join(v.report for v in verdicts if not v.clean)
-                fix_summary = self.codex("medium", self.fix_prompt(findings), f"fix-{round_no + 1}")
+                fix_summary = self.codex_step("medium", self.fix_prompt(findings), f"fix-{round_no + 1}")
                 self.say(f"codex fix round {round_no + 1} done")
             return self.finish(EXIT_FINDINGS, pr, sha, verdicts)
         except CodexLimit as e:
