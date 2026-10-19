@@ -11,7 +11,9 @@ symlink — issue #107). That drift is invisible to prose review and to
 `compile_prompts.py` idempotency (the placeholder substitution itself is
 correct; only the shipped filesystem is missing the target). This test closes
 that gap: for every harness, scan its compiled SKILL.md files for
-`${<ITS_PLUGIN_ROOT_ENV>:-.}/scripts/<name>` references and assert each one
+`<bundled_scripts_dir>/<name>` references (the compiler's expression for that
+harness: `${<ITS_PLUGIN_ROOT_ENV>:-.}/scripts` by default, a plugin-list
+resolver on Antigravity, #364) and assert each one
 resolves to a real file within that harness's own `marc/` directory (symlinks
 follow, per `harnesses/*/marc/scripts` mirroring `harnesses/*/marc/hooks`).
 
@@ -70,13 +72,22 @@ def check(cond: bool, msg: str) -> None:
         _failures.append(msg)
 
 
-def find_script_refs(skill_md_text: str, plugin_root_env: str) -> set[str]:
+def bundled_scripts_dir(compile_config: dict) -> str:
+    """The compiled expression for a harness's bundled `scripts/` directory,
+    derived by the real compiler (`${<plugin_root_env>:-.}/scripts` by
+    default; a run-time plugin-list resolver on Antigravity, #364)."""
+    sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
+    try:
+        import compile_prompts  # noqa: PLC0415
+    finally:
+        sys.path.pop(0)
+    return compile_prompts.apply_derived_defaults(compile_config)["bundled_scripts_dir"]
+
+
+def find_script_refs(skill_md_text: str, scripts_dir_expr: str) -> set[str]:
     """Return the set of `scripts/<name>` basenames referenced via
-    `${<plugin_root_env>:-.}/scripts/<name>` in the given compiled SKILL.md
-    text."""
-    pattern = re.compile(
-        r"\$\{" + re.escape(plugin_root_env) + r":-\.\}/scripts/([A-Za-z0-9_.\-]+)"
-    )
+    `<scripts_dir_expr>/<name>` in the given compiled SKILL.md text."""
+    pattern = re.compile(re.escape(scripts_dir_expr) + r"/([A-Za-z0-9_.\-]+)")
     return set(pattern.findall(skill_md_text))
 
 
@@ -162,11 +173,16 @@ def main() -> int:
             f"{harness}: found >=1 compiled SKILL.md under {marc_dir}/skills/",
         )
 
+        scripts_dir_expr = bundled_scripts_dir(compile_config)
         harness_refs: set[str] = set()
         for skill_md in skill_md_files:
             with open(skill_md, "r", encoding="utf-8") as f:
                 text = f.read()
-            harness_refs |= find_script_refs(text, plugin_root_env)
+            harness_refs |= find_script_refs(text, scripts_dir_expr)
+        check(
+            len(harness_refs) > 0,
+            f"{harness}: >=1 bundled-script reference via its scripts-dir expression",
+        )
 
         for script_name in sorted(harness_refs):
             total_refs += 1

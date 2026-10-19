@@ -4,6 +4,61 @@ import os
 import shutil
 import sys
 
+# Python program (single-quoted in the shell, so it must not contain `'`)
+# that reads `<harness> plugin list --json` on stdin and prints the
+# installed plugin's absolute `scripts/` directory. It runs as `python3 -I`
+# so a workspace `json.py`/`json/` can't shadow the stdlib import (#364
+# @sec SEC-1). Unparseable output, no enabled `marc` entry with an absolute
+# root holding `scripts/`, or more than one distinct such root all print a
+# `[mARC]` error to stderr and an absolute sentinel path on stdout, so the
+# calling `python3 "<dir>/<name>.py"` fails with "can't open file" instead of
+# resolving against the workspace (origin: #364).
+_PLUGIN_LIST_RESOLVER = (
+    "import json,os,sys; exec(\"try: d=json.load(sys.stdin)\\nexcept Exception: d=[]\"); "
+    "d=d.get(\"imports\") if isinstance(d,dict) else d; d=d if isinstance(d,list) else []; "
+    "j=os.path.join; r=sorted({os.path.realpath(p[\"path\"]) for p in d if isinstance(p,dict) "
+    "and p.get(\"name\")==\"marc\" and p.get(\"enabled\") is not False and isinstance(p.get(\"path\"),str) "
+    "and os.path.isabs(p[\"path\"]) and os.path.isdir(j(p[\"path\"],\"scripts\"))}); "
+    "len(r)==1 or sys.stderr.write(\"[mARC] \"+(\"ambiguous: several enabled marc plugin roots\" if r "
+    "else \"no installed marc plugin root\")+\" in the plugin list; refusing to fall back to the workspace\\n\"); "
+    "print(j(r[0],\"scripts\") if len(r)==1 else \"/marc-plugin-root-unresolved\")"
+)
+
+
+def apply_derived_defaults(config):
+    """Fill compile keys derived from other compile.json fields.
+
+    `bundled_scripts_dir` is the shell expression for the directory holding
+    the plugin's bundled scripts. By default it is `${<plugin_root_env>:-.}/scripts`
+    (unchanged output for harnesses that export their plugin root). A harness
+    that exports NO plugin-root variable to the model's shell (Antigravity,
+    #364: `:-.` then silently resolves to the workspace's ./scripts) sets
+    `"bundled_scripts_resolver": "plugin-list"`, which resolves the installed
+    copy from `plugin_list_command` at run time and fails closed.
+
+    `hook_entrypoint_pin` names what pins hook entrypoints to the installed
+    copy; harnesses whose hooks are not launched via the plugin-root
+    variable override it in compile.json.
+    """
+    config = dict(config)
+    env = config["plugin_root_env"]
+    config.setdefault("hook_entrypoint_pin", f"`${{{env}}}`")
+    resolver = config.get("bundled_scripts_resolver")
+    if "bundled_scripts_dir" in config:
+        pass
+    elif resolver is None:
+        config["bundled_scripts_dir"] = f"${{{env}:-.}}/scripts"
+    elif resolver == "plugin-list":
+        if "'" in _PLUGIN_LIST_RESOLVER:
+            raise ValueError("plugin-list resolver must not contain a single quote")
+        config["bundled_scripts_dir"] = (
+            f"$({config['plugin_list_command']} | python3 -I -c '{_PLUGIN_LIST_RESOLVER}')"
+        )
+    else:
+        raise ValueError(f"unknown bundled_scripts_resolver {resolver!r}")
+    return config
+
+
 def compile_file(source_path, dest_path, config):
     with open(source_path, "r", encoding="utf-8") as sf:
         content = sf.read()
@@ -465,6 +520,11 @@ def main():
                 config = json.load(cf)
         except Exception as e:
             print(f"Error loading {compile_config_path}: {e}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            config = apply_derived_defaults(config)
+        except (KeyError, ValueError) as e:
+            print(f"Error in {compile_config_path}: {e}", file=sys.stderr)
             sys.exit(1)
 
         # Harnesses whose native role resolution does not load agent personas
