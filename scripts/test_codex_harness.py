@@ -159,7 +159,8 @@ def cli_smoke():
         telemetry_unavailable(path / 'scripts', env, consumer)
         assert list(state.iterdir()) == []
         print('Codex real marketplace/add/list and installed-helper consumer smoke: PASS')
-        print('Coverage: installation/helpers; hook dispatch and native-agent discovery NOT tested.')
+        print('Coverage: installation/helpers. Hook commands and bundled-script resolution: '
+              'scripts/test_installed_harness.py codex (Tier 2); native-agent discovery NOT tested.')
 
 
 if __name__ == '__main__':
