@@ -1159,7 +1159,7 @@ jobs:
           # shell, so compiled skills resolve the scripts dir at run time from
           # `agy plugin list --json` (the compiler's `bundled_scripts_dir`).
           # This runs that exact compiled expression from a scratch cwd that
-          # holds decoy ./scripts/*.py and asserts it lands on CONFIG_DIR
+          # holds decoy ./scripts/*.py and ./json.py and asserts it lands on CONFIG_DIR
           # (verified: `agy plugin install` places the plugin at
           # $HOME/.gemini/config/plugins/marc).
           echo "== assert bundled scripts resolve via agy plugin list --json to the INSTALLED copy =="
@@ -1183,6 +1183,9 @@ jobs:
           test -n "$SCRIPT_REFS" || { echo "::error::no plugin-list-resolved scripts/* references found in installed SKILL.md files"; exit 1; }
           PROBE_CWD="$(mktemp -d)"
           mkdir -p "$PROBE_CWD/scripts"
+          # Decoy stdlib json: the resolver must run `python3 -I`, so this never
+          # imports (#364, @sec SEC-1 on PR #366).
+          echo 'raise SystemExit("decoy json.py: resolver imported workspace code")' > "$PROBE_CWD/json.py"
           printf 'printf "%%s" "%s"\n' "$SCRIPTS_EXPR" > "$PROBE_CWD/resolve.sh"
           RESOLVED_DIR="$(cd "$PROBE_CWD" && bash resolve.sh)"
           [ "$(realpath "$RESOLVED_DIR")" = "$(realpath "$CONFIG_DIR/scripts")" ] \

@@ -14,9 +14,14 @@ date whose `YY.M.D` is already taken.
   (`dispatch_agent.py`, `board.py`, `release_verify.py`) from the installed
   plugin, resolved at run time from `agy plugin list --json` (#364). They used
   `${AGY_PLUGIN_ROOT:-.}/scripts`, but agy exports no such variable to the
-  model's shell, so the fallback ran the workspace's own `./scripts`. When the
-  plugin root can't be resolved the command now fails with a `[mARC]` error
-  instead of falling back to the workspace.
+  model's shell, so the fallback ran the workspace's own `./scripts`. The
+  resolver runs as `python3 -I`, so a workspace `json.py` can't run either.
+  It uses only enabled `marc` entries. If the list can't be parsed, has no
+  usable root, or has two different enabled roots, the command fails with a
+  `[mARC]` error and never falls back to the workspace.
+- Antigravity: the engineer and sre skills no longer say hook entrypoints are
+  pinned via `${AGY_PLUGIN_ROOT}`. They now name the `hooks/agy-hook.sh`
+  dispatcher, which agy launches from the installed plugin root.
 
 ## [26.10.18] - 2026-10-18
 

@@ -6,20 +6,22 @@ import sys
 
 # Python program (single-quoted in the shell, so it must not contain `'`)
 # that reads `<harness> plugin list --json` on stdin and prints the
-# installed plugin's absolute `scripts/` directory. On any miss it prints a
-# clear error to stderr and an absolute sentinel path on stdout, so the
+# installed plugin's absolute `scripts/` directory. It runs as `python3 -I`
+# so a workspace `json.py`/`json/` can't shadow the stdlib import (#364
+# @sec SEC-1). Unparseable output, no enabled `marc` entry with an absolute
+# root holding `scripts/`, or more than one distinct such root all print a
+# `[mARC]` error to stderr and an absolute sentinel path on stdout, so the
 # calling `python3 "<dir>/<name>.py"` fails with "can't open file" instead of
 # resolving against the workspace (origin: #364).
 _PLUGIN_LIST_RESOLVER = (
-    "import json,os,sys; t=sys.stdin.read(); "
-    "d=json.loads(t) if t.strip()[:1] in (\"[\",\"{\") else []; "
-    "d=d.get(\"imports\",[]) if isinstance(d,dict) else d; "
-    "r=[os.path.join(p[\"path\"],\"scripts\") for p in d if isinstance(p,dict) "
-    "and p.get(\"name\")==\"marc\" and isinstance(p.get(\"path\"),str) "
-    "and os.path.isabs(p[\"path\"]) and os.path.isdir(os.path.join(p[\"path\"],\"scripts\"))]; "
-    "r or sys.stderr.write(\"[mARC] cannot resolve the installed marc plugin root "
-    "from the plugin list; refusing to fall back to the workspace\\n\"); "
-    "print(r[0] if r else \"/marc-plugin-root-unresolved\")"
+    "import json,os,sys; exec(\"try: d=json.load(sys.stdin)\\nexcept Exception: d=[]\"); "
+    "d=d.get(\"imports\") if isinstance(d,dict) else d; d=d if isinstance(d,list) else []; "
+    "j=os.path.join; r=sorted({os.path.realpath(p[\"path\"]) for p in d if isinstance(p,dict) "
+    "and p.get(\"name\")==\"marc\" and p.get(\"enabled\") is not False and isinstance(p.get(\"path\"),str) "
+    "and os.path.isabs(p[\"path\"]) and os.path.isdir(j(p[\"path\"],\"scripts\"))}); "
+    "len(r)==1 or sys.stderr.write(\"[mARC] \"+(\"ambiguous: several enabled marc plugin roots\" if r "
+    "else \"no installed marc plugin root\")+\" in the plugin list; refusing to fall back to the workspace\\n\"); "
+    "print(j(r[0],\"scripts\") if len(r)==1 else \"/marc-plugin-root-unresolved\")"
 )
 
 
@@ -50,7 +52,7 @@ def apply_derived_defaults(config):
         if "'" in _PLUGIN_LIST_RESOLVER:
             raise ValueError("plugin-list resolver must not contain a single quote")
         config["bundled_scripts_dir"] = (
-            f"$({config['plugin_list_command']} | python3 -c '{_PLUGIN_LIST_RESOLVER}')"
+            f"$({config['plugin_list_command']} | python3 -I -c '{_PLUGIN_LIST_RESOLVER}')"
         )
     else:
         raise ValueError(f"unknown bundled_scripts_resolver {resolver!r}")

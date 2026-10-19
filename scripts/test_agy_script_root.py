@@ -18,7 +18,10 @@ What this asserts, through the real compiler (scripts/compile_prompts.py):
      resolver, given a fake `agy plugin list --json`, runs the script from the
      fake INSTALLED root, even with a decoy ./scripts/<name>.py in the cwd;
   4. it fails closed (non-zero, clear [mARC] error, decoy never runs) when the
-     plugin list has no marc entry, gives a relative path, or agy is missing.
+     plugin list has no enabled marc entry, gives a relative path, lists two
+     distinct enabled roots, is not parseable JSON, or agy is missing;
+  5. a workspace `json.py` or `json/` package never runs: the resolver is
+     `python3 -I` (@sec SEC-1 on PR #366).
 
 Deterministic, offline, zero token cost.
 """
@@ -117,21 +120,39 @@ def main() -> int:
         check(all(e == expr for e, _ in invocations),
               "every bundled-script invocation uses the plugin-list resolver")
 
-        # Fake installed plugin, fake agy, and a decoy ./scripts in the workspace.
+        # Fake installed plugins, fake agy, and two hostile workspaces: each has
+        # decoy ./scripts/<name>.py and a decoy stdlib `json` (a json.py module
+        # or a json/ package) that records it ran and points at the workspace.
+        # The resolver must run `python3 -I` so the decoy never imports
+        # (@sec SEC-1). The fake installed scripts `import json` too: the outer
+        # `python3 "<root>/scripts/<name>.py"` puts the script's own dir, not
+        # the cwd, first on sys.path, so the decoy must not run there either.
         root = os.path.join(tmp, "installed", "marc")
-        ws = os.path.join(tmp, "workspace")
-        for base, tag in ((root, "INSTALLED"), (ws, "WORKSPACE-DECOY")):
+        root2 = os.path.join(tmp, "installed2", "marc")
+        marker = os.path.join(tmp, "decoy-json-ran")
+        workspaces = {"json.py": os.path.join(tmp, "ws-module"),
+                      "json/__init__.py": os.path.join(tmp, "ws-package")}
+        decoy_json = (f"open({marker!r}, 'a').write('ran')\n"
+                      "import os\n"
+                      "def load(*a, **k): return [{'name': 'marc', 'path': os.getcwd()}]\n"
+                      "loads = load\n")
+        for base, tag in [(root, "INSTALLED"), (root2, "INSTALLED2")] + [
+                (w, "WORKSPACE-DECOY") for w in workspaces.values()]:
             os.makedirs(os.path.join(base, "scripts"))
             for n in names:
                 with open(os.path.join(base, "scripts", n), "w", encoding="utf-8") as f:
-                    f.write(f"print('{tag} {n}')\n")
+                    f.write(f"import json\nprint('{tag} {n}')\n")
+        for rel, w in workspaces.items():
+            os.makedirs(os.path.dirname(os.path.join(w, rel)), exist_ok=True)
+            with open(os.path.join(w, rel), "w", encoding="utf-8") as f:
+                f.write(decoy_json)
         bindir = os.path.join(tmp, "bin")
         os.makedirs(bindir)
         os.symlink(sys.executable, os.path.join(bindir, "python3"))
         listing = os.path.join(tmp, "listing.json")
         agy = os.path.join(bindir, "agy")
         with open(agy, "w", encoding="utf-8") as f:
-            f.write(f"#!{sys.executable}\nimport sys\nsys.stdout.write(open({listing!r}).read())\n")
+            f.write(f"#!{sys.executable} -I\nimport sys\nsys.stdout.write(open({listing!r}).read())\n")
         os.chmod(agy, 0o755)
         nobin = os.path.join(tmp, "nobin")
         os.makedirs(nobin)
@@ -139,34 +160,54 @@ def main() -> int:
 
         def with_listing(data) -> None:
             with open(listing, "w", encoding="utf-8") as f:
-                json.dump(data, f)
+                f.write(data if isinstance(data, str) else json.dumps(data))
 
+        def decoy_ran() -> bool:
+            ran = os.path.exists(marker)
+            if ran:
+                os.remove(marker)
+            return ran
+
+        check("python3 -I -c" in expr, "resolver runs python3 isolated (-I)")
         entry = {"name": "marc", "enabled": True, "path": root}
-        for shape, data in (("list", [{"name": "other", "path": tmp}, entry]),
-                            ("imports", {"imports": [entry]})):
+        ok_cases = (
+            ("list", [{"name": "other", "path": root2}, entry]),
+            ("imports", {"imports": [entry]}),
+            ("disabled duplicate skipped", [dict(entry, enabled=False, path=root2), entry]),
+            ("same root listed twice", [entry, dict(entry)]),
+        )
+        for shape, data in ok_cases:
             with_listing(data)
-            for n in names:
-                p = run(f'python3 "{expr}/{n}"', ws, bindir)
-                check(p.returncode == 0 and p.stdout.strip() == f"INSTALLED {n}",
-                      f"{shape} listing: {n} runs from the installed root "
-                      f"(rc={p.returncode} out={p.stdout.strip()!r} err={p.stderr.strip()[:200]!r})")
+            for kind, ws in workspaces.items():
+                for n in names:
+                    p = run(f'python3 "{expr}/{n}"', ws, bindir)
+                    check(p.returncode == 0 and p.stdout.strip() == f"INSTALLED {n}"
+                          and not decoy_ran(),
+                          f"{shape} listing, decoy {kind}: {n} runs from the installed root "
+                          f"(rc={p.returncode} out={p.stdout.strip()!r} err={p.stderr.strip()[:200]!r})")
 
         n = names[0]
         cases = (
-            ("no marc entry", bindir, [{"name": "other", "path": root}]),
-            ("relative path", bindir, [{"name": "marc", "path": "."}]),
-            ("marc root without scripts/", bindir, [{"name": "marc", "path": tmp}]),
-            ("agy not on PATH", nobin, []),
+            ("no marc entry", bindir, [{"name": "other", "path": root}], "no installed marc"),
+            ("relative path", bindir, [{"name": "marc", "path": "."}], "no installed marc"),
+            ("marc root without scripts/", bindir, [{"name": "marc", "path": tmp}], "no installed marc"),
+            ("only entry disabled", bindir, [dict(entry, enabled=False)], "no installed marc"),
+            ("two enabled roots", bindir, [entry, dict(entry, path=root2)], "ambiguous"),
+            ("malformed JSON", bindir, '[{"name": "marc", "path": ', "no installed marc"),
+            ("non-list JSON", bindir, "42", "no installed marc"),
+            ("agy not on PATH", nobin, [], "no installed marc"),
         )
-        for label, path, data in cases:
+        for label, path, data, reason in cases:
             with_listing(data)
-            p = run(f'python3 "{expr}/{n}"', ws, path)
-            check(p.returncode != 0 and "WORKSPACE-DECOY" not in p.stdout
-                  and "INSTALLED" not in p.stdout,
-                  f"fails closed ({label}): rc={p.returncode} out={p.stdout.strip()!r}")
-            if label != "agy not on PATH":
-                check("[mARC] cannot resolve the installed marc plugin root" in p.stderr,
-                      f"clear error on stderr ({label})")
+            for kind, ws in workspaces.items():
+                p = run(f'python3 "{expr}/{n}"', ws, path)
+                check(p.returncode != 0 and "DECOY" not in p.stdout
+                      and "INSTALLED" not in p.stdout and not decoy_ran(),
+                      f"fails closed ({label}, decoy {kind}): rc={p.returncode} out={p.stdout.strip()!r}")
+                check("[mARC] " in p.stderr and reason in p.stderr
+                      and "refusing to fall back to the workspace" in p.stderr
+                      and "Traceback" not in p.stderr,
+                      f"clear [mARC] error on stderr ({label}, decoy {kind}): {p.stderr.strip()[:200]!r}")
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")
