@@ -76,16 +76,19 @@ failures: list[str] = []
 xfails: list[str] = []
 HARNESS = ""
 
-# Known, tracked defects: (harness, message prefix) -> issue. An XFAIL is
-# printed and counted, never hidden; if the check starts passing (XPASS) that
-# is a failure, so the entry gets removed in the fixing PR.
+# Known, tracked defects: (harness, full message prefix) -> issue. The key is
+# the whole check message up to the first "(", so a reworded message stops
+# matching and fails red. An XFAIL is printed and counted, never hidden; if
+# the check starts passing (XPASS) that is a failure, so the entry gets
+# removed in the fixing PR.
 XFAIL = {
-    ("codex", "team-toml@SessionStart"): "https://github.com/NexaDuo/mARC/issues/370",
+    ("codex", "team-toml@SessionStart[*]: the workspace's team.toml reaches the session"):
+        "https://github.com/NexaDuo/mARC/issues/370",
 }
 
 
 def check(ok: bool, msg: str) -> bool:
-    issue = next((u for (h, p), u in XFAIL.items() if h == HARNESS and msg.startswith(p) and "team.toml" in msg), None)
+    issue = next((u for (h, p), u in XFAIL.items() if h == HARNESS and msg.split(" (")[0] == p), None)
     if issue and not ok:
         print(f"XFAIL ({issue}): {msg}")
         xfails.append(f"{msg} [{issue}]")
@@ -106,7 +109,9 @@ def sh(argv, **kw) -> subprocess.CompletedProcess:
 
 
 def base_env(extra: dict) -> dict:
-    env = {k: v for k, v in os.environ.items() if not any(s in k for s in STRIP) and not k.startswith("CLAUDE")}
+    # Config-dir overrides of the developer's real CLIs never leak in (#371 SEC-2).
+    env = {k: v for k, v in os.environ.items() if not any(s in k for s in STRIP) and not k.startswith("CLAUDE")
+           and k not in ("COPILOT_HOME", "XDG_CONFIG_HOME", "CODEX_HOME")}
     env.update(extra)
     return env
 
@@ -256,10 +261,12 @@ class Copilot(Adapter):
     def install(self) -> str:
         home = os.path.join(self.tmp, "home")
         os.makedirs(home)
-        self.ctx = {"HOME": home}
+        self.ctx = {"HOME": home, "COPILOT_HOME": os.path.join(home, ".copilot")}
         env = base_env(self.ctx)
         sh(["copilot", "plugin", "marketplace", "add", ROOT], env=env, cwd=self.tmp, check=True)
         sh(["copilot", "plugin", "install", "marc@nexaduo"], env=env, cwd=self.tmp, check=True)
+        listing = sh(["copilot", "plugin", "list"], env=env, cwd=self.tmp).stdout
+        check("marc@nexaduo" in listing, "copilot: marc@nexaduo installed into the temp COPILOT_HOME")
         return os.path.join(home, ".copilot", "installed-plugins", "nexaduo", "marc")
 
     def hooks(self, plugin):

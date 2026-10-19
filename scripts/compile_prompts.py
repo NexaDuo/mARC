@@ -12,41 +12,61 @@ import sys
 # CLI (origin: #367):
 #   * `agy plugin list --json`: a list, or {"imports": [...]}, of
 #     {"name", "path", "enabled"};
-#   * `claude plugin list --json`: a list of {"id": "marc@<mkt>",
-#     "installPath", "enabled"};
+#   * `claude plugin list --json`: a list of {"id": "marc@<mkt>", "scope",
+#     "projectPath", "installPath", "enabled"} covering EVERY scope: user,
+#     managed, synced (installPath ""), and project/local entries for every
+#     project on the machine, each reporting enabled=true wherever you are;
 #   * `codex plugin list --json`: {"installed": [{"name", "marketplaceName",
 #     "version", "enabled", "installed"}]}; the root is Codex's install cache,
 #     ${CODEX_HOME:-~/.codex}/plugins/cache/<mkt>/marc/<version>;
-#   * a list of {"name", "path"} built by `bundled_scripts_list_command`
-#     (Copilot, whose `plugin list` prints no paths).
-# Unparseable input, no enabled `marc` entry with an absolute root holding
-# `scripts/`, or more than one distinct such root all print a `[mARC]` error
-# to stderr and an absolute sentinel path on stdout, so the calling
+#   * Copilot's own `config.json` (`//` comment lines, then
+#     {"installedPlugins": [{"name", "marketplace", "cache_path", "enabled"}]}),
+#     since `copilot plugin list` prints no paths.
+# Scope (#371 REV-1): an entry carrying a projectPath (or a project/local
+# scope) only counts when that path is the current project: the nearest
+# ancestor of the cwd holding `.git` (found on the filesystem, never by
+# running git inside an untrusted repo), or the cwd itself. Among what is
+# left the most specific scope wins, as in Claude Code's documented settings
+# precedence: managed > local > project > user. Only a tie of distinct roots
+# at the winning level is "ambiguous".
+# Unparseable input, no usable root, or a tie all print a `[mARC]` error to
+# stderr and an absolute sentinel path on stdout, so the calling
 # `python3 "<dir>/<name>.py"` fails with "can't open file" instead of
 # resolving against the workspace (origin: #364).
 _PLUGIN_LIST_RESOLVER_SRC = """\
 import json, os, sys
 j = os.path.join
 try:
-    d = json.load(sys.stdin)
+    d = json.loads("\\n".join(x for x in sys.stdin.read().splitlines() if not x.lstrip().startswith("//")))
 except Exception:
     d = []
 if isinstance(d, dict):
-    d = d.get("imports") or d.get("installed") or []
-roots = set()
+    d = d.get("imports") or d.get("installed") or d.get("installedPlugins") or []
+cwd = os.path.realpath(os.getcwd())
+top = cwd
+while not os.path.exists(j(top, ".git")) and os.path.dirname(top) != top:
+    top = os.path.dirname(top)
+here = {cwd, top if os.path.exists(j(top, ".git")) else cwd}
+rank = {"managed": 4, "local": 3, "project": 2}
+levels = {}
 for p in d if isinstance(d, list) else []:
     if not isinstance(p, dict) or p.get("enabled") is False or p.get("installed") is False:
         continue
     if (p.get("name") or str(p.get("id") or "").split("@")[0]) != "marc":
         continue
-    r = p.get("path") if "path" in p else p.get("installPath")
+    scope, pp = p.get("scope"), p.get("projectPath")
+    if pp or scope in ("local", "project"):
+        if not isinstance(pp, str) or not os.path.isabs(pp) or os.path.realpath(pp) not in here:
+            continue
+    r = p["path"] if "path" in p else p.get("installPath", p.get("cache_path"))
     m, v = p.get("marketplaceName"), p.get("version")
     if r is None and all(isinstance(x, str) and x and x.strip(".") and "/" not in x for x in (m, v)):
         r = j(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"), "plugins", "cache", m, "marc", v)
     if isinstance(r, str) and os.path.isabs(r) and os.path.isdir(j(r, "scripts")):
-        roots.add(os.path.realpath(r))
+        levels.setdefault(rank.get(scope, 2 if pp else 1), set()).add(os.path.realpath(r))
+roots = levels[max(levels)] if levels else set()
 if len(roots) != 1:
-    why = "ambiguous: several enabled marc plugin roots" if roots else "no installed marc plugin root"
+    why = "ambiguous: several enabled marc plugin roots at the same scope" if roots else "no installed marc plugin root"
     sys.stderr.write("[mARC] " + why + " in the plugin list; refusing to fall back to the workspace\\n")
 print(j(roots.pop(), "scripts") if len(roots) == 1 else "/marc-plugin-root-unresolved")
 """

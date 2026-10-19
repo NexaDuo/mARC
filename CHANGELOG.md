@@ -10,7 +10,7 @@ date whose `YY.M.D` is already taken.
 
 ### Fixed
 
-- Claude Code, Codex, Copilot: tech-lead references resolve bundled scripts from the installed plugin via the plugin-list resolver, since a no-model probe showed none of these CLIs exports a plugin root to the model's shell (`${VAR:-.}` ran the workspace's `./scripts`); a new installed-copy matrix tests hooks and scripts for all four harnesses in CI (#367).
+- Claude Code, Codex, Copilot: tech-lead references resolve bundled scripts from the installed plugin via the plugin-list resolver (scope-aware: the current project's local/project install wins over user scope), since a no-model probe showed none of these CLIs exports a plugin root to the model's shell (`${VAR:-.}` ran the workspace's `./scripts`); a new installed-copy matrix tests hooks and scripts for all four harnesses in CI (#367).
 - Antigravity: the tech-lead references now run bundled scripts
   (`dispatch_agent.py`, `board.py`, `release_verify.py`) from the installed
   plugin, resolved at run time from `agy plugin list --json` (#364). They used

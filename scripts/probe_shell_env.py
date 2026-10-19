@@ -148,7 +148,8 @@ def probe(harness: str, cli: str) -> dict:
         os.makedirs(ws)
         capture = os.path.join(base, "hook-env.txt")
         env = {k: v for k, v in os.environ.items()
-               if not any(s in k for s in ("TOKEN", "API_KEY", "PLUGIN", "PROJECT_DIR", "COPILOT", "CODEX", "GH_"))}
+               if not any(s in k for s in ("TOKEN", "API_KEY", "PLUGIN", "PROJECT_DIR", "COPILOT", "CODEX", "GH_"))
+               and k != "XDG_CONFIG_HOME"}  # never the developer's real CLI config (#371 SEC-2)
         env["HOME"] = home
 
         def run(*args, timeout=240):
@@ -165,6 +166,7 @@ def probe(harness: str, cli: str) -> dict:
                    "-c", "model_providers.mock.requires_openai_auth=false", "-c", 'model="mock-model"']
             r = run("exec", *cfg, "--skip-git-repo-check", "-s", "read-only", "--enable", "codex_hooks", "probe")
         else:
+            env["COPILOT_HOME"] = os.path.join(home, ".copilot")
             run("plugin", "marketplace", "add", ROOT)
             run("plugin", "install", "marc@nexaduo")
             installed = os.path.join(home, ".copilot", "installed-plugins", "nexaduo", "marc")
