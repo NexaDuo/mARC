@@ -19,7 +19,10 @@ date whose `YY.M.D` is already taken.
   when the config loads (no leading `-`), is read only from the main clone,
   and never reaches the `@rev`/`@sec` reviewers: Codex reviewers routed by
   the #351 opt-in keep Codex's default config. A Codex usage limit still
-  exits 2. `usage.jsonl` records carry a `profile` field. The profile itself
+  exits 2. `usage.jsonl` records carry a `profile` field, and `task-usage`
+  keeps profiled Codex tokens out of the default (billed) Codex totals,
+  listing them on their own `codex[profile=<name>]` line under each task or
+  step; with no profiled runs its output is unchanged. The profile itself
   lives in the user's own `~/.codex/config.toml`; `docs/team.toml.example`
   shows the local-implementer, Codex-reviewer setup.
 

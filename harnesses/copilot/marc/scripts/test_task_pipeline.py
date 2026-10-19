@@ -920,6 +920,48 @@ class TestCli(Base):
         code, out = self.quiet(tp.usage_main, ["--run-dir", str(self.tmp), "--task", "a"])
         self.assertEqual([ln.split()[0] for ln in out.splitlines()[1:]], ["impl", "review-rev"])
 
+    USAGE_PLAIN = [
+        {"task": "a", "step": "impl", "harness": "codex", "input_tokens": 1_500_000,
+         "cached_input_tokens": 250_000, "output_tokens": 1234},
+        {"task": "a", "step": "fix-2", "harness": "codex", "input_tokens": 500_000,
+         "cached_input_tokens": 0, "output_tokens": 66, "profile": None},
+        {"task": "a", "step": "review-rev", "harness": "claude", "cache_read_input_tokens": 2_000_000,
+         "cache_creation_input_tokens": 30_000, "output_tokens": 5, "cost_usd": 0.5},
+        {"task": "b", "step": "impl", "harness": "codex", "input_tokens": 10, "output_tokens": 3},
+    ]
+
+    def usage_out(self, rows, *extra):
+        (self.tmp / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        code, out = self.quiet(tp.usage_main, ["--run-dir", str(self.tmp), *extra])
+        self.assertEqual(code, 0)
+        return out
+
+    def test_usage_without_profiles_is_unchanged(self):
+        # Pinned from the pre-#373 output: no profile (absent or null) prints exactly this.
+        self.assertEqual(self.usage_out(self.USAGE_PLAIN), (
+            "task                   runs  codex_in  (cached)  codex_out  claude_read  claude_write  claude_out  claude_usd\n"
+            "a                         3     2.00M     0.25M       1300        2.00M         0.03M           5        0.50\n"
+            "b                         1     0.00M     0.00M          3        0.00M         0.00M           0        0.00\n"))
+
+    def test_usage_splits_profiled_codex_runs(self):
+        rows = self.USAGE_PLAIN + [
+            {"task": "a", "step": "fix-3", "harness": "codex", "input_tokens": 4_000_000,
+             "cached_input_tokens": 1_000_000, "output_tokens": 900, "profile": "local"},
+            {"task": "a", "step": "fix-4", "harness": "codex", "input_tokens": 3_000_000,
+             "output_tokens": 100, "profile": "local"},
+            {"task": "b", "step": "impl", "harness": "codex", "input_tokens": 2_000_000,
+             "output_tokens": 7, "profile": "other\x1b[2J\n"},
+        ]
+        self.assertEqual(self.usage_out(rows), (
+            "task                   runs  codex_in  (cached)  codex_out  claude_read  claude_write  claude_out  claude_usd\n"
+            "a                         5     2.00M     0.25M       1300        2.00M         0.03M           5        0.50\n"
+            "  codex[profile=local]    2     7.00M     1.00M       1000\n"
+            "b                         2     0.00M     0.00M          3        0.00M         0.00M           0        0.00\n"
+            "  codex[profile=other[2J]    1     2.00M     0.00M          7\n"))
+        lines = self.usage_out(rows, "--task", "a").splitlines()
+        self.assertEqual(lines[lines.index(next(ln for ln in lines if ln.startswith("fix-3"))) + 1].split(),
+                         ["codex[profile=local]", "1", "4.00M", "1.00M", "900"])
+
 
 if __name__ == "__main__":
     unittest.main()

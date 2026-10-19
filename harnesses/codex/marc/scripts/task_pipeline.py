@@ -988,16 +988,32 @@ class Task:
 
 # ---- usage ledger ------------------------------------------------------------
 
-def summarize(rows: List[Dict[str, Any]], by: str) -> List[Tuple[str, Dict[str, float]]]:
-    agg: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+def _profile_label(value: Any) -> str:
+    """Display-only form of a ledger `profile`: printable chars, capped length."""
+    text = "".join(c for c in str(value) if c.isprintable())
+    return text[:40] or "?"
+
+
+def summarize(rows: List[Dict[str, Any]], by: str) -> List[Tuple[str, Dict[str, Any]]]:
+    """Aggregate ledger rows by `by`. Codex rows carrying a `profile` (e.g. a
+    local, unbilled model) are kept out of the default codex_* totals and summed
+    per profile under the "profiles" key, so billed and local runs stay apart."""
+    agg: Dict[str, Dict[str, Any]] = defaultdict(lambda: defaultdict(float))
     for r in rows:
         a = agg[str(r.get(by, "?"))]
         a["runs"] += 1
         a["seconds"] += r.get("seconds") or 0
         if r.get("harness") == "codex":
-            a["codex_in"] += r.get("input_tokens") or 0
-            a["codex_cached"] += r.get("cached_input_tokens") or 0
-            a["codex_out"] += r.get("output_tokens") or 0
+            profile = r.get("profile")
+            if profile is None or profile == "":
+                bucket = a
+            else:
+                profiles = a.setdefault("profiles", {})
+                bucket = profiles.setdefault(_profile_label(profile), defaultdict(float))
+                bucket["runs"] += 1
+            bucket["codex_in"] += r.get("input_tokens") or 0
+            bucket["codex_cached"] += r.get("cached_input_tokens") or 0
+            bucket["codex_out"] += r.get("output_tokens") or 0
         else:
             a["claude_cache_read"] += r.get("cache_read_input_tokens") or 0
             a["claude_cache_write"] += r.get("cache_creation_input_tokens") or 0
@@ -1006,7 +1022,7 @@ def summarize(rows: List[Dict[str, Any]], by: str) -> List[Tuple[str, Dict[str, 
     return sorted(agg.items())
 
 
-def fmt_usage(rows: List[Tuple[str, Dict[str, float]]], label: str) -> str:
+def fmt_usage(rows: List[Tuple[str, Dict[str, Any]]], label: str) -> str:
     def m(v: float) -> str:
         return f"{v / 1e6:.2f}M"
     lines = [f"{label:<22} runs  codex_in  (cached)  codex_out  claude_read  claude_write  claude_out  claude_usd"]
@@ -1014,6 +1030,10 @@ def fmt_usage(rows: List[Tuple[str, Dict[str, float]]], label: str) -> str:
         lines.append(f"{key:<22} {int(a['runs']):>4}  {m(a['codex_in']):>8}  {m(a['codex_cached']):>8}"
                      f"  {int(a['codex_out']):>9}  {m(a['claude_cache_read']):>11}"
                      f"  {m(a['claude_cache_write']):>12}  {int(a['claude_out']):>10}  {a['claude_usd']:>10.2f}")
+        for name, p in sorted(a.get("profiles", {}).items()):
+            tag = f"  codex[profile={name}]"
+            lines.append(f"{tag:<22} {int(p['runs']):>4}  {m(p['codex_in']):>8}  {m(p['codex_cached']):>8}"
+                         f"  {int(p['codex_out']):>9}")
     return "\n".join(lines)
 
 
