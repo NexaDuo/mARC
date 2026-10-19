@@ -577,45 +577,29 @@ class TestLoop(Base):
                 t.codex("low", "x", "fix-1")
 
 
-# ---- Codex profile and fallback (#373) ---------------------------------------
-
-class LimitedTask(FakeTask):
-    """codex() hits the usage limit while on one of `limited` profiles
-    (None = Codex's default) for steps starting with `limit_prefix`."""
-
-    def limit(self, limited, limit_prefix=""):
-        self.limited, self.limit_prefix, self.calls = set(limited), limit_prefix, []
-        return self
-
-    def codex(self, effort, prompt_text, step):
-        self.calls.append((step, self.profile))
-        if self.profile in self.limited and step.startswith(self.limit_prefix):
-            raise tp.CodexLimit("try again at 1:59 AM")
-        return super().codex(effort, prompt_text, step)
-
+# ---- Codex profile (#373) ----------------------------------------------------
 
 class TestCodexProfile(Base):
-    def capture(self, t, limited=()):
-        """Run t.codex_step through a fake codex; return the argv of every run."""
+    def capture(self, t, limited=False):
+        """Run t.codex through a fake codex; return the argv of every run."""
         cmds = []
 
         def fake_run(cmd, **kw):
             cmds.append(cmd)
-            profile = cmd[cmd.index("-p") + 1] if "-p" in cmd else None
             kw["out"].write_text('{"type":"error","message":"usage limit, try again at 1:59 AM"}\n'
-                                 if profile in limited else "")
-            return 1 if profile in limited else 0
+                                 if limited else "")
+            return 1 if limited else 0
 
         t.git = lambda *a, **kw: "sha1"
         with mock.patch.object(tp, "run_to_file", fake_run), mock.patch.object(tp, "which", lambda n: n):
-            try:
-                t.codex_step("high", "x", "impl")
-            except tp.CodexLimit:
-                pass
+            t.codex("high", "x", "impl")
         return cmds
 
     def ledger(self, t):
         return [json.loads(ln) for ln in (t.run_dir / "usage.jsonl").read_text().splitlines()]
+
+    def write(self, text):
+        TestConfig.write(self, text)
 
     def test_argv_without_a_profile_is_byte_identical(self):
         t = _task(self.tmp)
@@ -628,87 +612,56 @@ class TestCodexProfile(Base):
     def test_argv_with_a_profile(self):
         t = _task(self.tmp, config=_config(codex_profile="local"))
         cmds = self.capture(t)
-        self.assertEqual(cmds[0][:4], ["codex", "exec", "-p", "local"])
-        self.assertEqual(cmds[0][4:], ["--json", "-c", "model_reasoning_effort=high",
-                                       "--sandbox", "workspace-write", "-C", str(t.worktree),
-                                       "-o", str(t.file("impl.out")), "-"])
+        self.assertEqual(cmds, [["codex", "exec", "-p", "local", "--json", "-c",
+                                 "model_reasoning_effort=high", "--sandbox", "workspace-write",
+                                 "-C", str(t.worktree), "-o", str(t.file("impl.out")), "-"]])
         self.assertEqual(self.ledger(t)[0]["profile"], "local")
 
-    def test_limit_retries_on_the_fallback_profile(self):
-        t = _task(self.tmp, config=_config(codex_fallback_profile="local"))
-        cmds = self.capture(t, limited=(None,))
-        self.assertEqual(len(cmds), 2)
-        self.assertNotIn("-p", cmds[0])
-        self.assertEqual(cmds[1][2:4], ["-p", "local"])
-        self.assertEqual([r["profile"] for r in self.ledger(t)], [None, "local"])
-        self.assertEqual(t.profile, "local")
-        self.assertTrue(any("retrying impl on profile local" in ln for ln in t.lines))
+    def test_a_limit_on_the_profile_is_still_a_codex_limit(self):
+        t = _task(self.tmp, config=_config(codex_profile="local"))
+        with self.assertRaises(tp.CodexLimit):
+            self.capture(t, limited=True)
 
-    def test_fallback_also_limited_raises(self):
-        t = _task(self.tmp, config=_config(codex_profile="paid", codex_fallback_profile="local"))
-        self.assertEqual(len(self.capture(t, limited=("paid", "local"))), 2)  # once each, no loop
-
-    def test_config_keys(self):
-        cfg = TestConfig.write
-        cfg(self, '[task]\ntask_suite_cmd = ["true"]\ntask_codex_profile = "local"\n'
-                  'task_codex_fallback_profile = "my_box.v2-1"\n')
-        c = tp.load_config(self.tmp)
-        self.assertEqual((c.codex_profile, c.codex_fallback_profile), ("local", "my_box.v2-1"))
-        cfg(self, '[task]\ntask_suite_cmd = ["true"]\n')
-        c = tp.load_config(self.tmp)
-        self.assertEqual((c.codex_profile, c.codex_fallback_profile), ("", ""))
+    def test_config_key(self):
+        self.write('[task]\ntask_suite_cmd = ["true"]\ntask_codex_profile = "my_box.v2-1"\n')
+        self.assertEqual(tp.load_config(self.tmp).codex_profile, "my_box.v2-1")
+        self.write('[task]\ntask_suite_cmd = ["true"]\n')
+        self.assertEqual(tp.load_config(self.tmp).codex_profile, "")
 
     def test_invalid_profile_names_fail_closed(self):
-        for key in ("task_codex_profile", "task_codex_fallback_profile"):
-            for bad in ('"-x"', '"--oss"', '"a b"', '"a=b"', '""', '" local"', '"a/b"',
-                        '"' + "a" * 65 + '"', "5", '["a"]'):
-                TestConfig.write(self, f'[task]\ntask_suite_cmd = ["true"]\n{key} = {bad}\n')
-                with self.assertRaises(tp.TaskError, msg=f"{key} = {bad}"):
-                    tp.load_config(self.tmp)
+        for bad in ('"-x"', '"--oss"', '"a b"', '"a=b"', '""', '" local"', '"a/b"',
+                    '"' + "a" * 65 + '"', "5", '["a"]'):
+            self.write(f'[task]\ntask_suite_cmd = ["true"]\ntask_codex_profile = {bad}\n')
+            with self.assertRaises(tp.TaskError, msg=bad):
+                tp.load_config(self.tmp)
 
-    def run_limited(self, rounds, limited, limit_prefix="", **config):
-        t = _task(self.tmp, cls=LimitedTask, config=_config(**config)).setup(rounds)
-        t.limit(limited, limit_prefix)
-        t.prompt, t.commit_msg = self.tmp / "p.md", self.tmp / "m.txt"
-        t.prompt.write_text("do it")
-        t.commit_msg.write_text("feat: demo")
-        return t, t.run()
-
-    def test_loop_falls_back_on_the_implement_step(self):
-        t, code = self.run_limited([PASS], {None}, codex_fallback_profile="local")
-        self.assertEqual(code, tp.EXIT_OK)
-        self.assertEqual(t.calls, [("impl", None), ("impl", "local")])
-
-    def test_loop_falls_back_on_a_fix_step_and_stays_there(self):
-        t, code = self.run_limited([BLOCK, BLOCK, PASS], {None}, "fix",
-                                   codex_fallback_profile="local")
-        self.assertEqual(code, tp.EXIT_OK)
-        self.assertEqual(t.calls, [("impl", None), ("fix-1", None), ("fix-1", "local"),
-                                   ("fix-2", "local")])
-
-    def test_loop_fallback_also_limited_exits_2(self):
-        t, code = self.run_limited([PASS], {None, "local"}, codex_fallback_profile="local")
-        self.assertEqual(code, tp.EXIT_LIMIT)
-        self.assertEqual(t.calls, [("impl", None), ("impl", "local")])
-        self.assertEqual(t.reviewed, [])
-
-    def test_loop_without_a_fallback_exits_2(self):
-        t, code = self.run_limited([BLOCK, PASS], {None}, "fix")
-        self.assertEqual(code, tp.EXIT_LIMIT)
-        self.assertEqual(t.calls, [("impl", None), ("fix-1", None)])
-
-    def test_reviewers_never_get_the_profile(self):
-        plain = _task(self.tmp, config=_config(codex_review={"rev": True, "sec": False}))
-        t = _task(self.tmp, config=_config(codex_review={"rev": True, "sec": False},
-                                           codex_profile="local", codex_fallback_profile="fb"))
+    def test_codex_reviewers_keep_the_default_config_with_a_profile_set(self):
+        """The intended setup: a local profile implements, Codex on its default
+        config reviews through the #351 route, Claude operates."""
+        self.write('[task]\ntask_suite_cmd = ["true"]\ntask_codex_profile = "local"\n'
+                   '[orchestration]\nmode = "hybrid"\n'
+                   '[orchestration.routes]\nrev = "codex"\nsec = "codex"\n')
+        config = tp.load_config(self.tmp)
+        self.assertEqual((config.codex_profile, config.codex_review),
+                         ("local", {"rev": True, "sec": True}))
+        t = _task(self.tmp, config=config)
+        plain = _task(self.tmp, config=_config(codex_review={"rev": True, "sec": True}))
         with mock.patch.object(tp, "which", lambda n: n):
-            for profile in ("local", "fb"):  # before and after a fallback
-                t.profile = profile
-                codex_cmd, claude_cmd = t.review_cmd("rev"), t.review_cmd("sec")
-                self.assertNotIn("-p", codex_cmd)
-                self.assertEqual(codex_cmd, plain.review_cmd("rev"))
-                self.assertEqual(claude_cmd, plain.review_cmd("sec"))
-                self.assertFalse({"local", "fb"} & set(codex_cmd + claude_cmd))
+            for kind in tp.KINDS:
+                cmd = t.review_cmd(kind)
+                self.assertEqual(cmd[:2], ["codex", "exec"])
+                self.assertNotIn("-p", cmd)
+                self.assertNotIn("local", cmd)
+                self.assertEqual(cmd, plain.review_cmd(kind))
+        self.assertEqual(self.capture(t)[0][2:4], ["-p", "local"])  # the implementer does get it
+
+    def test_claude_reviewers_never_get_the_profile(self):
+        t = _task(self.tmp, config=_config(codex_profile="local"))
+        plain = _task(self.tmp)
+        with mock.patch.object(tp, "which", lambda n: n):
+            for kind in tp.KINDS:
+                self.assertEqual(t.review_cmd(kind), plain.review_cmd(kind))
+                self.assertNotIn("local", t.review_cmd(kind))
 
 
 # ---- git gates (real repository) ---------------------------------------------

@@ -208,13 +208,27 @@ research = "claude-code"
 # task_scratch = [".test-tmp*"]
 # Branch the worktree starts from and the PR targets.
 # task_base = "main"
-# A Codex config profile for the implement/fix runs (`codex exec -p <name>`),
-# for example a local inference server; omit for Codex's default config.
-# A plain name (letters, digits, '_', '.', '-', not starting with '-').
+# A Codex config profile for the implement/fix runs only (`codex exec -p
+# <name>`), for example a local inference server. Omit for Codex's default
+# config. A plain name (letters, digits, '_', '.', '-', not starting with
+# '-'); anything else stops the run before Codex starts. Reviewers never get
+# it, and a Codex usage limit still exits 2. usage.jsonl records the profile.
 # task_codex_profile = "local"
-# On a Codex usage limit, retry that implement/fix step once on this profile
-# and keep it for the rest of the run. Omit to stop with exit 2 instead.
-# task_codex_fallback_profile = "local"
+# Reviewers are Claude Code headless unless [orchestration.routes] sends
+# rev/sec to "codex" (the #351 opt-in). A Codex reviewer can read the whole
+# disk and its report is posted on the PR, so prefer Claude here; see #358
+# for the open question of a trusted project .codex/config.toml.
+#
+# Worked example (#373): a local model implements, Codex on its default
+# config reviews, and Claude is the operator running `dispatch_agent.py task`.
+#   [orchestration]
+#   mode = "hybrid"
+#   [orchestration.routes]
+#   rev = "codex"           # the #351 opt-in: Codex reviews, no -p
+#   sec = "codex"
+#   [task]
+#   task_suite_cmd = ["python", "-m", "pytest", "-q"]
+#   task_codex_profile = "local"   # implement/fix on the local model
 # The profile lives in YOUR ~/.codex/config.toml (mARC never writes it), e.g.:
 #   [model_providers.lmstudio]
 #   name = "LM Studio"
@@ -225,11 +239,6 @@ research = "claude-code"
 #   model = "qwen3.6-35b-a3b"
 # Gotcha: some local model chat templates reject a second system message
 # ("System message must be at the beginning"); patch the template in the server.
-# Neither key reaches the reviewers. usage.jsonl records the profile per run.
-# Reviewers are Claude Code headless unless [orchestration.routes] sends
-# rev/sec to "codex" (the #351 opt-in). A Codex reviewer can read the whole
-# disk and its report is posted on the PR, so prefer Claude here; see #358
-# for the open question of a trusted project .codex/config.toml.
 
 # --- Release-phase facts (what "done" requires in THIS repo) ---
 [release]

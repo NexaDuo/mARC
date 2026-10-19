@@ -15,14 +15,13 @@ date whose `YY.M.D` is already taken.
 - `dispatch_agent.py task` can run its Codex implement and fix steps on a
   named Codex config profile, for example a local inference server (#373).
   `[task] task_codex_profile` adds `-p <profile>` to those runs; unset, the
-  command is unchanged. `[task] task_codex_fallback_profile` retries a step
-  that hit the Codex usage limit once on that profile and keeps it for the
-  rest of the run; if it is unset or also limited, the run still exits 2.
-  Both names are checked against a plain-name allowlist when the config
-  loads (no leading `-`), are read only from the main clone, and never reach
-  the `@rev`/`@sec` reviewers. `usage.jsonl` records carry a `profile` field.
-  The profile itself lives in the user's own `~/.codex/config.toml`; see
-  `docs/team.toml.example`.
+  command is unchanged. The name is checked against a plain-name allowlist
+  when the config loads (no leading `-`), is read only from the main clone,
+  and never reaches the `@rev`/`@sec` reviewers: Codex reviewers routed by
+  the #351 opt-in keep Codex's default config. A Codex usage limit still
+  exits 2. `usage.jsonl` records carry a `profile` field. The profile itself
+  lives in the user's own `~/.codex/config.toml`; `docs/team.toml.example`
+  shows the local-implementer, Codex-reviewer setup.
 
 ### Fixed
 
