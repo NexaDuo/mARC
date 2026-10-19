@@ -4,37 +4,87 @@ import os
 import shutil
 import sys
 
-# Python program (single-quoted in the shell, so it must not contain `'`)
-# that reads `<harness> plugin list --json` on stdin and prints the
-# installed plugin's absolute `scripts/` directory. It runs as `python3 -I`
-# so a workspace `json.py`/`json/` can't shadow the stdlib import (#364
-# @sec SEC-1). Unparseable output, no enabled `marc` entry with an absolute
-# root holding `scripts/`, or more than one distinct such root all print a
-# `[mARC]` error to stderr and an absolute sentinel path on stdout, so the
-# calling `python3 "<dir>/<name>.py"` fails with "can't open file" instead of
+# Python program that reads a plugin list (JSON) on stdin and prints the
+# installed plugin's absolute `scripts/` directory. It is emitted as
+# `python3 -I -c 'exec("<this source, JSON-escaped>")'`, so it must not
+# contain `'`, and `-I` keeps a workspace `json.py`/`json/` from shadowing
+# the stdlib import (#364 @sec SEC-1). Accepted list shapes, one per harness
+# CLI (origin: #367):
+#   * `agy plugin list --json`: a list, or {"imports": [...]}, of
+#     {"name", "path", "enabled"};
+#   * `claude plugin list --json`: a list of {"id": "marc@<mkt>", "scope",
+#     "projectPath", "installPath", "enabled"} covering EVERY scope: user,
+#     managed, synced (installPath ""), and project/local entries for every
+#     project on the machine, each reporting enabled=true wherever you are;
+#   * `codex plugin list --json`: {"installed": [{"name", "marketplaceName",
+#     "version", "enabled", "installed"}]}; the root is Codex's install cache,
+#     ${CODEX_HOME:-~/.codex}/plugins/cache/<mkt>/marc/<version>;
+#   * Copilot's own `config.json` (`//` comment lines, then
+#     {"installedPlugins": [{"name", "marketplace", "cache_path", "enabled"}]}),
+#     since `copilot plugin list` prints no paths.
+# Scope (#371 REV-1): an entry carrying a projectPath (or a project/local
+# scope) only counts when that path is the current project: the nearest
+# ancestor of the cwd holding `.git` (found on the filesystem, never by
+# running git inside an untrusted repo), or the cwd itself. Among what is
+# left the most specific scope wins, as in Claude Code's documented settings
+# precedence: managed > local > project > user. Only a tie of distinct roots
+# at the winning level is "ambiguous".
+# Unparseable input, no usable root, or a tie all print a `[mARC]` error to
+# stderr and an absolute sentinel path on stdout, so the calling
+# `python3 "<dir>/<name>.py"` fails with "can't open file" instead of
 # resolving against the workspace (origin: #364).
-_PLUGIN_LIST_RESOLVER = (
-    "import json,os,sys; exec(\"try: d=json.load(sys.stdin)\\nexcept Exception: d=[]\"); "
-    "d=d.get(\"imports\") if isinstance(d,dict) else d; d=d if isinstance(d,list) else []; "
-    "j=os.path.join; r=sorted({os.path.realpath(p[\"path\"]) for p in d if isinstance(p,dict) "
-    "and p.get(\"name\")==\"marc\" and p.get(\"enabled\") is not False and isinstance(p.get(\"path\"),str) "
-    "and os.path.isabs(p[\"path\"]) and os.path.isdir(j(p[\"path\"],\"scripts\"))}); "
-    "len(r)==1 or sys.stderr.write(\"[mARC] \"+(\"ambiguous: several enabled marc plugin roots\" if r "
-    "else \"no installed marc plugin root\")+\" in the plugin list; refusing to fall back to the workspace\\n\"); "
-    "print(j(r[0],\"scripts\") if len(r)==1 else \"/marc-plugin-root-unresolved\")"
-)
+_PLUGIN_LIST_RESOLVER_SRC = """\
+import json, os, sys
+j = os.path.join
+try:
+    d = json.loads("\\n".join(x for x in sys.stdin.read().splitlines() if not x.lstrip().startswith("//")))
+except Exception:
+    d = []
+if isinstance(d, dict):
+    d = d.get("imports") or d.get("installed") or d.get("installedPlugins") or []
+cwd = os.path.realpath(os.getcwd())
+top = cwd
+while not os.path.exists(j(top, ".git")) and os.path.dirname(top) != top:
+    top = os.path.dirname(top)
+here = {cwd, top if os.path.exists(j(top, ".git")) else cwd}
+rank = {"managed": 4, "local": 3, "project": 2}
+levels = {}
+for p in d if isinstance(d, list) else []:
+    if not isinstance(p, dict) or p.get("enabled") is False or p.get("installed") is False:
+        continue
+    if (p.get("name") or str(p.get("id") or "").split("@")[0]) != "marc":
+        continue
+    scope, pp = p.get("scope"), p.get("projectPath")
+    if pp or scope in ("local", "project"):
+        if not isinstance(pp, str) or not os.path.isabs(pp) or os.path.realpath(pp) not in here:
+            continue
+    r = p["path"] if "path" in p else p.get("installPath", p.get("cache_path"))
+    m, v = p.get("marketplaceName"), p.get("version")
+    if r is None and all(isinstance(x, str) and x and x.strip(".") and "/" not in x for x in (m, v)):
+        r = j(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"), "plugins", "cache", m, "marc", v)
+    if isinstance(r, str) and os.path.isabs(r) and os.path.isdir(j(r, "scripts")):
+        levels.setdefault(rank.get(scope, 2 if pp else 1), set()).add(os.path.realpath(r))
+roots = levels[max(levels)] if levels else set()
+if len(roots) != 1:
+    why = "ambiguous: several enabled marc plugin roots at the same scope" if roots else "no installed marc plugin root"
+    sys.stderr.write("[mARC] " + why + " in the plugin list; refusing to fall back to the workspace\\n")
+print(j(roots.pop(), "scripts") if len(roots) == 1 else "/marc-plugin-root-unresolved")
+"""
+_PLUGIN_LIST_RESOLVER = "exec(" + json.dumps(_PLUGIN_LIST_RESOLVER_SRC) + ")"
 
 
 def apply_derived_defaults(config):
     """Fill compile keys derived from other compile.json fields.
 
     `bundled_scripts_dir` is the shell expression for the directory holding
-    the plugin's bundled scripts. By default it is `${<plugin_root_env>:-.}/scripts`
-    (unchanged output for harnesses that export their plugin root). A harness
-    that exports NO plugin-root variable to the model's shell (Antigravity,
-    #364: `:-.` then silently resolves to the workspace's ./scripts) sets
+    the plugin's bundled scripts. By default it is `${<plugin_root_env>:-.}/scripts`.
+    A harness that exports NO plugin-root variable to the model's shell
+    (`:-.` then silently resolves to the workspace's ./scripts) sets
     `"bundled_scripts_resolver": "plugin-list"`, which resolves the installed
-    copy from `plugin_list_command` at run time and fails closed.
+    copy at run time from `bundled_scripts_list_command` (default:
+    `plugin_list_command`) and fails closed. Probed without a model
+    (scripts/probe_shell_env.py, #367): none of Antigravity (#364), Claude
+    Code, Codex or Copilot exports one, so every shipped harness uses it.
 
     `hook_entrypoint_pin` names what pins hook entrypoints to the installed
     copy; harnesses whose hooks are not launched via the plugin-root
@@ -51,8 +101,9 @@ def apply_derived_defaults(config):
     elif resolver == "plugin-list":
         if "'" in _PLUGIN_LIST_RESOLVER:
             raise ValueError("plugin-list resolver must not contain a single quote")
+        list_command = config.get("bundled_scripts_list_command", config["plugin_list_command"])
         config["bundled_scripts_dir"] = (
-            f"$({config['plugin_list_command']} | python3 -I -c '{_PLUGIN_LIST_RESOLVER}')"
+            f"$({list_command} | python3 -I -c '{_PLUGIN_LIST_RESOLVER}')"
         )
     else:
         raise ValueError(f"unknown bundled_scripts_resolver {resolver!r}")
@@ -381,6 +432,17 @@ def get_hooks_json_path(harness_marc_path, config):
     return os.path.join(harness_marc_path, "hooks", "hooks.json")
 
 
+def agy_hook_bodies(selected_hooks, config):
+    """{"<id>.sh": full file text} for Antigravity's hooks/agy/ bodies. Shared
+    with core/scripts/test_hooks_parity.py so the parity gate compares the
+    committed bodies byte for byte (origin: #367)."""
+    return {
+        f"{h['id']}.sh": "#!/usr/bin/env bash\n# Generated by scripts/compile_prompts.py from "
+        "core/hooks/hooks.spec.json; do not edit.\n" + _build_command(h, config) + "\n"
+        for h in selected_hooks
+    }
+
+
 def compile_hooks(core_dir, harness_marc_path, config):
     """Compile core/hooks/hooks.spec.json into this harness's native
     hooks.json (at plugin root for Antigravity, or hooks/hooks.json for Claude
@@ -443,14 +505,13 @@ def compile_hooks(core_dir, harness_marc_path, config):
     dest_agy_dir = os.path.join(dest_hooks_dir, "agy")
     if dialect == "antigravity":
         os.makedirs(dest_agy_dir, exist_ok=True)
-        bodies = {f"{h['id']}.sh": _build_command(h, config) for h in selected_hooks}
+        bodies = agy_hook_bodies(selected_hooks, config)
         for existing in os.listdir(dest_agy_dir):
             if existing not in bodies:
                 os.remove(os.path.join(dest_agy_dir, existing))
         for name, body in sorted(bodies.items()):
             with open(os.path.join(dest_agy_dir, name), "w", encoding="utf-8", newline="\n") as f:
-                f.write("#!/usr/bin/env bash\n# Generated by scripts/compile_prompts.py from "
-                        "core/hooks/hooks.spec.json; do not edit.\n" + body + "\n")
+                f.write(body)
     elif os.path.isdir(dest_agy_dir):
         shutil.rmtree(dest_agy_dir)
 

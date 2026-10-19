@@ -866,13 +866,15 @@ jobs:
         run: python3 core/scripts/test_board_reconcile.py
 
       # 8c-agy-hooks. Antigravity hook contract on the compiled source (issue #343):
-      #     no secret needed, the installed copy is checked again in Tier 2.
+      #     no secret needed, so fork PRs get it too; the installed copy is
+      #     checked again in Tier 2 (scripts/test_installed_harness.py, #367).
       - name: Antigravity hook contract (source)
-        run: python3 scripts/test_agy_hooks.py
+        run: python3 scripts/test_installed_harness.py antigravity --source
 
-      # 8c-agy-script-root. Antigravity bundled-script resolution (issue #364):
-      #     compiled skills resolve scripts from `agy plugin list --json`, never
-      #     from the workspace, and fail closed when the root can't be found.
+      # 8c-agy-script-root. Bundled-script resolver (issue #364, #367): the
+      #     compiled plugin-list resolver every harness now uses lands on the
+      #     installed root, never the workspace, and fails closed when the root
+      #     can't be found (exercised here with a fake `agy plugin list`).
       - name: Antigravity bundled-script root (source)
         run: python3 scripts/test_agy_script_root.py
 
@@ -1029,50 +1031,18 @@ jobs:
           done
           echo "In-repo: plugin + tech-lead skill + engineer/sre/design/security/research agents all registered."
 
-          # 10. Bundled-script + hook resolution against the INSTALLED copy
-          #     (issue #167 AC#1/AC#2). Everything above proves the plugin is
-          #     *registered*; it never proves a script referenced from a
-          #     compiled SKILL.md, or a hook script referenced from
-          #     hooks.json, actually resolves once installed. Resolve
-          #     `${CLAUDE_PLUGIN_ROOT}` the same way the CLI does at runtime:
-          #     via `plugin list --json`'s `installPath` field, which is the
-          #     real on-disk cache location (verified empirically:
-          #     $CLAUDE_CONFIG_DIR/plugins/cache/nexaduo/marc/<version>).
-          INSTALL_PATH="$(claude plugin list --json | jq -r '.[] | select(.id=="marc@nexaduo") | .installPath')"
-          test -n "$INSTALL_PATH" && test -d "$INSTALL_PATH" \
-            || { echo "::error::could not resolve installPath for marc@nexaduo from 'plugin list --json'"; exit 1; }
-          echo "Installed copy resolved at: $INSTALL_PATH"
-
-          echo "== assert bundled scripts resolve via \${CLAUDE_PLUGIN_ROOT} against the INSTALLED copy =="
-          SCRIPT_REFS="$(grep -rhoE '\$\{CLAUDE_PLUGIN_ROOT:-\.\}/scripts/[A-Za-z0-9_.-]+' "$INSTALL_PATH"/skills/ | sed -E 's#.*/scripts/##' | sort -u)"
-          test -n "$SCRIPT_REFS" || { echo "::error::no \${CLAUDE_PLUGIN_ROOT}/scripts/* references found in installed SKILL.md files"; exit 1; }
-          while IFS= read -r name; do
-            resolved="$INSTALL_PATH/scripts/$name"
-            test -f "$resolved" || { echo "::error::installed script '$name' referenced from SKILL.md is missing at $resolved"; exit 1; }
-            python3 "$resolved" --help > /dev/null \
-              || { echo "::error::installed script '$name' at $resolved is not executable via python3 (--help failed)"; exit 1; }
-            echo "OK: \${CLAUDE_PLUGIN_ROOT}/scripts/$name resolves and runs from the installed copy ($resolved)"
-          done <<< "$SCRIPT_REFS"
-
-          echo "== assert hooks resolve via \${CLAUDE_PLUGIN_ROOT} against the INSTALLED copy =="
-          HOOKS_JSON="$INSTALL_PATH/hooks/hooks.json"
-          test -f "$HOOKS_JSON" || { echo "::error::installed hooks.json missing at $HOOKS_JSON"; exit 1; }
-          jq -e . "$HOOKS_JSON" > /dev/null || { echo "::error::installed hooks.json at $HOOKS_JSON is not valid JSON"; exit 1; }
-          HOOK_REFS="$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT(:-\$PWD)?\}/hooks/[A-Za-z0-9_.-]+' "$HOOKS_JSON" | sed -E 's#.*/hooks/##' | sort -u)"
-          test -n "$HOOK_REFS" || { echo "::error::no \${CLAUDE_PLUGIN_ROOT}/hooks/* references found in installed hooks.json"; exit 1; }
-          while IFS= read -r name; do
-            resolved="$INSTALL_PATH/hooks/$name"
-            test -f "$resolved" || { echo "::error::installed hook script '$name' referenced from hooks.json is missing at $resolved"; exit 1; }
-            bash -n "$resolved" || { echo "::error::installed hook script '$name' at $resolved fails bash syntax check"; exit 1; }
-            echo "OK: \${CLAUDE_PLUGIN_ROOT}/hooks/$name resolves and parses from the installed copy ($resolved)"
-          done <<< "$HOOK_REFS"
-
-          echo "NOTE: this proves hook/script *resolution* (file present, syntactically valid,"
-          echo "and for scripts, runnable via python3 --help) against the real installed copy."
-          echo "It does NOT prove a hook actually *fires* end-to-end through Claude Code's own"
-          echo "SessionStart/PostToolUse/Stop dispatch — no Tier 1/2 step anywhere exercises that;"
-          echo "the hook-logic self-tests below (search this log for 'invariants-card'/'outdated')"
-          echo "cover the scripts' own behavior standalone, with CLAUDE_PLUGIN_ROOT set by hand."
+      # 10. Installed-copy matrix, Claude Code (issue #167 AC#1/AC#2, #367).
+      #     Installs into its own temp CLAUDE_CONFIG_DIR, runs every installed
+      #     hooks.json command the way Claude Code does (bash -c, cwd = the
+      #     project, CLAUDE_PLUGIN_ROOT + CLAUDE_PROJECT_DIR, a stdin payload
+      #     per event), then runs every bundled-script reference in the
+      #     installed skills from a cwd holding decoy ./scripts/*.py and
+      #     ./json.py, with the model shell's real env (no CLAUDE_PLUGIN_ROOT).
+      #     It does not drive Claude Code's own hook dispatcher end to end.
+      - name: Tier 2 — Claude Code installed-copy matrix (hooks + bundled scripts)
+        env:
+          ANTHROPIC_API_KEY: ""
+        run: python3 scripts/test_installed_harness.py claude-code
 
       # Antigravity CLI bootstrap (issue #169 AC#1, AC#2).
       # Unprivileged step: ANTIGRAVITY_API_KEY is NOT exposed here.
@@ -1154,59 +1124,17 @@ jobs:
             exit 1
           }
 
-          # Bundled-script resolution against the INSTALLED copy (issue #167
-          # AC#1, #364). agy exports no plugin-root variable to the model's
-          # shell, so compiled skills resolve the scripts dir at run time from
-          # `agy plugin list --json` (the compiler's `bundled_scripts_dir`).
-          # This runs that exact compiled expression from a scratch cwd that
-          # holds decoy ./scripts/*.py and ./json.py and asserts it lands on CONFIG_DIR
-          # (verified: `agy plugin install` places the plugin at
-          # $HOME/.gemini/config/plugins/marc).
-          echo "== assert bundled scripts resolve via agy plugin list --json to the INSTALLED copy =="
-          if grep -rqF 'AGY_PLUGIN_ROOT:-.' "$CONFIG_DIR"/skills/; then
-            echo "::error::installed skills still resolve bundled scripts via a workspace fallback (AGY_PLUGIN_ROOT:-.)"; exit 1
-          fi
-          SCRIPTS_EXPR="$(python3 -c 'import json,sys; sys.path.insert(0, "scripts"); import compile_prompts as c; print(c.apply_derived_defaults(json.load(open("harnesses/antigravity/marc/compile.json")))["bundled_scripts_dir"])')"
-          export SCRIPTS_EXPR
-          SCRIPT_REFS="$(python3 - "$CONFIG_DIR/skills" <<'PY'
-          import os, re, sys
-          pat = re.compile('python3 "' + re.escape(os.environ["SCRIPTS_EXPR"]) + r'/([A-Za-z0-9_.-]+[.]py)"')
-          names = set()
-          for root, _, files in os.walk(sys.argv[1]):
-              for f in files:
-                  if f.endswith(".md"):
-                      with open(os.path.join(root, f), encoding="utf-8") as fh:
-                          names |= set(pat.findall(fh.read()))
-          print("\n".join(sorted(names)))
-          PY
-          )"
-          test -n "$SCRIPT_REFS" || { echo "::error::no plugin-list-resolved scripts/* references found in installed SKILL.md files"; exit 1; }
-          PROBE_CWD="$(mktemp -d)"
-          mkdir -p "$PROBE_CWD/scripts"
-          # Decoy stdlib json: the resolver must run `python3 -I`, so this never
-          # imports (#364, @sec SEC-1 on PR #366).
-          echo 'raise SystemExit("decoy json.py: resolver imported workspace code")' > "$PROBE_CWD/json.py"
-          printf 'printf "%%s" "%s"\n' "$SCRIPTS_EXPR" > "$PROBE_CWD/resolve.sh"
-          RESOLVED_DIR="$(cd "$PROBE_CWD" && bash resolve.sh)"
-          [ "$(realpath "$RESOLVED_DIR")" = "$(realpath "$CONFIG_DIR/scripts")" ] \
-            || { echo "::error::compiled resolver gave '$RESOLVED_DIR', expected the installed $CONFIG_DIR/scripts"; exit 1; }
-          while IFS= read -r name; do
-            resolved="$CONFIG_DIR/scripts/$name"
-            test -f "$resolved" || { echo "::error::installed script '$name' referenced from SKILL.md is missing at $resolved"; exit 1; }
-            echo 'raise SystemExit("decoy: resolved against the workspace")' > "$PROBE_CWD/scripts/$name"
-            printf 'python3 "%s/%s" --help\n' "$SCRIPTS_EXPR" "$name" > "$PROBE_CWD/run.sh"
-            (cd "$PROBE_CWD" && bash run.sh > /dev/null) \
-              || { echo "::error::compiled invocation of '$name' did not run the installed copy (--help failed)"; exit 1; }
-            echo "OK: $name resolves via agy plugin list --json and runs from the installed copy ($resolved)"
-          done <<< "$SCRIPT_REFS"
+          echo "Antigravity harness check: OK (plugin installed, all seven components registered). Hooks and bundled scripts are asserted in the next step."
 
-          echo "Antigravity harness check: OK (plugin installed, all seven components registered, bundled scripts resolve against the installed copy). Hooks are asserted in the next step."
-
-      # Hooks (issue #167 AC#2, #173/#170, #197, #343). harnesses/antigravity/marc/
-      # emits hooks.json at the plugin root ($CONFIG_DIR/hooks.json); every
-      # command is `bash hooks/agy-hook.sh <id> <Event>` and the bodies live in
-      # hooks/agy/. This step runs them against the INSTALLED copy under the
-      # contract agy actually applies (scripts/test_agy_hooks.py).
+      # Hooks + bundled scripts (issue #167 AC#1/AC#2, #173/#170, #197, #343,
+      # #364, #367). harnesses/antigravity/marc/ emits hooks.json at the
+      # plugin root ($CONFIG_DIR/hooks.json); every command is
+      # `bash hooks/agy-hook.sh <id> <Event>` and the bodies live in
+      # hooks/agy/. scripts/test_installed_harness.py runs them against the
+      # INSTALLED copy under the contract agy actually applies, then runs every
+      # bundled-script reference (resolved via `agy plugin list --json`, agy
+      # exports no plugin root to the model's shell) from a cwd holding decoy
+      # ./scripts/*.py and ./json.py.
       #
       # `continue-on-error` REMOVED (#170 AC#3): this assertion previously
       # went red because the shared hooks.json hardcoded Claude Code's
@@ -1214,7 +1142,7 @@ jobs:
       # commands. #173/#170 fixed that at the source (core/hooks/
       # hooks.spec.json renders each harness's own plugin_root_env), so this
       # assertion is now load-bearing like every other Tier 2 step.
-      - name: Tier 2 — Antigravity hook contract on the installed copy (issue #167 AC#2, #170, #197, #343)
+      - name: Tier 2 — Antigravity installed-copy matrix (hooks + bundled scripts; #167, #343, #364, #367)
         id: antigravity_hooks
         if: steps.antigravity_install.outcome == 'success'
         env:
@@ -1233,9 +1161,10 @@ jobs:
 
           # Run every installed hook the way agy runs it (origin: #343): sh -c,
           # cwd = plugin root, no AGY_* env, workspace only in the stdin JSON,
-          # a JSON object required on stdout. The old assertion here assumed
-          # agy exports AGY_PLUGIN_ROOT/AGY_PROJECT_DIR, which it does not.
-          python3 scripts/test_agy_hooks.py "$CONFIG_DIR"
+          # a JSON object required on stdout. Then the bundled-script decoy
+          # matrix. agy (for `agy plugin list --json`) lives in ~/.local/bin.
+          export PATH="$HOME/.local/bin:$PATH"
+          python3 scripts/test_installed_harness.py antigravity --plugin "$CONFIG_DIR"
 
       # Always-visible status for the Antigravity step above, regardless of
       # whether it ran, was skipped (fork PR — expected, honest SKIP), or
@@ -1264,7 +1193,7 @@ jobs:
             skipped) echo "Antigravity hook-resolution coverage: SKIPPED (install step did not succeed — see above)." ;;
             failure) {
                 echo "### :red_circle: Antigravity hook-resolution coverage: FAILED"
-                echo "Antigravity's installed hooks no longer meet the agy hook contract (scripts/test_agy_hooks.py: plain dispatcher command, JSON on stdout, workspace team.toml found; #343). This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
+                echo "Antigravity's installed copy failed scripts/test_installed_harness.py (agy hook contract #343, or bundled scripts not resolving to the installed copy #364/#367). This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
               } >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "Antigravity hook-resolution coverage: outcome '${{ steps.antigravity_hooks.outcome }}' unrecognized." ;;
           esac
@@ -1315,66 +1244,41 @@ jobs:
             }
           done
 
-          # Hooks resolution against the INSTALLED copy (issue #167 AC#2).
-          # Tier 1 only schema-checks hooks.json in the checked-out tree;
-          # nothing before this asserted the installed copy.
-          echo "== assert hooks.json present + well-formed against the INSTALLED copy =="
-          HOOKS_JSON="$HOME/.copilot/installed-plugins/nexaduo/marc/hooks/hooks.json"
-          test -f "$HOOKS_JSON" || { echo "::error::installed hooks.json missing at $HOOKS_JSON"; exit 1; }
-          jq -e '.version==1 and (.hooks|type=="object")' "$HOOKS_JSON" > /dev/null \
-            || { echo "::error::installed hooks.json at $HOOKS_JSON fails the version==1 / .hooks-is-object shape"; exit 1; }
+          echo "Copilot harness check: OK (plugin installed with no auth token, tech-lead+init skills, all six specialist agents). Hooks and bundled scripts are asserted in the next step."
 
-          # Bundled-script resolution against the INSTALLED copy (issue #167
-          # AC#1). Copilot's plugin-root equivalent, COPILOT_PLUGIN_DATA, is
-          # NOT installed-plugins/ itself: the sessionStart hook's own command
-          # (below) copies core/scripts/*.py from installed-plugins into
-          # COPILOT_PLUGIN_DATA (default $HOME/.copilot/plugin-data/marc) at
-          # runtime, and postToolUse then invokes scripts from THAT location.
-          # Proving resolution against the installed copy means actually
-          # running that documented copy step (extracted straight from the
-          # installed hooks.json), the same "exercise the hook's own command
-          # directly, not through the CLI's hook dispatcher" pattern already
-          # used for Claude Code's hook self-tests elsewhere in this file.
-          echo "== assert bundled scripts resolve via \${COPILOT_PLUGIN_DATA} against the INSTALLED copy =="
-          export COPILOT_PLUGIN_DATA="$HOME/.copilot/plugin-data/marc"
-          # sessionStart now has TWO entries (#173: hooks.json is compiled from
-          # core/hooks/hooks.spec.json, one hook id per array entry — the
-          # team.toml dump and the plugin-data script-copy are separate hooks,
-          # not one combined command). Run BOTH, in order, the same way the
-          # real Copilot CLI dispatch would.
-          SESSION_START_COUNT="$(jq '.hooks.sessionStart | length' "$HOOKS_JSON")"
-          test "$SESSION_START_COUNT" -ge 1 \
-            || { echo "::error::installed hooks.json has no sessionStart entries"; exit 1; }
-          for i in $(seq 0 $((SESSION_START_COUNT - 1))); do
-            SESSION_START_BASH="$(jq -r ".hooks.sessionStart[$i].bash" "$HOOKS_JSON")"
-            test -n "$SESSION_START_BASH" && [ "$SESSION_START_BASH" != "null" ] \
-              || { echo "::error::could not extract sessionStart[$i] hook 'bash' command from $HOOKS_JSON"; exit 1; }
-            bash -c "$SESSION_START_BASH"
-          done
+      # Installed-copy matrix, Copilot (issue #167 AC#1/AC#2, #367). No secret,
+      # no model, no token: probe_shell_env.py points the real CLI at a local
+      # mock model endpoint (COPILOT_PROVIDER_BASE_URL, COPILOT_OFFLINE) and
+      # records the env its model shell and its hooks really get. The matrix
+      # then runs every installed hooks.json command with that env and cwd
+      # (the installed plugin dir), and every bundled-script reference from a
+      # cwd holding decoy ./scripts/*.py and ./json.py with the model shell's
+      # env, and fails if the observed CLI behaviour drifts from its model.
+      - name: Tier 2 — Copilot installed-copy matrix (no-model env probe + hooks + bundled scripts)
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          COPILOT_GITHUB_TOKEN: ""
+        run: |
+          set -euo pipefail
+          python3 scripts/probe_shell_env.py copilot --json "$RUNNER_TEMP/copilot-probe.json"
+          python3 scripts/test_installed_harness.py copilot --probe-json "$RUNNER_TEMP/copilot-probe.json"
 
-          SCRIPT_REFS="$(grep -rhoE '\$\{COPILOT_PLUGIN_DATA:-\.\}/scripts/[A-Za-z0-9_.-]+' "$HOME"/.copilot/installed-plugins/nexaduo/marc/skills/ | sed -E 's#.*/scripts/##' | sort -u)"
-          test -n "$SCRIPT_REFS" || { echo "::error::no \${COPILOT_PLUGIN_DATA}/scripts/* references found in installed SKILL.md files"; exit 1; }
-          while IFS= read -r name; do
-            resolved="$COPILOT_PLUGIN_DATA/scripts/$name"
-            test -f "$resolved" || { echo "::error::installed script '$name' referenced from SKILL.md did not land at $resolved after running the sessionStart hook's own copy step"; exit 1; }
-            python3 "$resolved" --help > /dev/null \
-              || { echo "::error::installed script '$name' at $resolved is not executable via python3 (--help failed)"; exit 1; }
-            echo "OK: \${COPILOT_PLUGIN_DATA}/scripts/$name resolves and runs from the installed copy ($resolved), populated by the real sessionStart hook logic"
-          done <<< "$SCRIPT_REFS"
-
-          POST_TOOL_USE_BASH="$(jq -r '.hooks.postToolUse[0].bash' "$HOOKS_JSON")"
-          echo "$POST_TOOL_USE_BASH" | grep -q 'COPILOT_PLUGIN_DATA' \
-            || { echo "::error::postToolUse hook no longer references COPILOT_PLUGIN_DATA — update this assertion"; exit 1; }
-          test -f "$COPILOT_PLUGIN_DATA/scripts/token_sentinel.py" \
-            || { echo "::error::token_sentinel.py (referenced by the postToolUse hook) is not present at $COPILOT_PLUGIN_DATA/scripts/token_sentinel.py"; exit 1; }
-          echo "OK: postToolUse hook's \${COPILOT_PLUGIN_DATA}/scripts/token_sentinel.py resolves from the installed copy"
-
-          echo "NOTE: this executes the documented sessionStart/postToolUse hook COMMANDS directly"
-          echo "and proves their copy-then-resolve mechanism works end-to-end against the real"
-          echo "installed plugin. It does NOT prove the Copilot CLI itself dispatches these events"
-          echo "through hooks.json — no Tier 1/2 step anywhere triggers a real Copilot CLI hook event."
-
-          echo "Copilot harness check: OK (plugin installed with no auth token, tech-lead+init skills, all six specialist agents, hooks.json, and bundled scripts all resolve against the installed copy)."
+      # Installed-copy matrix, Codex (#367). Same shape; the probe drives
+      # `codex exec` against a local mock Responses endpoint inside Codex's
+      # default read-only sandbox, which needs unprivileged user namespaces
+      # (see the codex-install job for why the sysctl is lifted).
+      - name: Tier 2 — Codex installed-copy matrix (no-model env probe + hooks + bundled scripts)
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --prefix scripts/ci-codex
+          export PATH="$PWD/scripts/ci-codex/node_modules/.bin:$PATH"
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          codex --version
+          python3 scripts/probe_shell_env.py codex --json "$RUNNER_TEMP/codex-probe.json"
+          python3 scripts/test_installed_harness.py codex --probe-json "$RUNNER_TEMP/codex-probe.json"
 
       # 8. Cross-repo proof: from a working directory OUTSIDE the mARC checkout,
       #    with its OWN fresh config dir, add the marketplace by pointing at the

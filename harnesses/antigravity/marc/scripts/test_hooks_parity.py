@@ -218,17 +218,18 @@ def check_command_env_fallbacks(harness: str, marc_dir: str, config: dict, hooks
     # Extract all command strings from hooks_obj
     commands = []
     if config.get("hook_dialect") == "antigravity":
+        # hooks.json only holds `bash hooks/agy-hook.sh <id> <Event>`; the
+        # real commands are the hooks/agy/<id>.sh bodies (#343). Check those,
+        # or this whole function is vacuous for Antigravity (origin: #367).
         for hook_id, events in hooks_obj.items():
-            for event_name, handlers in events.items():
-                if event_name in {"PreToolUse", "PostToolUse"}:
-                    for entry in handlers:
-                        for h in entry.get("hooks", []):
-                            if "command" in h:
-                                commands.append((f"{hook_id}:{event_name}", h["command"]))
-                else:
-                    for h in handlers:
-                        if "command" in h:
-                            commands.append((f"{hook_id}:{event_name}", h["command"]))
+            body = os.path.join(marc_dir, "hooks", "agy", f"{hook_id}.sh")
+            if not os.path.isfile(body):
+                check(False, f"{harness} ({hook_id}): hooks/agy/{hook_id}.sh body is shipped")
+                continue
+            with open(body, encoding="utf-8") as f:  # minus the generated `#` header
+                text = "".join(ln for ln in f if not ln.startswith("#"))
+            for event_name in events:
+                commands.append((f"{hook_id}:{event_name}", text))
     elif config.get("hook_dialect") in {"claude-code", "codex"}:
         for event_name, handlers in hooks_obj.get("hooks", {}).items():
             for entry in handlers:
@@ -276,7 +277,9 @@ def check_command_env_fallbacks(harness: str, marc_dir: str, config: dict, hooks
             )
 
     # Test actual resolution in subshell with unset env vars from marc_dir
-    refs = find_hook_script_refs(json.dumps(hooks_obj))
+    refs = find_hook_script_refs(json.dumps(hooks_obj) + "".join(c for _, c in commands))
+    if config.get("hook_dialect") == "antigravity":
+        check(bool(refs), f"{harness}: hooks/agy bodies reference >=1 hook script (non-vacuity)")
     for name in sorted(refs):
         res = subprocess.run(
             ["bash", "-c", f'script="${{{plugin_root_env}:-$PWD}}/hooks/{name}"; test -f "$script"'],
@@ -387,10 +390,24 @@ def main() -> int:
         )
 
         validate_hook_schema(harness, dialect, actual)
+
+        raw_extra = ""
+        if dialect == "antigravity":
+            # Byte-compare every committed hooks/agy/<id>.sh body with what
+            # the spec compiles to; before #367 nothing read these files.
+            want = compile_prompts.agy_hook_bodies(selected_hooks, config)
+            agy_dir = os.path.join(dest_hooks_dir, "agy")
+            have = sorted(os.listdir(agy_dir)) if os.path.isdir(agy_dir) else []
+            check(have == sorted(want), f"{harness}: hooks/agy/ ships exactly {sorted(want)} (got {have})")
+            for name, body in sorted(want.items()):
+                path = os.path.join(agy_dir, name)
+                got = open(path, encoding="utf-8").read() if os.path.isfile(path) else None
+                check(got == body, f"{harness}: committed hooks/agy/{name} matches what the spec compiles to")
+                raw_extra += got or ""
         check_command_env_fallbacks(harness, marc_dir, config, actual)
 
         with open(dest_hooks_json, "r", encoding="utf-8") as f:
-            raw_text = f.read()
+            raw_text = f.read() + raw_extra
         refs = find_hook_script_refs(raw_text)
         for name in sorted(refs):
             total_script_refs += 1

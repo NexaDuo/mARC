@@ -93,6 +93,97 @@ def run(cmd: str, cwd: str, path: str) -> subprocess.CompletedProcess:
     )
 
 
+def _resolver_program() -> str:
+    """The resolver under test. MARC_SEED_RESOLVER=<path to an older
+    compile_prompts.py> swaps it, to prove the fixtures below fail on the
+    round-0 resolver (#371 REV-2); never set in CI."""
+    seed = os.environ.get("MARC_SEED_RESOLVER")
+    if not seed:
+        return compile_prompts._PLUGIN_LIST_RESOLVER
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("seed_compile_prompts", seed)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod._PLUGIN_LIST_RESOLVER
+
+
+def resolver_fixtures() -> None:
+    """Fixtures for the Claude Code, Codex and Copilot list formats (#367,
+    #371 REV-1/REV-2), shaped like the real outputs: `claude plugin list
+    --json` lists every scope and every project's project-scope install,
+    each `enabled: true`; Codex lists per-user installs without paths;
+    Copilot's config.json carries `//` lines and `installedPlugins`."""
+    program = _resolver_program()
+    with tempfile.TemporaryDirectory() as tmp:
+        def root(name):
+            p = os.path.join(tmp, "roots", name)
+            os.makedirs(os.path.join(p, "scripts"), exist_ok=True)
+            return p
+        proj = os.path.join(tmp, "proj")
+        os.makedirs(os.path.join(proj, ".git"))
+        os.makedirs(os.path.join(proj, "sub"))
+        elsewhere = os.path.join(tmp, "elsewhere")
+        os.makedirs(elsewhere)
+        marker = os.path.join(tmp, "decoy-json-ran")
+        for ws in (proj, os.path.join(proj, "sub"), elsewhere):
+            with open(os.path.join(ws, "json.py"), "w", encoding="utf-8") as f:
+                f.write(f"open({marker!r}, 'a').write('x')\n")
+        codex_home = os.path.join(tmp, "codex-home")
+        U, P, L, O1, O2, P2 = (root(n) for n in ("user", "proj", "local", "other1", "other2", "proj-dup"))
+
+        def cc(scope, path, install, enabled=True, plugin="marc@mkt"):
+            return {"id": plugin, "scope": scope, "projectPath": path, "installPath": install,
+                    "enabled": enabled, "version": "1"}
+        claude_real = [cc("user", None, U), cc("project", os.path.join(tmp, "other1"), O1),
+                       cc("project", proj, P), cc("project", os.path.join(tmp, "other2"), O2),
+                       cc("synced", None, ""), cc("user", None, root("x"), plugin="other@mkt")]
+        codex_root = os.path.join(codex_home, "plugins", "cache", "mkt", "marc", "2")
+        os.makedirs(os.path.join(codex_root, "scripts"))
+        os.makedirs(os.path.join(codex_home, "plugins", "cache", "mkt2", "marc", "3", "scripts"))
+        os.makedirs(os.path.join(codex_home, "plugins", "cache", "mkt", "scripts"))  # what `..` would reach
+        cx = lambda m, v, **k: dict({"pluginId": f"marc@{m}", "name": "marc", "marketplaceName": m,  # noqa: E731
+                                     "version": v, "installed": True, "enabled": True,
+                                     "source": {"source": "local", "path": proj}}, **k)
+        cp = lambda path, **k: dict({"name": "marc", "marketplace": "mkt", "version": "1",  # noqa: E731
+                                     "cache_path": path, "enabled": True}, **k)
+        copilot = lambda entries: ("// User settings belong in settings.json.\n// managed\n"  # noqa: E731
+                                   + json.dumps({"firstLaunchAt": "x", "installedPlugins": entries}))
+        cases = [
+            ("claude multi-scope: this repo's project entry wins", claude_real, proj, P),
+            ("claude multi-scope from a subdir of the repo", claude_real, os.path.join(proj, "sub"), P),
+            ("claude outside any listed project: user scope", claude_real, elsewhere, U),
+            ("claude local beats project", claude_real + [cc("local", proj, L)], proj, L),
+            ("claude disabled project entry falls back to user",
+             [cc("user", None, U), cc("project", proj, P, enabled=False)], proj, U),
+            ("claude real tie at project scope", claude_real + [cc("project", proj, P2)], proj, None),
+            ("claude only other projects' entries", [cc("project", os.path.join(tmp, "other1"), O1)], proj, None),
+            ("codex: cache path from marketplace + version", {"installed": [cx("mkt", "2")]}, proj, codex_root),
+            ("codex: disabled second marketplace ignored",
+             {"installed": [cx("mkt", "2"), cx("mkt2", "3", enabled=False)]}, proj, codex_root),
+            ("codex: two enabled marketplaces is a tie", {"installed": [cx("mkt", "2"), cx("mkt2", "3")]}, proj, None),
+            ("codex: traversal in version refused", {"installed": [cx("mkt", "..")]}, proj, None),
+            ("copilot config.json with // header", copilot([cp(P)]), proj, P),
+            ("copilot disabled install ignored", copilot([cp(P), cp(O1, enabled=False, marketplace="m2")]), proj, P),
+            ("copilot two enabled installs is a tie", copilot([cp(P), cp(O1, marketplace="m2")]), proj, None),
+        ]
+        env = {k: v for k, v in os.environ.items() if "PLUGIN" not in k}
+        env["CODEX_HOME"] = codex_home
+        for label, data, cwd, want in cases:
+            p = subprocess.run([sys.executable, "-I", "-c", program], input=data if isinstance(data, str)
+                               else json.dumps(data), cwd=cwd, env=env, capture_output=True, text=True, timeout=30)
+            got = p.stdout.strip()
+            ran = os.path.exists(marker)
+            if ran:
+                os.remove(marker)
+            if want:
+                ok = got == os.path.join(os.path.realpath(want), "scripts")
+            else:
+                ok = got == "/marc-plugin-root-unresolved" and "[mARC] " in p.stderr \
+                    and "refusing to fall back to the workspace" in p.stderr
+            check(ok and not ran and "Traceback" not in p.stderr,
+                  f"resolver fixture: {label} (got {got!r}, err {p.stderr.strip()[:120]!r})")
+
+
 def main() -> int:
     config = compile_config()
     expr = config["bundled_scripts_dir"]
@@ -208,6 +299,8 @@ def main() -> int:
                       and "refusing to fall back to the workspace" in p.stderr
                       and "Traceback" not in p.stderr,
                       f"clear [mARC] error on stderr ({label}, decoy {kind}): {p.stderr.strip()[:200]!r}")
+
+    resolver_fixtures()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")
