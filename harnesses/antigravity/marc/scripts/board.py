@@ -38,7 +38,18 @@ sequences. Three subcommands:
                     failed/unauthorized scan never blocks creation, it just
                     warns), but a found duplicate forces an explicit decision.
 
+  * `claim-status` / `claim` / `withdraw` / `worktrees` (origin: #378) —
+                    the concurrent-operator claim protocol from
+                    `references/concurrent-operators.md`, implemented in
+                    `board_claim.py`. Exit codes: 0 own/free, 1 taken/lost,
+                    2 error, 3 escalate to the user (suspected forgery or
+                    dead worktree).
+
 Usage:
+    python3 board.py claim-status --issue N [--operator H/S] [--json]
+    python3 board.py claim --issue N --operator H/S [--note TEXT] [--json]
+    python3 board.py withdraw --issue N --operator H/S [--json]
+    python3 board.py worktrees [--branch B] [--base origin/main] [--json]
     python3 board.py reconcile [--json] [--team-toml PATH]
                                 [--repo-root PATH]
                                 [--merges-limit N] [--open-limit N]
@@ -931,6 +942,101 @@ def _cmd_create(args: argparse.Namespace) -> int:
     return 0
 
 
+def _claim_lib():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import board_claim  # noqa: PLC0415
+    return board_claim
+
+
+def _emit(payload: dict, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    st = payload.get("status", payload)
+    for a in payload.get("actions", []):
+        print(f"  + {a}")
+    if "decision" in st:
+        print(f"issue #{st['issue']}: decision={st['decision']} owner={st['owner']!r}")
+        if st.get("advice"):
+            print(f"  {st['advice']}")
+        for f in st.get("suspected_forgeries", []):
+            print(f"  ! suspected forgery: {f['operator']!r} by {f['login']} ({f['reason']}) {f['url']}")
+
+
+def _cmd_claim_status(args: argparse.Namespace) -> int:
+    """origin #378: claim resolution per references/concurrent-operators.md."""
+    lib = _claim_lib()
+    config = _resolve_config(args)
+    try:
+        status = lib.evaluate(lib.fetch_comments(_default_runner, args.issue, config.gh_repo),
+                              args.issue, args.operator)
+    except Exception as e:  # noqa: BLE001 - fail loudly, never guess "unclaimed"
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    _emit({"status": status.to_dict(), "actions": []}, args.json)
+    return claim_exit_code(status.to_dict())
+
+
+def claim_exit_code(status: dict) -> int:
+    """REV-1 (#382): 0 own/unclaimed, 1 taken or lost, 3 escalate (suspected
+    forgery). Errors exit 2 before this is reached."""
+    if status.get("decision") == "escalate" or status.get("suspected_forgeries"):
+        return 3
+    if status.get("decision") in ("own", "unclaimed"):
+        return 0
+    return 1  # claimed-by-other, withdraw, withdrew, claimed (no --operator)
+
+
+def _cmd_claim(args: argparse.Namespace) -> int:
+    lib = _claim_lib()
+    config = _resolve_config(args)
+    try:
+        out = lib.do_claim(_default_runner, args.issue, args.operator, config.gh_repo, args.note or "")
+    except Exception as e:  # noqa: BLE001
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    _emit(out, args.json)
+    # After posting, "unclaimed" means our claim did not land: not ours (1).
+    return 1 if out["status"]["decision"] == "unclaimed" else claim_exit_code(out["status"])
+
+
+def _cmd_withdraw(args: argparse.Namespace) -> int:
+    lib = _claim_lib()
+    config = _resolve_config(args)
+    try:
+        out = lib.do_withdraw(_default_runner, args.issue, args.operator, config.gh_repo)
+    except Exception as e:  # noqa: BLE001
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    _emit(out, args.json)
+    return 0
+
+
+def _cmd_worktrees(args: argparse.Namespace) -> int:
+    lib = _claim_lib()
+    config = _resolve_config(args)
+    try:
+        out = lib.worktrees(_default_runner, args.base, args.branch, config.gh_repo,
+                            str(Path(args.repo_root).resolve()))
+    except Exception as e:  # noqa: BLE001
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(out, indent=2, sort_keys=True))
+    else:
+        if args.branch is not None:
+            print(f"branch {args.branch}: " + (f"TAKEN at {out['branch_path']}" if out["branch_taken"] else "free"))
+        for d in out["dead"]:
+            print(f"  dead worktree {d['path']} -> ask the user to run: {d['remedy']}")
+        if out["advice"]:
+            print(f"  {out['advice']}")
+        for w in out["warnings"]:
+            print(f"  ! {w}")
+    if args.branch is not None and out.get("branch_taken"):
+        return 1
+    return 3 if out["dead"] else 0
+
+
 def _add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--json", action="store_true", help="machine-readable output on stdout")
     p.add_argument("--team-toml", default=None, help="override team.toml path")
@@ -973,11 +1079,38 @@ def main() -> int:
     )
     create_p.set_defaults(func=_cmd_create)
 
+    # Concurrent-operator claim protocol (origin #378; rules #205/#213/#214/#216).
+    cs_p = subparsers.add_parser("claim-status", help="resolve who holds an issue's `## @techlead claim`")
+    _add_common_args(cs_p)
+    cs_p.add_argument("--issue", type=int, required=True)
+    cs_p.add_argument("--operator", default=None, help="your <harness>/<session-id>, to get a decision")
+    cs_p.set_defaults(func=_cmd_claim_status)
+
+    claim_p = subparsers.add_parser("claim", help="post a claim, re-read, tie-break, withdraw on a trusted loss")
+    _add_common_args(claim_p)
+    claim_p.add_argument("--issue", type=int, required=True)
+    claim_p.add_argument("--operator", required=True, help="<harness>/<session-id>")
+    claim_p.add_argument("--note", default=None, help="free text appended after the marker fields")
+    claim_p.set_defaults(func=_cmd_claim)
+
+    wd_p = subparsers.add_parser("withdraw", help="post `## @techlead withdraw` for your own claim")
+    _add_common_args(wd_p)
+    wd_p.add_argument("--issue", type=int, required=True)
+    wd_p.add_argument("--operator", required=True, help="the <harness>/<session-id> that claimed it")
+    wd_p.set_defaults(func=_cmd_withdraw)
+
+    wt_p = subparsers.add_parser("worktrees", help="branch-taken check + dead-worktree detection")
+    _add_common_args(wt_p)
+    wt_p.add_argument("--branch", default=None, help="branch you are about to cut/check out")
+    wt_p.add_argument("--base", default="origin/main", help="base ref a dead worktree sits at")
+    wt_p.set_defaults(func=_cmd_worktrees)
+
     # Backward compatibility: no subcommand -> default to `reconcile` so
     # existing callers (`board.py --json`, or the `board_reconcile.py` shim)
     # keep working unchanged.
     argv = sys.argv[1:]
-    if not argv or argv[0] not in ("reconcile", "set-status", "create", "-h", "--help"):
+    if not argv or argv[0] not in ("reconcile", "set-status", "create", "claim-status", "claim",
+                                   "withdraw", "worktrees", "-h", "--help"):
         argv = ["reconcile"] + argv
 
     args = parser.parse_args(argv)

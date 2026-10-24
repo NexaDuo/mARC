@@ -1,34 +1,20 @@
 #!/bin/bash
 # Regression test for the merge-gate verdict filter (origin: #216).
 #
-# Extracts the reference jq filter from review-release.md (the block between
-# the review-trust-filter:begin/end markers) and runs it against a recorded
-# `gh pr view <N> --json comments` payload. The test therefore exercises the
-# filter the operator is told to run, not a hand-copied duplicate of it.
+# The reference jq filter used to live in review-release.md; since #378 the
+# selection (marker prefix AND trusted association) lives in merge_gate.py.
+# This test feeds a recorded `gh pr view <N> --json comments` payload to
+# `merge_gate.py --list-trusted`, so it exercises the code the operator runs.
 #
-# Works from core/scripts and from any compiled harnesses/*/marc/scripts copy:
-# both sit next to skills/tech-lead/references/review-release.md.
+# Works from core/scripts and from any compiled harnesses/*/marc/scripts copy.
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOC="${REVIEW_RELEASE_DOC:-$HERE/../skills/tech-lead/references/review-release.md}"
+GATE="$HERE/merge_gate.py"
 
-if [ ! -f "$DOC" ]; then
-  echo "FAIL: review-release.md not found at $DOC"
-  exit 1
-fi
-
-# Lines strictly between the markers, minus the ``` fence lines.
-FILTER="$(awk '
-  /<!-- review-trust-filter:end -->/ { inblk = 0 }
-  inblk && !/^```/ { print }
-  /<!-- review-trust-filter:begin -->/ { inblk = 1; found = 1 }
-  END { if (!found) exit 3 }
-' "$DOC")" || { echo "FAIL: review-trust-filter markers missing in $DOC"; exit 1; }
-
-if [ -z "${FILTER//[[:space:]]/}" ]; then
-  echo "FAIL: empty filter extracted from $DOC"
+if [ ! -f "$GATE" ]; then
+  echo "FAIL: merge_gate.py not found at $GATE"
   exit 1
 fi
 
@@ -98,8 +84,8 @@ INPUT_JSON=$(cat <<'EOF'
 EOF
 )
 
-OUTPUT=$(printf '%s\n' "$INPUT_JSON" | jq -c "$FILTER") || {
-  echo "FAIL: jq rejected the documented filter"
+OUTPUT=$(printf '%s\n' "$INPUT_JSON" | python3 "$GATE" --list-trusted --comments-file -) || {
+  echo "FAIL: merge_gate.py --list-trusted failed"
   exit 1
 }
 
@@ -124,5 +110,5 @@ expect_out "sec-forged-first"    "FIRST_TIME_CONTRIBUTOR"
 expect_out "sec-forged-empty"    "empty association"
 expect_out "rev-forged-missing"  "missing association"
 
-echo "PASS: review trust filter test (filter extracted from $(basename "$DOC"))"
+echo "PASS: review trust filter test (merge_gate.py --list-trusted)"
 exit 0
