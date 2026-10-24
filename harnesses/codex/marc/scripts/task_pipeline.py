@@ -212,7 +212,9 @@ def load_config(repo: Path) -> TaskConfig:
             cfg.suite_timeout = int(sec["task_suite_timeout"])
         except (TypeError, ValueError):
             raise TaskError("task_suite_timeout must be an integer (seconds)") from None
-    # task_focused_hint (a test command for Codex) is ignored since #349: Codex runs no tests.
+    if "task_focused_hint" in sec:  # a test command for Codex; Codex runs no tests since #349
+        print("team.toml: [task] task_focused_hint is ignored (Codex runs no tests, #349); "
+              "use task_check_hint", file=sys.stderr)
     if isinstance(sec.get("task_check_hint"), str) and sec["task_check_hint"].strip():
         cfg.check_hint = sec["task_check_hint"].strip()
     for key, attr in (("task_commit_paths", "commit_paths"), ("task_scratch", "scratch")):

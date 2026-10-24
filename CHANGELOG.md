@@ -8,6 +8,21 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Changed
+
+- `dispatch_agent.py task`: the sandboxed Codex implement and fix steps no
+  longer run tests (#349). Some sandboxes refuse test temp dirs even inside
+  the workspace, so Codex now stops at a cheap compile/syntax/import check,
+  and the pipeline runs the suite outside the sandbox and sends failures back
+  as a fix round, as before. The new optional `[task] task_check_hint` names
+  that check.
+
+### Deprecated
+
+- `[task] task_focused_hint` is ignored (#349): it named a test command for
+  Codex. A team.toml that still sets it gets one stderr warning pointing to
+  `task_check_hint`; nothing else changes.
+
 ## [26.10.19] - 2026-10-19
 
 ### Added
