@@ -22,8 +22,10 @@ Repo facts come from the main clone's team.toml `[task]` section (a branch
 cannot change them): task_suite_cmd (argv list, or a shell string), optional
 task_suite_files (a glob: the suite command runs once per file),
 task_suite_ok_codes, task_suite_timeout, task_focused_hint, task_commit_paths,
-task_scratch, task_base. Without task_suite_cmd, `[validation]
-validation_command` runs through the shell. See docs/team.toml.example.
+task_scratch, task_base, task_codex_profile (a Codex config profile the
+implement/fix runs use, `codex exec -p <profile>`; never the reviewers).
+Without task_suite_cmd, `[validation] validation_command` runs through the
+shell. See docs/team.toml.example.
 
 Reviewers run headless and report-only on a clean detached checkout plus a
 diff file: Claude Code (`--agent marc:review` / `marc:security`, no shell,
@@ -114,6 +116,8 @@ LIMIT_RE = re.compile(r"try again at ([^.\"\n]*)", re.IGNORECASE)
 SAFE_FILE_RE = re.compile(r"[\w./+@()\[\]-]+")
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 BRANCH_RE = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")
+# A Codex config profile name (`codex exec -p <name>`): never option-shaped.
+PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 # A workflow edit would run in CI with the repo's secrets on push.
 NEVER_COMMIT = ".github"
 
@@ -160,6 +164,7 @@ class TaskConfig:
     scratch: List[str] = field(default_factory=list)
     base: str = "main"
     codex_review: Dict[str, bool] = field(default_factory=lambda: {k: False for k in KINDS})
+    codex_profile: str = ""                   # implement/fix runs only; "" = Codex's default
 
 
 def load_config(repo: Path) -> TaskConfig:
@@ -220,6 +225,13 @@ def load_config(repo: Path) -> TaskConfig:
         cfg.base = str(sec["task_base"]).strip()
         if not BRANCH_RE.fullmatch(cfg.base) or ".." in cfg.base:
             raise TaskError("task_base must be a plain branch name")
+    if "task_codex_profile" in sec:
+        value = sec["task_codex_profile"]
+        # fail closed: it lands in Codex's argv, so no stripping, no option shapes
+        if not isinstance(value, str) or not PROFILE_RE.fullmatch(value):
+            raise TaskError("task_codex_profile must be a plain profile name "
+                            "(letters, digits, '_', '.', '-'; not starting with '-')")
+        cfg.codex_profile = value
     # The #351 opt-in, re-derived from the team.toml discovered in the main
     # clone (mode included), exactly as dispatch_agent's detached runner does.
     cfg.codex_review = {k: _reresolve_codex_opt_in(k, "auto", str(repo)) for k in KINDS}
@@ -417,6 +429,11 @@ class Task:
     test_fix_attempts: int = 2
     out = print  # replaced in tests
 
+    @property
+    def profile(self) -> Optional[str]:
+        """The Codex profile of the implement/fix runs; None for Codex's default."""
+        return self.config.codex_profile or None
+
     # ---- helpers -------------------------------------------------------
     @property
     def base_ref(self) -> str:
@@ -497,12 +514,10 @@ class Task:
             out.unlink()  # never read a previous round's message
         head = self.git("rev-parse", "HEAD")
         started = time.monotonic()
-        code = run_to_file([which("codex"), "exec", "--json", "-c",
-                            f"model_reasoning_effort={effort}", "--sandbox", "workspace-write",
-                            "-C", str(self.worktree), "-o", str(out), "-"],
-                           stdin=prompt_file, out=log, timeout=AGENT_TIMEOUT)
+        code = run_to_file(self.codex_cmd(effort, out), stdin=prompt_file, out=log,
+                           timeout=AGENT_TIMEOUT)
         text = log.read_text(encoding="utf-8", errors="replace")
-        self.record({"step": step, "harness": "codex", "effort": effort,
+        self.record({"step": step, "harness": "codex", "effort": effort, "profile": self.profile,
                      "seconds": round(time.monotonic() - started), "exit": code,
                      **codex_usage(text)})
         limit = codex_limit_message(text)
@@ -514,6 +529,13 @@ class Task:
             # its commit would skip the suite (the tree is clean afterwards)
             raise TaskError(f"codex {step} committed although told not to; reset or review by hand")
         return out.read_text(encoding="utf-8", errors="replace") if out.exists() else ""
+
+    def codex_cmd(self, effort: str, out: Path) -> List[str]:
+        """The implement/fix argv; without a profile exactly as before #373."""
+        profile = ["-p", self.profile] if self.profile else []
+        return [which("codex"), "exec", *profile, "--json", "-c",
+                f"model_reasoning_effort={effort}", "--sandbox", "workspace-write",
+                "-C", str(self.worktree), "-o", str(out), "-"]
 
     def inside_worktree(self, p: Path) -> bool:
         """No symlinked folder on the way from the worktree to p: a glob follows
@@ -966,16 +988,32 @@ class Task:
 
 # ---- usage ledger ------------------------------------------------------------
 
-def summarize(rows: List[Dict[str, Any]], by: str) -> List[Tuple[str, Dict[str, float]]]:
-    agg: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+def _profile_label(value: Any) -> str:
+    """Display-only form of a ledger `profile`: printable chars, capped length."""
+    text = "".join(c for c in str(value) if c.isprintable())
+    return text[:40] or "?"
+
+
+def summarize(rows: List[Dict[str, Any]], by: str) -> List[Tuple[str, Dict[str, Any]]]:
+    """Aggregate ledger rows by `by`. Codex rows carrying a `profile` (e.g. a
+    local, unbilled model) are kept out of the default codex_* totals and summed
+    per profile under the "profiles" key, so billed and local runs stay apart."""
+    agg: Dict[str, Dict[str, Any]] = defaultdict(lambda: defaultdict(float))
     for r in rows:
         a = agg[str(r.get(by, "?"))]
         a["runs"] += 1
         a["seconds"] += r.get("seconds") or 0
         if r.get("harness") == "codex":
-            a["codex_in"] += r.get("input_tokens") or 0
-            a["codex_cached"] += r.get("cached_input_tokens") or 0
-            a["codex_out"] += r.get("output_tokens") or 0
+            profile = r.get("profile")
+            if profile is None or profile == "":
+                bucket = a
+            else:
+                profiles = a.setdefault("profiles", {})
+                bucket = profiles.setdefault(_profile_label(profile), defaultdict(float))
+                bucket["runs"] += 1
+            bucket["codex_in"] += r.get("input_tokens") or 0
+            bucket["codex_cached"] += r.get("cached_input_tokens") or 0
+            bucket["codex_out"] += r.get("output_tokens") or 0
         else:
             a["claude_cache_read"] += r.get("cache_read_input_tokens") or 0
             a["claude_cache_write"] += r.get("cache_creation_input_tokens") or 0
@@ -984,7 +1022,7 @@ def summarize(rows: List[Dict[str, Any]], by: str) -> List[Tuple[str, Dict[str, 
     return sorted(agg.items())
 
 
-def fmt_usage(rows: List[Tuple[str, Dict[str, float]]], label: str) -> str:
+def fmt_usage(rows: List[Tuple[str, Dict[str, Any]]], label: str) -> str:
     def m(v: float) -> str:
         return f"{v / 1e6:.2f}M"
     lines = [f"{label:<22} runs  codex_in  (cached)  codex_out  claude_read  claude_write  claude_out  claude_usd"]
@@ -992,6 +1030,10 @@ def fmt_usage(rows: List[Tuple[str, Dict[str, float]]], label: str) -> str:
         lines.append(f"{key:<22} {int(a['runs']):>4}  {m(a['codex_in']):>8}  {m(a['codex_cached']):>8}"
                      f"  {int(a['codex_out']):>9}  {m(a['claude_cache_read']):>11}"
                      f"  {m(a['claude_cache_write']):>12}  {int(a['claude_out']):>10}  {a['claude_usd']:>10.2f}")
+        for name, p in sorted(a.get("profiles", {}).items()):
+            tag = f"  codex[profile={name}]"
+            lines.append(f"{tag:<22} {int(p['runs']):>4}  {m(p['codex_in']):>8}  {m(p['codex_cached']):>8}"
+                         f"  {int(p['codex_out']):>9}")
     return "\n".join(lines)
 
 

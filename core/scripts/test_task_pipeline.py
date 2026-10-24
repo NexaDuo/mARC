@@ -577,6 +577,93 @@ class TestLoop(Base):
                 t.codex("low", "x", "fix-1")
 
 
+# ---- Codex profile (#373) ----------------------------------------------------
+
+class TestCodexProfile(Base):
+    def capture(self, t, limited=False):
+        """Run t.codex through a fake codex; return the argv of every run."""
+        cmds = []
+
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+            kw["out"].write_text('{"type":"error","message":"usage limit, try again at 1:59 AM"}\n'
+                                 if limited else "")
+            return 1 if limited else 0
+
+        t.git = lambda *a, **kw: "sha1"
+        with mock.patch.object(tp, "run_to_file", fake_run), mock.patch.object(tp, "which", lambda n: n):
+            t.codex("high", "x", "impl")
+        return cmds
+
+    def ledger(self, t):
+        return [json.loads(ln) for ln in (t.run_dir / "usage.jsonl").read_text().splitlines()]
+
+    def write(self, text):
+        TestConfig.write(self, text)
+
+    def test_argv_without_a_profile_is_byte_identical(self):
+        t = _task(self.tmp)
+        cmds = self.capture(t)
+        self.assertEqual(cmds, [["codex", "exec", "--json", "-c", "model_reasoning_effort=high",
+                                 "--sandbox", "workspace-write", "-C", str(t.worktree),
+                                 "-o", str(t.file("impl.out")), "-"]])
+        self.assertIsNone(self.ledger(t)[0]["profile"])
+
+    def test_argv_with_a_profile(self):
+        t = _task(self.tmp, config=_config(codex_profile="local"))
+        cmds = self.capture(t)
+        self.assertEqual(cmds, [["codex", "exec", "-p", "local", "--json", "-c",
+                                 "model_reasoning_effort=high", "--sandbox", "workspace-write",
+                                 "-C", str(t.worktree), "-o", str(t.file("impl.out")), "-"]])
+        self.assertEqual(self.ledger(t)[0]["profile"], "local")
+
+    def test_a_limit_on_the_profile_is_still_a_codex_limit(self):
+        t = _task(self.tmp, config=_config(codex_profile="local"))
+        with self.assertRaises(tp.CodexLimit):
+            self.capture(t, limited=True)
+
+    def test_config_key(self):
+        self.write('[task]\ntask_suite_cmd = ["true"]\ntask_codex_profile = "my_box.v2-1"\n')
+        self.assertEqual(tp.load_config(self.tmp).codex_profile, "my_box.v2-1")
+        self.write('[task]\ntask_suite_cmd = ["true"]\n')
+        self.assertEqual(tp.load_config(self.tmp).codex_profile, "")
+
+    def test_invalid_profile_names_fail_closed(self):
+        for bad in ('"-x"', '"--oss"', '"a b"', '"a=b"', '""', '" local"', '"a/b"',
+                    '"' + "a" * 65 + '"', "5", '["a"]'):
+            self.write(f'[task]\ntask_suite_cmd = ["true"]\ntask_codex_profile = {bad}\n')
+            with self.assertRaises(tp.TaskError, msg=bad):
+                tp.load_config(self.tmp)
+
+    def test_codex_reviewers_keep_the_default_config_with_a_profile_set(self):
+        """The intended setup: a local profile implements, Codex on its default
+        config reviews through the #351 route, Claude operates."""
+        self.write('[task]\ntask_suite_cmd = ["true"]\ntask_codex_profile = "local"\n'
+                   '[orchestration]\nmode = "hybrid"\n'
+                   '[orchestration.routes]\nrev = "codex"\nsec = "codex"\n')
+        config = tp.load_config(self.tmp)
+        self.assertEqual((config.codex_profile, config.codex_review),
+                         ("local", {"rev": True, "sec": True}))
+        t = _task(self.tmp, config=config)
+        plain = _task(self.tmp, config=_config(codex_review={"rev": True, "sec": True}))
+        with mock.patch.object(tp, "which", lambda n: n):
+            for kind in tp.KINDS:
+                cmd = t.review_cmd(kind)
+                self.assertEqual(cmd[:2], ["codex", "exec"])
+                self.assertNotIn("-p", cmd)
+                self.assertNotIn("local", cmd)
+                self.assertEqual(cmd, plain.review_cmd(kind))
+        self.assertEqual(self.capture(t)[0][2:4], ["-p", "local"])  # the implementer does get it
+
+    def test_claude_reviewers_never_get_the_profile(self):
+        t = _task(self.tmp, config=_config(codex_profile="local"))
+        plain = _task(self.tmp)
+        with mock.patch.object(tp, "which", lambda n: n):
+            for kind in tp.KINDS:
+                self.assertEqual(t.review_cmd(kind), plain.review_cmd(kind))
+                self.assertNotIn("local", t.review_cmd(kind))
+
+
 # ---- git gates (real repository) ---------------------------------------------
 
 class TestGit(Base):
@@ -832,6 +919,48 @@ class TestCli(Base):
         self.assertEqual(out.splitlines()[1].split()[:3], ["a", "2", "1.00M"])
         code, out = self.quiet(tp.usage_main, ["--run-dir", str(self.tmp), "--task", "a"])
         self.assertEqual([ln.split()[0] for ln in out.splitlines()[1:]], ["impl", "review-rev"])
+
+    USAGE_PLAIN = [
+        {"task": "a", "step": "impl", "harness": "codex", "input_tokens": 1_500_000,
+         "cached_input_tokens": 250_000, "output_tokens": 1234},
+        {"task": "a", "step": "fix-2", "harness": "codex", "input_tokens": 500_000,
+         "cached_input_tokens": 0, "output_tokens": 66, "profile": None},
+        {"task": "a", "step": "review-rev", "harness": "claude", "cache_read_input_tokens": 2_000_000,
+         "cache_creation_input_tokens": 30_000, "output_tokens": 5, "cost_usd": 0.5},
+        {"task": "b", "step": "impl", "harness": "codex", "input_tokens": 10, "output_tokens": 3},
+    ]
+
+    def usage_out(self, rows, *extra):
+        (self.tmp / "usage.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        code, out = self.quiet(tp.usage_main, ["--run-dir", str(self.tmp), *extra])
+        self.assertEqual(code, 0)
+        return out
+
+    def test_usage_without_profiles_is_unchanged(self):
+        # Pinned from the pre-#373 output: no profile (absent or null) prints exactly this.
+        self.assertEqual(self.usage_out(self.USAGE_PLAIN), (
+            "task                   runs  codex_in  (cached)  codex_out  claude_read  claude_write  claude_out  claude_usd\n"
+            "a                         3     2.00M     0.25M       1300        2.00M         0.03M           5        0.50\n"
+            "b                         1     0.00M     0.00M          3        0.00M         0.00M           0        0.00\n"))
+
+    def test_usage_splits_profiled_codex_runs(self):
+        rows = self.USAGE_PLAIN + [
+            {"task": "a", "step": "fix-3", "harness": "codex", "input_tokens": 4_000_000,
+             "cached_input_tokens": 1_000_000, "output_tokens": 900, "profile": "local"},
+            {"task": "a", "step": "fix-4", "harness": "codex", "input_tokens": 3_000_000,
+             "output_tokens": 100, "profile": "local"},
+            {"task": "b", "step": "impl", "harness": "codex", "input_tokens": 2_000_000,
+             "output_tokens": 7, "profile": "other\x1b[2J\n"},
+        ]
+        self.assertEqual(self.usage_out(rows), (
+            "task                   runs  codex_in  (cached)  codex_out  claude_read  claude_write  claude_out  claude_usd\n"
+            "a                         5     2.00M     0.25M       1300        2.00M         0.03M           5        0.50\n"
+            "  codex[profile=local]    2     7.00M     1.00M       1000\n"
+            "b                         2     0.00M     0.00M          3        0.00M         0.00M           0        0.00\n"
+            "  codex[profile=other[2J]    1     2.00M     0.00M          7\n"))
+        lines = self.usage_out(rows, "--task", "a").splitlines()
+        self.assertEqual(lines[lines.index(next(ln for ln in lines if ln.startswith("fix-3"))) + 1].split(),
+                         ["codex[profile=local]", "1", "4.00M", "1.00M", "900"])
 
 
 if __name__ == "__main__":

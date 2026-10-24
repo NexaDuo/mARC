@@ -8,6 +8,24 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.10.19] - 2026-10-19
+
+### Added
+
+- `dispatch_agent.py task` can run its Codex implement and fix steps on a
+  named Codex config profile, for example a local inference server (#373).
+  `[task] task_codex_profile` adds `-p <profile>` to those runs; unset, the
+  command is unchanged. The name is checked against a plain-name allowlist
+  when the config loads (no leading `-`), is read only from the main clone,
+  and never reaches the `@rev`/`@sec` reviewers: Codex reviewers routed by
+  the #351 opt-in keep Codex's default config. A Codex usage limit still
+  exits 2. `usage.jsonl` records carry a `profile` field, and `task-usage`
+  keeps profiled Codex tokens out of the default (billed) Codex totals,
+  listing them on their own `codex[profile=<name>]` line under each task or
+  step; with no profiled runs its output is unchanged. The profile itself
+  lives in the user's own `~/.codex/config.toml`; `docs/team.toml.example`
+  shows the local-implementer, Codex-reviewer setup.
+
 ### Fixed
 
 - Claude Code, Codex, Copilot: tech-lead references resolve bundled scripts from the installed plugin via the plugin-list resolver (scope-aware: the current project's local/project install wins over user scope), since a no-model probe showed none of these CLIs exports a plugin root to the model's shell (`${VAR:-.}` ran the workspace's `./scripts`); a new installed-copy matrix tests hooks and scripts for all four harnesses in CI (#367).
