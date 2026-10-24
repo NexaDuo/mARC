@@ -199,8 +199,10 @@ research = "claude-code"
 # task_suite_ok_codes = [0, 5]
 # Seconds per suite run before its whole process tree is killed.
 # task_suite_timeout = 1800
-# Told to Codex as the way to run focused tests (it never runs the full suite).
-# task_focused_hint = "`python -m pytest -q <files>`"
+# Codex runs no tests (a sandbox may refuse their temp dirs, #349): this
+# script runs the suite outside the sandbox and sends failures back. This is
+# the cheap check Codex may run instead. task_focused_hint is ignored.
+# task_check_hint = "`python -m py_compile <files>`"
 # Paths the script commits; default the whole repo. `.github/` is never
 # committed or pushed, whatever this says.
 # task_commit_paths = ["src", "tests", "docs", "README.md"]

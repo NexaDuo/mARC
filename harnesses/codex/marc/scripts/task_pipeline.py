@@ -21,9 +21,11 @@ line says which.
 Repo facts come from the main clone's team.toml `[task]` section (a branch
 cannot change them): task_suite_cmd (argv list, or a shell string), optional
 task_suite_files (a glob: the suite command runs once per file),
-task_suite_ok_codes, task_suite_timeout, task_focused_hint, task_commit_paths,
-task_scratch, task_base, task_codex_profile (a Codex config profile the
-implement/fix runs use, `codex exec -p <profile>`; never the reviewers).
+task_suite_ok_codes, task_suite_timeout, task_check_hint (the cheap check
+Codex may run instead of tests; task_focused_hint is ignored since #349),
+task_commit_paths, task_scratch, task_base, task_codex_profile (a Codex
+config profile the implement/fix runs use, `codex exec -p <profile>`; never
+the reviewers).
 Without task_suite_cmd, `[validation] validation_command` runs through the
 shell. See docs/team.toml.example.
 
@@ -77,15 +79,17 @@ KINDS = ("rev", "sec")
 
 # Appended to every Codex prompt. Each tool round trip resends the whole
 # context, so polling a running command and dumping big files are what burn
-# the budget (measured on a real task: ~20% of it was test polling).
+# the budget (measured on a real task: ~20% of it was test polling). Codex
+# runs no tests at all (#349): a sandbox may refuse test temp dirs even inside
+# the workspace, so run_suite() runs them outside and feeds failures back.
 CODEX_RULES = """
 ## Working efficiently (token budget is tight)
-- Run tests with ONE command and a long wait (yield_time_ms >= 300000). Do not poll a running command every second.
-- Focused tests only: {focused}. Never run the whole suite; the caller does.
+- Do NOT run tests (the caller runs them and sends you failures). Check only with {check}.
+- "Access denied"/"blocked by policy" errors are the sandbox: report them, do not investigate.
 - Read narrowly: `rg -n` for symbols, then only the needed line ranges (<= ~120 lines at a time). Do not dump whole files.
 - Keep command output short (tail, filters, quiet flags). Do not re-read files you just edited.
 """
-DEFAULT_FOCUSED_HINT = "the tests for the code you changed, with the project's usual test command"
+DEFAULT_CHECK_HINT = "a quick compile/syntax/import check of the files you changed"
 
 REVIEW_FOCUS = {
     "rev": "correctness and quality: bugs, regressions, race conditions, behavior "
@@ -159,7 +163,7 @@ class TaskConfig:
     suite_files: str = ""                     # glob: run suite_cmd once per file
     suite_ok_codes: Tuple[int, ...] = (0,)
     suite_timeout: int = SUITE_TIMEOUT
-    focused_hint: str = DEFAULT_FOCUSED_HINT
+    check_hint: str = DEFAULT_CHECK_HINT
     commit_paths: List[str] = field(default_factory=lambda: ["."])
     scratch: List[str] = field(default_factory=list)
     base: str = "main"
@@ -208,8 +212,9 @@ def load_config(repo: Path) -> TaskConfig:
             cfg.suite_timeout = int(sec["task_suite_timeout"])
         except (TypeError, ValueError):
             raise TaskError("task_suite_timeout must be an integer (seconds)") from None
-    if isinstance(sec.get("task_focused_hint"), str) and sec["task_focused_hint"].strip():
-        cfg.focused_hint = sec["task_focused_hint"].strip()
+    # task_focused_hint (a test command for Codex) is ignored since #349: Codex runs no tests.
+    if isinstance(sec.get("task_check_hint"), str) and sec["task_check_hint"].strip():
+        cfg.check_hint = sec["task_check_hint"].strip()
     for key, attr in (("task_commit_paths", "commit_paths"), ("task_scratch", "scratch")):
         if key in sec:
             items = _as_list(sec[key])
@@ -507,7 +512,7 @@ class Task:
     def codex(self, effort: str, prompt_text: str, step: str) -> str:
         """Run Codex in the worktree; return its final message."""
         prompt_file = self.file(f"{step}.prompt")
-        prompt_file.write_text(prompt_text + "\n" + CODEX_RULES.format(focused=self.config.focused_hint),
+        prompt_file.write_text(prompt_text + "\n" + CODEX_RULES.format(check=self.config.check_hint),
                                encoding="utf-8")
         out, log = self.file(f"{step}.out"), self.file(f"{step}.log")
         if out.exists():
