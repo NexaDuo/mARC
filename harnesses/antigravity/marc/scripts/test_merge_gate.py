@@ -67,6 +67,39 @@ THREADS_353 = json.loads(r'''{"data": {"repository": {"pullRequest": {"reviewThr
 ]}}}}}''')["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
 
 
+SEC_382_BODY = """## @sec review
+reviewer: unassigned
+reviewed-sha: 5ed67134b7542258e4203633c78435f4c8ed7594
+
+Three-dot diff on a fresh base (origin/main 8e68d8c). The claim logic is faithful to the old prose. The merge gate has one fail-open path.
+
+**SEC-1 (high)** `core/scripts/merge_gate.py:46,79-81`. The parser takes the last "verdict" word followed by PASS/ADVISE/BLOCK anywhere in the body. A real BLOCK flips to a pass when later text says "the prior verdict PASS no longer holds", quotes a PASS line, or holds one inside an HTML comment. I reproduced all three: `ok: True`. Fix: match only a line-anchored `verdict:` field outside code fences and HTML comments, and treat more than one distinct value as a fail-closed ambiguity.
+
+**SEC-2 (medium)** `merge_gate.py:47,84-85`. The old rule said reviewed-sha MUST equal HEAD. A 7-char prefix is 28 bits, which a PR author can grind (lucky_commit style) to reuse a short-SHA PASS on new code. `test_merge_gate.py:98` locks short SHAs in. Fix: require a full-length match.
+
+<details><summary>Verified and limitations</summary>
+
+Verified: the trust set, both association spellings and fail-closed on a missing value. gh errors exit 2.
+</details>
+
+verdict: BLOCK
+"""
+
+REV_382_BODY = """## @rev review
+reviewer: unassigned
+reviewed-sha: 5ed67134b7542258e4203633c78435f4c8ed7594
+
+verdict: BLOCK
+
+**REV-1 (high, verified)** `core/scripts/board.py:79`: `claim-status` exits 0 for `claimed-by-other` and for `withdraw` (lost tie-break).
+
+<details><summary>Checks</summary>
+
+- PR #379: `merge_gate.py` returns BLOCKED (rc=1) at 0426dad, with both 857a370 verdicts ignored as not-HEAD. Correct.
+</details>
+"""
+
+
 def thread(resolved=False, outdated=False, oid=HEAD):
     t = copy.deepcopy(THREADS_353[0])
     t.update({"isResolved": resolved, "isOutdated": outdated})
@@ -93,12 +126,64 @@ class Gate(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertEqual(len([b for b in res["blockers"] if "re-review at HEAD" in b]), 2)
 
-    def test_short_sha_prefix_ok_but_not_below_7(self):
+    def test_short_sha_never_counts(self):
+        # SEC-2 (#382): a 7-char prefix is grindable; only the full HEAD SHA counts.
         p = pr()
-        p["comments"][3]["body"] = "## @sec review\nreviewed-sha: 2588cec\nVerdict: PASS"
-        self.assertTrue(mg.adjudicate(p, [])["ok"])
-        p["comments"][3]["body"] = "## @sec review\nreviewed-sha: 2588ce\nVerdict: PASS"
-        self.assertFalse(mg.adjudicate(p, [])["ok"])
+        for short in ("2588cec", "2588cec2c505b2d4"):
+            p["comments"][3]["body"] = f"## @sec review\nreviewed-sha: {short}\nVerdict: PASS"
+            self.assertFalse(mg.adjudicate(p, [])["ok"], short)
+        p["comments"][3]["body"] = f"## @sec review\nreviewed-sha: {HEAD.upper()}\nVerdict: PASS"
+        self.assertTrue(mg.adjudicate(p, [])["ok"])  # same full SHA, case-insensitive
+
+    def _sec(self, verdict_tail):
+        p = pr()
+        p["comments"][3]["body"] = f"## @sec review\nreviewer: unassigned\nreviewed-sha: {HEAD}\n\n" + verdict_tail
+        return mg.adjudicate(p, [])
+
+    def test_sec1_bypass_later_prose_mentions_pass(self):
+        res = self._sec("verdict: BLOCK\n\nSEC-1: the prior verdict PASS no longer holds.")
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK")
+
+    def test_sec1_bypass_quoted_pass_line(self):
+        for quoted in ("> Verdict: PASS", "Earlier round said `verdict: PASS`.",
+                       "```\nverdict: PASS\n```", "~~~text\nVerdict: **PASS**\n~~~"):
+            res = self._sec("verdict: BLOCK\n\n" + quoted)
+            self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK", quoted)
+            self.assertFalse(res["ok"], quoted)
+
+    def test_sec1_bypass_html_comment(self):
+        for tail in ("verdict: BLOCK\n<!-- verdict: PASS -->",
+                     "verdict: BLOCK\n<!--\nVerdict: PASS\n-->",
+                     "verdict: BLOCK\n<!-- unclosed\nverdict: PASS"):
+            res = self._sec(tail)
+            self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK", tail)
+
+    def test_two_distinct_verdict_fields_fail_closed(self):
+        res = self._sec("verdict: BLOCK\n\nfixed later\n\n**Verdict: PASS**")
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], mg.AMBIGUOUS)
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("conflicting" in b for b in res["blockers"]))
+        # Repeating the SAME value is not ambiguous.
+        self.assertTrue(self._sec("Verdict: PASS\n\n**Verdict: PASS**")["ok"])
+
+    def test_recorded_review_bodies_on_pr382_parse_as_block(self):
+        # The BLOCK reviews posted on PR #382 at 5ed6713, verbatim except that
+        # findings without verdict text (SEC-3..6, REV-2..4) are omitted:
+        # @sec ends in `verdict: BLOCK` and its SEC-1 text says "the prior verdict
+        # PASS no longer holds"; @rev puts `verdict: BLOCK` near the top.
+        self.assertEqual(mg.parse_verdict(SEC_382_BODY), "BLOCK")
+        self.assertEqual(mg.parse_verdict(REV_382_BODY), "BLOCK")
+        self.assertEqual(mg._SHA_RE.search(SEC_382_BODY).group(1), "5ed67134b7542258e4203633c78435f4c8ed7594")
+
+    def test_reviewer_first_token(self):
+        # SEC-4 (#382): trailing text after the id must not hide a mismatch.
+        p = pr()
+        p["comments"][3]["body"] = (f"## @sec review\nreviewer: claude-code/sec-9 (round 2)\n"
+                                    f"reviewed-sha: {HEAD}\nVerdict: PASS")
+        res = mg.adjudicate(p, [], {"sec": "claude-code/sec-1"})
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["ignored_markers"][-1]["reviewer"], "claude-code/sec-9")
 
     def test_block_verdict_blocks(self):
         p = pr()
@@ -165,6 +250,37 @@ class Gate(unittest.TestCase):
         self.assertEqual(p["headRefOid"], HEAD)
         self.assertEqual(len(t), 1)
         self.assertIn("comments,headRefOid,reviewDecision,mergeStateStatus,state", calls[0])
+
+    def test_threads_paginate(self):
+        # REV-3/SEC-5 (#382): an unresolved thread on page 2 must still block.
+        pages = [
+            {"pageInfo": {"hasNextPage": True, "endCursor": "Y3Vyc29yOjEwMA=="},
+             "nodes": [thread(resolved=True)] * 100},
+            {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [thread()]},
+        ]
+        calls = []
+
+        def run(cmd):
+            calls.append(cmd)
+            page = pages[1] if any(a.startswith("after=") for a in cmd) else pages[0]
+            return json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": page}}}})
+
+        t = mg.fetch_threads(run, "NexaDuo", "mARC", 382)
+        self.assertEqual(len(t), 101)
+        self.assertIn("after=Y3Vyc29yOjEwMA==", calls[1])
+        self.assertFalse(mg.adjudicate(PR_374, t)["ok"])
+
+    def test_threads_never_ending_fails_closed(self):
+        def run(cmd):
+            return json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                "pageInfo": {"hasNextPage": True, "endCursor": "x"}, "nodes": []}}}}})
+        with self.assertRaises(RuntimeError):
+            mg.fetch_threads(run, "o", "r", 1)
+
+        def run2(cmd):
+            return json.dumps({"data": {"repository": {"pullRequest": None}}, "errors": [{"message": "x"}]})
+        with self.assertRaises(RuntimeError):
+            mg.fetch_threads(run2, "o", "r", 1)
 
     def test_list_trusted_cli(self):
         path = os.path.join(HERE, "__nonexistent__")

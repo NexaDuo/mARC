@@ -13,8 +13,10 @@ plus the PR's review threads (GraphQL `reviewThreads`) and decides:
     closed) (#216).
   * The latest trusted marker per reviewer whose `reviewed-sha:` equals the
     current `headRefOid` is the verdict; an older SHA does not count (#125).
-  * The verdict is the last `verdict: PASS|ADVISE|BLOCK` occurrence in the body
-    (bold/colon tolerant). BLOCK or no verdict blocks the merge.
+  * The verdict is the line-anchored `verdict: PASS|ADVISE|BLOCK` field
+    (markdown emphasis tolerated), ignoring fenced code and HTML comments.
+    BLOCK, no verdict, or two distinct values (ambiguous) blocks the merge.
+    `reviewed-sha:` must be the full 40-char HEAD SHA.
   * A `reviewer:` line that is present but differs from the dispatched value
     (`--expect-reviewer`) is not counted (#216).
   * Unresolved, non-outdated review threads (inline bot/human findings) block:
@@ -23,6 +25,8 @@ plus the PR's review threads (GraphQL `reviewThreads`) and decides:
     a named human ask; an empty `reviewDecision` is expected for a PR whose
     author cannot self-approve and is not a blocker (#105/#133).
 
+Exit 0 does NOT cover CI checks or `mergeStateStatus` (reported, not
+adjudicated): confirm CI separately.
 Exit: 0 = gate passes, 1 = blocked (see `blockers`), 2 = could not read the PR.
 The marker check filters forgeries from non-collaborators; it does not
 authenticate which reviewer wrote a verdict (trust boundary, #216).
@@ -43,15 +47,29 @@ from typing import Callable, Optional
 
 TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 KINDS = ("sec", "rev")
-_VERDICT_RE = re.compile(r"(?i)\bverdict\b[\s:*_`]*(PASS|ADVISE|BLOCK)\b")
-_SHA_RE = re.compile(r"(?im)^\s*reviewed-sha\s*:\s*`?([0-9a-f]{7,40})`?\s*$")
-_REVIEWER_RE = re.compile(r"(?im)^\s*reviewer\s*:\s*`?([^`\s]+)`?\s*$")
+# A verdict is a `verdict:` FIELD at the start of a line, optionally wrapped in
+# markdown emphasis (`**Verdict: PASS**`, `Verdict: **PASS**`). Prose that
+# merely mentions a verdict mid-line, blockquotes, fenced code and HTML
+# comments never count (SEC-1, #382).
+_VERDICT_RE = re.compile(r"(?im)^[ \t]*[*_]{0,3}[ \t]*verdict[ \t]*[*_]{0,3}[ \t]*:[ \t]*[*_`]{0,3}[ \t]*"
+                         r"(PASS|ADVISE|BLOCK)\b")
+_SHA_RE = re.compile(r"(?im)^[ \t]*reviewed-sha[ \t]*:[ \t]*`?([0-9a-f]{40})\b")
+_REVIEWER_RE = re.compile(r"(?im)^[ \t]*reviewer[ \t]*:[ \t]*`?([^`\s]+)")
+_FENCE_RE = re.compile(r"(?ms)^[ \t]*(```|~~~).*?(^[ \t]*\1[^\n]*$|\Z)")
+_HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?(-->|\Z)")
+MAX_THREAD_PAGES = 20
 
 THREADS_QUERY = (
-    "query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo)"
-    "{pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved isOutdated path "
+    "query($owner:String!,$repo:String!,$n:Int!,$after:String){repository(owner:$owner,name:$repo)"
+    "{pullRequest(number:$n){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} "
+    "nodes{id isResolved isOutdated path "
     "comments(first:1){nodes{author{login} authorAssociation commit{oid} url body}}}}}}}"
 )
+
+
+def strip_non_prose(body: str) -> str:
+    """Drop fenced code blocks and HTML comments (an unclosed one runs to the end)."""
+    return _FENCE_RE.sub("", _HTML_COMMENT_RE.sub("", body))
 
 Runner = Callable[[list], str]
 
@@ -76,13 +94,21 @@ def trusted_markers(comments: list) -> list:
             if marker_kind(c.get("body") or "") and (c.get("authorAssociation") or "") in TRUSTED]
 
 
+AMBIGUOUS = "AMBIGUOUS"
+
+
 def parse_verdict(body: str) -> Optional[str]:
-    found = _VERDICT_RE.findall(body)
-    return found[-1].upper() if found else None
+    """The single `verdict:` field value; AMBIGUOUS (fail closed) when the
+    body carries more than one distinct value."""
+    found = {v.upper() for v in _VERDICT_RE.findall(strip_non_prose(body))}
+    if not found:
+        return None
+    return found.pop() if len(found) == 1 else AMBIGUOUS
 
 
 def sha_matches(reviewed: Optional[str], head: str) -> bool:
-    return bool(reviewed) and len(reviewed) >= 7 and head.lower().startswith(reviewed.lower())
+    """Full 40-char equality: a short prefix can be ground by a PR author (SEC-2, #382)."""
+    return bool(reviewed) and len(reviewed) == 40 and len(head) == 40 and reviewed.lower() == head.lower()
 
 
 def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) -> dict:
@@ -99,9 +125,10 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
             continue
         info = {"kind": kind, "url": c.get("url", ""), "login": (c.get("author") or {}).get("login", ""),
                 "association": c.get("authorAssociation") or "", "created_at": c.get("createdAt", "")}
-        m = _SHA_RE.search(body)
+        prose = strip_non_prose(body)
+        m = _SHA_RE.search(prose)
         info["reviewed_sha"] = m.group(1) if m else None
-        r = _REVIEWER_RE.search(body)
+        r = _REVIEWER_RE.search(prose)
         info["reviewer"] = r.group(1) if r else None
         info["verdict"] = parse_verdict(body)
         if info["association"] not in TRUSTED:
@@ -124,6 +151,8 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
             blockers.append(f"@{k} review at HEAD has no verdict line: {v['url']}")
         elif v["verdict"] == "BLOCK":
             blockers.append(f"@{k} verdict is BLOCK: {v['url']}")
+        elif v["verdict"] == AMBIGUOUS:
+            blockers.append(f"@{k} review at HEAD carries conflicting `verdict:` lines (fail closed): {v['url']}")
 
     open_threads = []
     stale_threads = []
@@ -168,15 +197,37 @@ def fetch(run: Runner, pr: int, repo: Optional[str]) -> tuple[dict, list]:
     if not repo:
         repo = run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).strip()
     owner, name = repo.split("/", 1)
-    gql = json.loads(run(["gh", "api", "graphql", "-F", f"owner={owner}", "-F", f"repo={name}",
-                          "-F", f"n={pr}", "-f", f"query={THREADS_QUERY}"]))
-    threads = (((gql.get("data") or {}).get("repository") or {}).get("pullRequest") or {}) \
-        .get("reviewThreads", {}).get("nodes") or []
-    return pr_json, threads
+    return pr_json, fetch_threads(run, owner, name, pr)
+
+
+def fetch_threads(run: Runner, owner: str, name: str, pr: int) -> list:
+    """All review threads, paginated (REV-3/SEC-5, #382). Raises (exit 2,
+    never a pass) if the pages don't end within MAX_THREAD_PAGES."""
+    threads: list = []
+    after: Optional[str] = None
+    for _ in range(MAX_THREAD_PAGES):
+        cmd = ["gh", "api", "graphql", "-F", f"owner={owner}", "-F", f"repo={name}",
+               "-F", f"n={pr}", "-f", f"query={THREADS_QUERY}"]
+        if after:
+            cmd += ["-f", f"after={after}"]
+        gql = json.loads(run(cmd))
+        conn = ((((gql.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+                .get("reviewThreads"))
+        if conn is None:
+            raise RuntimeError(f"no reviewThreads in GraphQL response: {gql.get('errors')}")
+        threads += conn.get("nodes") or []
+        page = conn.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return threads
+        after = page.get("endCursor")
+        if not after:
+            raise RuntimeError("reviewThreads has a next page but no endCursor")
+    raise RuntimeError(f"more than {MAX_THREAD_PAGES * 100} review threads; refusing to adjudicate")
 
 
 def render(res: dict) -> str:
-    lines = [f"merge gate: {'PASS' if res['ok'] else 'BLOCKED'} at HEAD {res['head'][:12]}"]
+    lines = [f"merge gate: {'PASS' if res['ok'] else 'BLOCKED'} at HEAD {res['head'][:12]} "
+             f"(mergeStateStatus={res['merge_state_status']}; CI is not checked here)"]
     for k in KINDS:
         v = res["verdicts"].get(k)
         lines.append(f"  @{k}: " + (f"{v['verdict']} {v['url']}" if v else "missing at HEAD"))

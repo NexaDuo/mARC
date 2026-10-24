@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -353,7 +354,7 @@ def assess_worktrees(entries: list[dict], base_sha: Optional[str],
             if pr is None:
                 e["dead"] = True
                 e["remedy"] = ("git worktree prune" if e["missing"]
-                               else f"git worktree remove --force {e['path']}")
+                               else f"git worktree remove --force {shlex.quote(e['path'])}")
         result.append(e)
     out = {"base_sha": base_sha, "worktrees": result,
            "dead": [e for e in result if e["dead"]],
@@ -392,7 +393,7 @@ def worktrees(run: Runner, base: str = "origin/main", branch: Optional[str] = No
 
     def dirty(path: str) -> bool:
         try:
-            return bool(run(["git", "-C", path, "status", "--porcelain"]).strip())
+            return bool(run(["git", "--no-optional-locks", "-C", path, "status", "--porcelain"]).strip())
         except Exception:  # noqa: BLE001 - unknown state is never "dead"
             return True
 

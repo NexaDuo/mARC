@@ -383,6 +383,22 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
 
 
 INVOCATION = re.compile(r'python3 "(.+?)/([A-Za-z0-9_.\-]+\.py)"')
+FENCE = re.compile(r"(?ms)^```[^\n]*\n(.*?)^```")
+
+
+def resolve_invocations(text: str, expr: str) -> list:
+    """`"$S/<name>.py"` counts as the resolver only when the SAME fenced block
+    assigns `S="<resolver>"` before the use (#378 SEC-3/REV-2: each agent
+    shell call starts fresh). Mirrors scripts/test_agy_script_root.py."""
+    out = []
+    for block in [m.group(1) for m in FENCE.finditer(text)] + [FENCE.sub("", text)]:
+        assign = block.find(f'S="{expr}"')
+        for m in INVOCATION.finditer(block):
+            e = m.group(1)
+            if e == "$S" and assign != -1 and assign < m.start():
+                e = expr
+            out.append((e, m.group(2)))
+    return out
 
 
 def run_scripts(ad: Adapter, plugin: str, seed: str) -> None:
@@ -392,11 +408,10 @@ def run_scripts(ad: Adapter, plugin: str, seed: str) -> None:
         for path in glob.glob(os.path.join(plugin, sub, "**", "*.md"), recursive=True):
             with open(path, encoding="utf-8") as f:
                 texts[os.path.relpath(path, plugin)] = f.read()
-    # A file may resolve the dir once (`S="<resolver>"`, #378: each expansion
-    # costs ~2 KB of context) and invoke `python3 "$S/<name>.py"`; `$S` counts
-    # only in a file that assigns it the resolver itself.
-    refs = sorted({(expr if (e == "$S" and f'S="{expr}"' in t) else e, n)
-                   for t in texts.values() for e, n in INVOCATION.findall(t)})
+    refs = sorted({inv for t in texts.values() for inv in resolve_invocations(t, expr)})
+    bad = f'```bash\nS="{expr}"\n```\n```bash\npython3 "$S/board.py" x\n```\n'
+    check(any(e != expr for e, _ in resolve_invocations(bad, expr)),
+          f"{ad.name}: guard rejects $S set only in another fenced block (negative)")
     names = sorted({n for _, n in refs})
     check(len(names) >= 3, f"{ad.name}: bundled-script references found in the installed skills: {names}")
     for rel, text in texts.items():

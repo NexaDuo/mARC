@@ -1,14 +1,14 @@
 #### Concurrent operators (claim before you dispatch)
 Two `@techlead` operators (different harnesses, or two sessions) may share one
 clone with no supervisor. There is no locking layer, by design. The protocol
-is enforced by `board.py` (logic in `board_claim.py`); run it, don't re-derive it:
+is enforced by `board.py` (logic in `board_claim.py`); run it, don't re-derive
+it. Run the line whole (`S=` must be set in the same shell call):
 ```bash
-S="{{ bundled_scripts_dir }}"
-python3 "$S/board.py" worktrees --branch <branch>   # before any mutating dispatch
-python3 "$S/board.py" claim --issue <N> --operator <harness>/<session-id>
-python3 "$S/board.py" claim-status --issue <N> [--operator <harness>/<session-id>]
-python3 "$S/board.py" withdraw --issue <N> --operator <harness>/<session-id>
+S="{{ bundled_scripts_dir }}"; python3 "$S/board.py" <subcommand>
 ```
+`<subcommand>`: `worktrees --branch <branch>` (before any mutating dispatch),
+`claim --issue <N> --operator <harness>/<session-id>`, `claim-status --issue
+<N> [--operator …]`, `withdraw --issue <N> --operator …`.
 Exit codes: `0` you own it / branch free, `1` taken or lost (pick another
 item), `2` error (stop, don't guess), `3` **escalate to the user**: a suspected
 forged marker or a dead worktree, with the remedy printed. Add `--json` for

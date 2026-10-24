@@ -254,6 +254,78 @@ class Flows(unittest.TestCase):
             bc.do_claim(FakeGh([]), 226, "0/0")
 
 
+class CliExitCodes(unittest.TestCase):
+    """REV-1 (#382): `board.py claim-status` / `claim` exit codes, end to end
+    through `board.main()` with `gh` replaced by recorded payloads."""
+
+    def run_cli(self, argv, gh):
+        import board  # noqa: PLC0415
+        import io
+        import tempfile
+        from contextlib import redirect_stderr, redirect_stdout
+
+        def runner(cmd):
+            if cmd[:3] == ["gh", "repo", "view"]:
+                return "o/r\n"
+            if isinstance(gh, Exception):
+                raise gh
+            return gh(cmd)
+
+        saved_runner, saved_argv = board._default_runner, sys.argv
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as root:
+            board._default_runner = runner
+            sys.argv = ["board.py"] + argv + ["--repo-root", root, "--json"]
+            try:
+                with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                    rc = board.main()
+            finally:
+                board._default_runner, sys.argv = saved_runner, saved_argv
+        return rc, out.getvalue()
+
+    def status(self, comments, operator=None):
+        argv = ["claim-status", "--issue", "226"] + (["--operator", operator] if operator else [])
+        return self.run_cli(argv, FakeGh(comments))
+
+    def test_claim_status_codes(self):
+        mine = view_comment(claim("claude-code/sess-2"), idx=0)
+        lower = view_comment(claim("antigravity/sess-7"), idx=1)
+        forged = view_comment(claim("0/0"), "NONE", idx=2)
+        cases = [
+            ("own", [mine], "claude-code/sess-2", 0),
+            ("unclaimed", [], "claude-code/sess-2", 0),
+            ("claimed-by-other (recorded #226)", GH_VIEW_226["comments"], "codex/sess-9", 1),
+            ("lost tie-break", [mine, lower], "claude-code/sess-2", 1),
+            ("escalate: forgery competes with own claim", [mine, forged], "claude-code/sess-2", 3),
+            ("unclaimed but forged marker present", [forged], "claude-code/sess-2", 3),
+            ("no --operator, claimed (recorded #226)", GH_VIEW_226["comments"], None, 1),
+            ("no --operator, unclaimed", [], None, 0),
+        ]
+        for label, comments, op, want in cases:
+            rc, out = self.status(comments, op)
+            self.assertEqual(rc, want, f"{label}: {out}")
+
+    def test_claim_status_error_is_2(self):
+        rc, _ = self.run_cli(["claim-status", "--issue", "226"], RuntimeError("gh: HTTP 502"))
+        self.assertEqual(rc, 2)
+
+    def test_claim_codes(self):
+        rc, _ = self.run_cli(["claim", "--issue", "226", "--operator", "claude-code/sess-2"], FakeGh([]))
+        self.assertEqual(rc, 0)
+        racer = view_comment(claim("antigravity/sess-7"), idx=99)
+        rc, out = self.run_cli(["claim", "--issue", "226", "--operator", "claude-code/sess-2"],
+                               FakeGh([], inject_after_post=[racer]))
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(json.loads(out)["status"]["decision"], "withdrew")
+        rc, _ = self.run_cli(["claim", "--issue", "226", "--operator", "codex/sess-9"],
+                             FakeGh(GH_VIEW_226["comments"]))
+        self.assertEqual(rc, 1)
+        forged = view_comment(claim("0/0"), "NONE", idx=99)
+        rc, _ = self.run_cli(["claim", "--issue", "226", "--operator", "claude-code/sess-2"],
+                             FakeGh([], inject_after_post=[forged]))
+        self.assertEqual(rc, 3)
+
+
 class Worktrees(unittest.TestCase):
     def assess(self, linked=None, exists=None, dirty=None, branch=None):
         entries = bc.parse_worktrees(PORCELAIN)
@@ -279,6 +351,32 @@ class Worktrees(unittest.TestCase):
             "/repo/.claude/worktrees/gone": "git worktree prune",
         })
         self.assertIn("never run it", out["advice"])
+
+    def test_remedy_path_is_shell_quoted(self):
+        # SEC-6 (#382)
+        porcelain = PORCELAIN.replace("agent-a6403d16481a59d45", "a b;rm -rf x")
+        entries = bc.parse_worktrees(porcelain)
+        out = bc.assess_worktrees(entries, BASE, lambda b: None, lambda p: True)
+        remedies = [d["remedy"] for d in out["dead"]]
+        self.assertIn("git worktree remove --force '/repo/.claude/worktrees/a b;rm -rf x'", remedies)
+
+    def test_dirty_check_takes_no_optional_locks(self):
+        calls = []
+
+        def run(cmd):
+            calls.append(cmd)
+            if "worktree" in cmd:
+                return PORCELAIN
+            if "rev-parse" in cmd:
+                return BASE + "\n"
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return "[]"
+            return ""
+
+        bc.worktrees(run, exists=lambda p: True)
+        status_calls = [c for c in calls if "status" in c]
+        self.assertTrue(status_calls)
+        self.assertTrue(all("--no-optional-locks" in c for c in status_calls))
 
     def test_linked_pr_or_dirty_is_not_dead(self):
         out = self.assess(linked=lambda b: 42 if b == "feat/gone" else None,
