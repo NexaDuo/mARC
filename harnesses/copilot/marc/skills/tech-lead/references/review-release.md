@@ -14,10 +14,10 @@ Do not repeat an inconclusive optional pass merely because a new round started.
 When `@rev` reports a diff touching `team.toml`'s `[review].hot_surfaces`, run
 `/code-review` at `high` yourself; a subagent cannot. (origin: #125 · 2026-07-16)
 
-**Verifying a version bump actually shipped** — one call replaces the
-`gh api .../git/refs/tags`/`gh run list`/`gh release view` sequence:
+**Verifying a version bump actually shipped** (tag, workflow, release):
 ```bash
-python3 "$(cat "${COPILOT_HOME:-$HOME/.copilot}/config.json" | python3 -I -c 'exec("import json, os, sys\nj = os.path.join\ntry:\n    d = json.loads(\"\\n\".join(x for x in sys.stdin.read().splitlines() if not x.lstrip().startswith(\"//\")))\nexcept Exception:\n    d = []\nif isinstance(d, dict):\n    d = d.get(\"imports\") or d.get(\"installed\") or d.get(\"installedPlugins\") or []\ncwd = os.path.realpath(os.getcwd())\ntop = cwd\nwhile not os.path.exists(j(top, \".git\")) and os.path.dirname(top) != top:\n    top = os.path.dirname(top)\nhere = {cwd, top if os.path.exists(j(top, \".git\")) else cwd}\nrank = {\"managed\": 4, \"local\": 3, \"project\": 2}\nlevels = {}\nfor p in d if isinstance(d, list) else []:\n    if not isinstance(p, dict) or p.get(\"enabled\") is False or p.get(\"installed\") is False:\n        continue\n    if (p.get(\"name\") or str(p.get(\"id\") or \"\").split(\"@\")[0]) != \"marc\":\n        continue\n    scope, pp = p.get(\"scope\"), p.get(\"projectPath\")\n    if pp or scope in (\"local\", \"project\"):\n        if not isinstance(pp, str) or not os.path.isabs(pp) or os.path.realpath(pp) not in here:\n            continue\n    r = p[\"path\"] if \"path\" in p else p.get(\"installPath\", p.get(\"cache_path\"))\n    m, v = p.get(\"marketplaceName\"), p.get(\"version\")\n    if r is None and all(isinstance(x, str) and x and x.strip(\".\") and \"/\" not in x for x in (m, v)):\n        r = j(os.environ.get(\"CODEX_HOME\") or os.path.expanduser(\"~/.codex\"), \"plugins\", \"cache\", m, \"marc\", v)\n    if isinstance(r, str) and os.path.isabs(r) and os.path.isdir(j(r, \"scripts\")):\n        levels.setdefault(rank.get(scope, 2 if pp else 1), set()).add(os.path.realpath(r))\nroots = levels[max(levels)] if levels else set()\nif len(roots) != 1:\n    why = \"ambiguous: several enabled marc plugin roots at the same scope\" if roots else \"no installed marc plugin root\"\n    sys.stderr.write(\"[mARC] \" + why + \" in the plugin list; refusing to fall back to the workspace\\n\")\nprint(j(roots.pop(), \"scripts\") if len(roots) == 1 else \"/marc-plugin-root-unresolved\")\n")')/release_verify.py" --json
+S="$(cat "${COPILOT_HOME:-$HOME/.copilot}/config.json" | python3 -I -c 'exec("import json, os, sys\nj = os.path.join\ntry:\n    d = json.loads(\"\\n\".join(x for x in sys.stdin.read().splitlines() if not x.lstrip().startswith(\"//\")))\nexcept Exception:\n    d = []\nif isinstance(d, dict):\n    d = d.get(\"imports\") or d.get(\"installed\") or d.get(\"installedPlugins\") or []\ncwd = os.path.realpath(os.getcwd())\ntop = cwd\nwhile not os.path.exists(j(top, \".git\")) and os.path.dirname(top) != top:\n    top = os.path.dirname(top)\nhere = {cwd, top if os.path.exists(j(top, \".git\")) else cwd}\nrank = {\"managed\": 4, \"local\": 3, \"project\": 2}\nlevels = {}\nfor p in d if isinstance(d, list) else []:\n    if not isinstance(p, dict) or p.get(\"enabled\") is False or p.get(\"installed\") is False:\n        continue\n    if (p.get(\"name\") or str(p.get(\"id\") or \"\").split(\"@\")[0]) != \"marc\":\n        continue\n    scope, pp = p.get(\"scope\"), p.get(\"projectPath\")\n    if pp or scope in (\"local\", \"project\"):\n        if not isinstance(pp, str) or not os.path.isabs(pp) or os.path.realpath(pp) not in here:\n            continue\n    r = p[\"path\"] if \"path\" in p else p.get(\"installPath\", p.get(\"cache_path\"))\n    m, v = p.get(\"marketplaceName\"), p.get(\"version\")\n    if r is None and all(isinstance(x, str) and x and x.strip(\".\") and \"/\" not in x for x in (m, v)):\n        r = j(os.environ.get(\"CODEX_HOME\") or os.path.expanduser(\"~/.codex\"), \"plugins\", \"cache\", m, \"marc\", v)\n    if isinstance(r, str) and os.path.isabs(r) and os.path.isdir(j(r, \"scripts\")):\n        levels.setdefault(rank.get(scope, 2 if pp else 1), set()).add(os.path.realpath(r))\nroots = levels[max(levels)] if levels else set()\nif len(roots) != 1:\n    why = \"ambiguous: several enabled marc plugin roots at the same scope\" if roots else \"no installed marc plugin root\"\n    sys.stderr.write(\"[mARC] \" + why + \" in the plugin list; refusing to fall back to the workspace\\n\")\nprint(j(roots.pop(), \"scripts\") if len(roots) == 1 else \"/marc-plugin-root-unresolved\")\n")')"
+python3 "$S/release_verify.py" --json
 ```
 Defaults to `plugin.json`'s version. Non-zero exit = NOT fully verified — read
 which check failed before reporting shipped.
@@ -27,80 +27,43 @@ which check failed before reporting shipped.
 memory. This repo's PR author can't self-approve, so `reviewDecision` is
 always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16)
 
+**Merge gate: one call, run at every push and before any merge.**
+```bash
+python3 "$S/merge_gate.py" --pr <N> --expect-reviewer sec=<id> --expect-reviewer rev=<id>
+```
+Exit `0` passes, `1` blocked (each blocker printed with its fix), `2` PR
+unreadable (never a pass). `--json` for the full record.
+
 <!-- rules:origin-required -->
-- **Autonomously dispatch pre-merge gates immediately upon PR open.** As soon as
-  a PR is opened (by @dev, @sre, @design, or yourself), you MUST immediately and
-  proactively dispatch @sec and @rev to review it in the background. Do NOT stop
-  or return control to the user to ask for permission to proceed with reviews;
-  a task is only Done when merged and validated. (origin: #243 · 2026-09-08)
-- **The pre-merge gate is `@sec` AND `@rev` AND bots-adjudicated-at-HEAD.**
-  Hold the merge until both grep-verifiable markers (`## @sec review` and
-  `## @rev review`) are on the PR, each ending in a verdict; a BLOCK from
-  either blocks the merge. Both markers MUST come from a trusted author
-  (`OWNER`, `MEMBER`, or `COLLABORATOR`). Missing/unknown/untrusted
-  association fails closed. The field is `authorAssociation` in
-  `gh pr view <N> --json comments` / `gh issue view <N> --json comments`, and
-  `author_association` in the REST `gh api .../issues/<N>/comments` payload.
-  Select verdicts with the reference filter below this list (marker prefix
-  AND trusted association). **Trust boundary:** the marker plus the
-  association check makes a verdict findable and filters out forgeries from
-  non-collaborators; it does NOT authenticate which reviewer or dispatch
-  wrote it. Any trusted account, and under a shared `gh` login every operator,
-  reviewer and the human alike, can type a `## @sec review` comment.
-  **`reviewed-sha:` MUST equal the PR's current HEAD at merge time**
-  (`gh pr view <N> --json headRefOid`); a verdict at an older SHA does not
-  count, so new commits need a delta re-review at HEAD. **`reviewer:` SHOULD
-  be present:** when dispatching `@sec`/`@rev`, mint a
-  `reviewer: <harness>/<dispatch-id>` value (e.g. `claude-code/sec-pr<N>-<n>`,
-  unique per dispatch) and pass it in the dispatch prompt; the agent echoes
-  it verbatim. A present value that doesn't match what you dispatched means
-  the verdict is not counted (re-dispatch, or surface it to the user). It is
-  SHOULD, not MUST, because verdicts posted before this rule carry no such
-  line, and because it buys audit traceability, not authentication.
-  Inline bot reviews (Cursor/Greptile-class) live in `pulls/{n}/comments`, not
-  in `gh pr checks`, are not `@sec`/`@rev`, re-run on every push, and never
-  notify the operator loop — "CI green" is not permission to advance while a
-  bot finding sits unaddressed. Anchor adjudication to the current HEAD SHA to
-  cut stale-comment noise:
-  `gh api repos/<org>/<repo>/pulls/<N>/comments --paginate --jq '.[] | select(.commit_id=="<HEAD_SHA>")'`.
-  Per thread: verify it's actually addressed → reply citing the fixing commit
-  → resolve the thread; a won't-fix requires a stated justification before
-  resolving. Do this at every push, not once at PR-open, since bots re-comment
-  on new commits. (origin: #125 · 2026-07-16) (origin: #139 · 2026-07-20) (origin: #216 · 2026-10-03)
+- **Autonomously dispatch pre-merge gates immediately upon PR open.** Dispatch
+  `@sec` and `@rev` in the background at once; don't ask permission. Done means
+  merged and validated. (origin: #243 · 2026-09-08)
+- **The pre-merge gate is `@sec` AND `@rev` AND bots-adjudicated-at-HEAD;
+  `merge_gate.py` enforces it.** Both `## @sec review` / `## @rev review`
+  markers, from a trusted author (association missing/untrusted fails closed),
+  with `reviewed-sha:` equal to the current HEAD and a verdict; BLOCK from
+  either blocks. Trust boundary: the association check filters
+  non-collaborator forgeries, it does not authenticate the reviewer. Mint a
+  unique `reviewer: <harness>/<dispatch-id>` per dispatch and pass it as
+  `--expect-reviewer` (SHOULD: audit traceability, not authentication).
+  Unresolved inline review threads block too ("CI green" is not permission):
+  per thread, verify the fix, reply citing the commit (or a stated won't-fix
+  justification), resolve; repeat at every push.
+  (origin: #125 · 2026-07-16) (origin: #139 · 2026-07-20) (origin: #216 · 2026-10-03)
 - **Re-read the operating-invariants card before tagging or merging.** Treat
   `invariants-card.md` as a checkpoint at that
   moment, not just a post-compaction reminder. (origin: #41 · 2026-07-21)
 <!-- /rules:origin-required -->
 
-**Reference verdict filter** (run as
-`gh pr view <N> --json comments --jq "<filter>"`; `scripts/test_review_trust.sh`
-extracts and tests the block between these markers, keep them intact):
-<!-- review-trust-filter:begin -->
-```jq
-.comments[]
-| select(((.body // "") | startswith("## @sec review") or startswith("## @rev review"))
-    and (.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR"))
-```
-<!-- review-trust-filter:end -->
-
-**Terminal-state playbook: branch protection `REVIEW_REQUIRED`, no eligible
-non-author approver.** A repo can require a review from someone other than the
-PR author; if the only available reviewers are bots/the author, `gh pr merge`
-sits at `REVIEW_REQUIRED` indefinitely and no further push changes that.
+**Terminal-state playbook: `REVIEW_REQUIRED` with no eligible non-author
+approver** (`merge_gate.py` reports it as a blocker; no push fixes it).
 <!-- rules:origin-required -->
-- **Detect this early, not at merge time.** Check `reviewDecision` /
-  `mergeStateStatus` right after opening the PR (or right after dispatching
-  `@sec`/`@rev`), not only when the merge attempt itself fails — a late
-  discovery burns a review cycle for nothing. (origin: #133 · 2026-07-20)
-- **Escalate with a named ask, never a vague "blocked."** Request a specific
-  human reviewer (`gh pr edit <N> --add-reviewer <user>`) or state the exact
-  action needed ("a human with write access must approve or merge this PR");
-  set the board item to **Blocked** with that ask as the status reason, don't
-  leave it "In Progress" pretending work continues. (origin: #133 · 2026-07-20)
-- **`--admin` override policy.** `gh pr merge --admin` bypasses the review
-  requirement and is reserved for an explicit, in-the-moment human
-  authorization for this specific PR — never a standing default, never
-  inferred from a prior unrelated approval. Record who authorized it and why
-  in the merge/PR trail. (origin: #133 · 2026-07-20)
+- **Detect this early, not at merge time:** run the gate right after opening
+  the PR or dispatching reviews. (origin: #133 · 2026-07-20)
+- **Escalate with a named ask, never a vague "blocked":** request a specific
+  human (`gh pr edit <N> --add-reviewer <user>`) or state the exact action, and
+  set the board item to **Blocked** with that ask. (origin: #133 · 2026-07-20)
+- **`--admin` override policy.** `gh pr merge --admin` needs explicit,
+  in-the-moment human authorization for this PR, never a standing default;
+  record who authorized it and why. (origin: #133 · 2026-07-20)
 <!-- /rules:origin-required -->
-

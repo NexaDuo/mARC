@@ -865,6 +865,14 @@ jobs:
       - name: board_reconcile digest contract self-test
         run: python3 core/scripts/test_board_reconcile.py
 
+      # 8c-claim. Claim protocol + merge gate self-tests (issue #378): the
+      #     concurrent-operators and pre-merge gate procedures as scripts,
+      #     driven by recorded `gh --json` / GraphQL / worktree payloads.
+      - name: claim protocol + merge gate self-tests
+        run: |
+          python3 core/scripts/test_board_claim.py
+          python3 core/scripts/test_merge_gate.py
+
       # 8c-agy-hooks. Antigravity hook contract on the compiled source (issue #343):
       #     no secret needed, so fork PRs get it too; the installed copy is
       #     checked again in Tier 2 (scripts/test_installed_harness.py, #367).

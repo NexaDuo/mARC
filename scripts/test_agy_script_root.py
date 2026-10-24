@@ -43,7 +43,7 @@ import compile_prompts  # noqa: E402
 
 AGY = os.path.join(REPO, "harnesses", "antigravity", "marc")
 CORE = os.path.join(REPO, "core")
-REFS = ["dispatch.md", "planning.md", "review-release.md"]
+REFS = ["dispatch.md", "planning.md", "review-release.md", "concurrent-operators.md"]
 
 _failures: list[str] = []
 
@@ -205,7 +205,14 @@ def main() -> int:
             check("AGY_PLUGIN_ROOT:-." not in text, f"{rel}: no `${{AGY_PLUGIN_ROOT:-.}}`")
             check(not CWD_FALLBACK.search(text), f"{rel}: no cwd fallback for bundled scripts")
 
-        invocations = [m for t in compiled.values() for m in INVOCATION.findall(t)]
+        # A reference may resolve the dir once (`S="<resolver>"`, #378: each
+        # expansion costs ~2 KB of context) and invoke `python3 "$S/<name>.py"`;
+        # `$S` counts only in a file that assigns it the resolver itself.
+        invocations = []
+        for t in compiled.values():
+            assigned = f'S="{expr}"' in t
+            invocations += [(expr if (e == "$S" and assigned) else e, n)
+                            for e, n in INVOCATION.findall(t)]
         names = sorted({n for _, n in invocations})
         check(len(names) >= 3, f"found bundled-script invocations: {names}")
         check(all(e == expr for e, _ in invocations),
