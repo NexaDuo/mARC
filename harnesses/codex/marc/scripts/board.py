@@ -974,7 +974,17 @@ def _cmd_claim_status(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
     _emit({"status": status.to_dict(), "actions": []}, args.json)
-    return 3 if status.decision == "escalate" or status.suspected_forgeries else 0
+    return claim_exit_code(status.to_dict())
+
+
+def claim_exit_code(status: dict) -> int:
+    """REV-1 (#382): 0 own/unclaimed, 1 taken or lost, 3 escalate (suspected
+    forgery). Errors exit 2 before this is reached."""
+    if status.get("decision") == "escalate" or status.get("suspected_forgeries"):
+        return 3
+    if status.get("decision") in ("own", "unclaimed"):
+        return 0
+    return 1  # claimed-by-other, withdraw, withdrew, claimed (no --operator)
 
 
 def _cmd_claim(args: argparse.Namespace) -> int:
@@ -986,8 +996,8 @@ def _cmd_claim(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
     _emit(out, args.json)
-    decision = out["status"]["decision"]
-    return {"own": 0, "escalate": 3}.get(decision, 1)
+    # After posting, "unclaimed" means our claim did not land: not ours (1).
+    return 1 if out["status"]["decision"] == "unclaimed" else claim_exit_code(out["status"])
 
 
 def _cmd_withdraw(args: argparse.Namespace) -> int:

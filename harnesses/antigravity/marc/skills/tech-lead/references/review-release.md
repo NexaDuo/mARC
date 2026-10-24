@@ -14,25 +14,21 @@ Do not repeat an inconclusive optional pass merely because a new round started.
 When `@rev` reports a diff touching `team.toml`'s `[review].hot_surfaces`, run
 `/code-review` at `high` yourself; a subagent cannot. (origin: #125 · 2026-07-16)
 
-**Verifying a version bump actually shipped** (tag, workflow, release):
+**Merge gate, at every push and before any merge** (run the line whole):
 ```bash
-S="$(agy plugin list --json | python3 -I -c 'exec("import json, os, sys\nj = os.path.join\ntry:\n    d = json.loads(\"\\n\".join(x for x in sys.stdin.read().splitlines() if not x.lstrip().startswith(\"//\")))\nexcept Exception:\n    d = []\nif isinstance(d, dict):\n    d = d.get(\"imports\") or d.get(\"installed\") or d.get(\"installedPlugins\") or []\ncwd = os.path.realpath(os.getcwd())\ntop = cwd\nwhile not os.path.exists(j(top, \".git\")) and os.path.dirname(top) != top:\n    top = os.path.dirname(top)\nhere = {cwd, top if os.path.exists(j(top, \".git\")) else cwd}\nrank = {\"managed\": 4, \"local\": 3, \"project\": 2}\nlevels = {}\nfor p in d if isinstance(d, list) else []:\n    if not isinstance(p, dict) or p.get(\"enabled\") is False or p.get(\"installed\") is False:\n        continue\n    if (p.get(\"name\") or str(p.get(\"id\") or \"\").split(\"@\")[0]) != \"marc\":\n        continue\n    scope, pp = p.get(\"scope\"), p.get(\"projectPath\")\n    if pp or scope in (\"local\", \"project\"):\n        if not isinstance(pp, str) or not os.path.isabs(pp) or os.path.realpath(pp) not in here:\n            continue\n    r = p[\"path\"] if \"path\" in p else p.get(\"installPath\", p.get(\"cache_path\"))\n    m, v = p.get(\"marketplaceName\"), p.get(\"version\")\n    if r is None and all(isinstance(x, str) and x and x.strip(\".\") and \"/\" not in x for x in (m, v)):\n        r = j(os.environ.get(\"CODEX_HOME\") or os.path.expanduser(\"~/.codex\"), \"plugins\", \"cache\", m, \"marc\", v)\n    if isinstance(r, str) and os.path.isabs(r) and os.path.isdir(j(r, \"scripts\")):\n        levels.setdefault(rank.get(scope, 2 if pp else 1), set()).add(os.path.realpath(r))\nroots = levels[max(levels)] if levels else set()\nif len(roots) != 1:\n    why = \"ambiguous: several enabled marc plugin roots at the same scope\" if roots else \"no installed marc plugin root\"\n    sys.stderr.write(\"[mARC] \" + why + \" in the plugin list; refusing to fall back to the workspace\\n\")\nprint(j(roots.pop(), \"scripts\") if len(roots) == 1 else \"/marc-plugin-root-unresolved\")\n")')"
-python3 "$S/release_verify.py" --json
+S="$(agy plugin list --json | python3 -I -c 'exec("import json, os, sys\nj = os.path.join\ntry:\n    d = json.loads(\"\\n\".join(x for x in sys.stdin.read().splitlines() if not x.lstrip().startswith(\"//\")))\nexcept Exception:\n    d = []\nif isinstance(d, dict):\n    d = d.get(\"imports\") or d.get(\"installed\") or d.get(\"installedPlugins\") or []\ncwd = os.path.realpath(os.getcwd())\ntop = cwd\nwhile not os.path.exists(j(top, \".git\")) and os.path.dirname(top) != top:\n    top = os.path.dirname(top)\nhere = {cwd, top if os.path.exists(j(top, \".git\")) else cwd}\nrank = {\"managed\": 4, \"local\": 3, \"project\": 2}\nlevels = {}\nfor p in d if isinstance(d, list) else []:\n    if not isinstance(p, dict) or p.get(\"enabled\") is False or p.get(\"installed\") is False:\n        continue\n    if (p.get(\"name\") or str(p.get(\"id\") or \"\").split(\"@\")[0]) != \"marc\":\n        continue\n    scope, pp = p.get(\"scope\"), p.get(\"projectPath\")\n    if pp or scope in (\"local\", \"project\"):\n        if not isinstance(pp, str) or not os.path.isabs(pp) or os.path.realpath(pp) not in here:\n            continue\n    r = p[\"path\"] if \"path\" in p else p.get(\"installPath\", p.get(\"cache_path\"))\n    m, v = p.get(\"marketplaceName\"), p.get(\"version\")\n    if r is None and all(isinstance(x, str) and x and x.strip(\".\") and \"/\" not in x for x in (m, v)):\n        r = j(os.environ.get(\"CODEX_HOME\") or os.path.expanduser(\"~/.codex\"), \"plugins\", \"cache\", m, \"marc\", v)\n    if isinstance(r, str) and os.path.isabs(r) and os.path.isdir(j(r, \"scripts\")):\n        levels.setdefault(rank.get(scope, 2 if pp else 1), set()).add(os.path.realpath(r))\nroots = levels[max(levels)] if levels else set()\nif len(roots) != 1:\n    why = \"ambiguous: several enabled marc plugin roots at the same scope\" if roots else \"no installed marc plugin root\"\n    sys.stderr.write(\"[mARC] \" + why + \" in the plugin list; refusing to fall back to the workspace\\n\")\nprint(j(roots.pop(), \"scripts\") if len(roots) == 1 else \"/marc-plugin-root-unresolved\")\n")')"; python3 "$S/merge_gate.py" --pr <N> --expect-reviewer sec=<id> --expect-reviewer rev=<id>
 ```
-Defaults to `plugin.json`'s version. Non-zero exit = NOT fully verified — read
-which check failed before reporting shipped.
+Exit `0` passes, `1` blocked (fix printed), `2` unreadable (never a pass).
+It does not cover CI or `mergeStateStatus`: check CI separately.
+
+**Did a version bump ship** (tag, workflow, release)? Same line,
+`release_verify.py --json` in place of `merge_gate.py …`; non-zero = NOT
+verified, read which check failed.
 
 **Merge handoff requires the proof, not the assertion** — pass the verifiable
 `@sec` record (the `## @sec review` comment URL), never a bare "APPROVED" from
 memory. This repo's PR author can't self-approve, so `reviewDecision` is
 always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16)
-
-**Merge gate: one call, run at every push and before any merge.**
-```bash
-python3 "$S/merge_gate.py" --pr <N> --expect-reviewer sec=<id> --expect-reviewer rev=<id>
-```
-Exit `0` passes, `1` blocked (each blocker printed with its fix), `2` PR
-unreadable (never a pass). `--json` for the full record.
 
 <!-- rules:origin-required -->
 - **Autonomously dispatch pre-merge gates immediately upon PR open.** Dispatch
