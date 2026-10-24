@@ -392,7 +392,11 @@ def run_scripts(ad: Adapter, plugin: str, seed: str) -> None:
         for path in glob.glob(os.path.join(plugin, sub, "**", "*.md"), recursive=True):
             with open(path, encoding="utf-8") as f:
                 texts[os.path.relpath(path, plugin)] = f.read()
-    refs = sorted({(e, n) for t in texts.values() for e, n in INVOCATION.findall(t)})
+    # A file may resolve the dir once (`S="<resolver>"`, #378: each expansion
+    # costs ~2 KB of context) and invoke `python3 "$S/<name>.py"`; `$S` counts
+    # only in a file that assigns it the resolver itself.
+    refs = sorted({(expr if (e == "$S" and f'S="{expr}"' in t) else e, n)
+                   for t in texts.values() for e, n in INVOCATION.findall(t)})
     names = sorted({n for _, n in refs})
     check(len(names) >= 3, f"{ad.name}: bundled-script references found in the installed skills: {names}")
     for rel, text in texts.items():
