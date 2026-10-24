@@ -220,9 +220,18 @@ class TestConfig(Base):
 
     def test_check_hint_replaces_the_ignored_focused_hint(self):
         self.write('[task]\ntask_suite_cmd = "make test"\ntask_focused_hint = "pytest -q x"\n')
-        self.assertEqual(tp.load_config(self.tmp).check_hint, tp.DEFAULT_CHECK_HINT)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(tp.load_config(self.tmp).check_hint, tp.DEFAULT_CHECK_HINT)
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("task_focused_hint is ignored", lines[0])
+        self.assertIn("task_check_hint", lines[0])
         self.write('[task]\ntask_suite_cmd = "make test"\ntask_check_hint = "tsc --noEmit"\n')
-        self.assertEqual(tp.load_config(self.tmp).check_hint, "tsc --noEmit")
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(tp.load_config(self.tmp).check_hint, "tsc --noEmit")
+        self.assertEqual(err.getvalue(), "")  # no warning without the old key
 
     def test_validation_command_is_the_fallback(self):
         self.write('[validation]\nvalidation_command = "npm test"\n')
