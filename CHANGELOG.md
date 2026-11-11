@@ -8,6 +8,51 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.10.1] - 2026-11-10
+
+### Changed
+
+- Codex and Antigravity model matrix (#385), the companion to #383's Claude
+  Code pins. The Codex descriptors (`agent-configs/codex/*.toml`) now pin a
+  `model` as well as an effort: `@dev`, `@sre` and `@design` run
+  `gpt-6.1-sol` at `high`, `@research` `gpt-6.1-sol` at `medium`, the opt-in
+  `@rev`/`@sec` reviewers (#351) `gpt-6.1-sol` at `xhigh`, and `bulk-reader`
+  `gpt-6-luna` at `high`. Before this, the model came from the user's own
+  Codex config, which can be the most expensive model at the lowest effort.
+  New Antigravity descriptors (`agent-configs/antigravity/sre.toml`,
+  `design.toml`) pin `gemini-4-argon-high`, chosen for plan availability and
+  its separate Gemini quota rather than per-task cost. Evidence and
+  rationale: the `@research` brief on #385
+  (https://github.com/NexaDuo/mARC/issues/385#issuecomment-6785053860).
+  Caveat: Vals.ai measured Sol and Astra at `max` effort, so its $/test
+  figures ($3.61 Sol, $21.28 Astra) describe `max`, not the pinned efforts.
+  On the per-effort Artificial Analysis curve, Sol at `max` matches Astra at
+  `high`/`xhigh` for about a third of the cost, which is why `max` on Sol is
+  the next escalation step for a reviewer, before Astra.
+- `dispatch_agent.py` applies the pins. The Codex writer path
+  (`codex exec --worktree`) now passes the persona `-m` and
+  `-c model_reasoning_effort=...`, like the read-only path already did. The
+  Antigravity path passes `--model <slug>` from the role's descriptor (no
+  descriptor, no flag; never `--effort`, because the slug carries the
+  effort). An unknown slug makes headless agy exit non-zero and that exit is
+  reported, never retried without `--model`. A malformed pin fails closed
+  with exit 2. `max` is now an accepted Codex effort.
+- Consumer overrides, read from the team.toml in the dispatching checkout:
+  `[orchestration.codex_profiles]` (role to Codex profile; a profile
+  replaces both pins, so its own model and effort win; writer roles only,
+  the #351 reviewer argv is unchanged) and
+  `[orchestration.antigravity_models]` (role to slug). See
+  `docs/team.toml.example`. Zero-config is unchanged.
+- `dispatch_agent.py task`: with `task_codex_profile` set, the profile's
+  model wins and no `-m` is passed (as before); without one, the
+  implement/fix runs now pass the engineer pin (`-m gpt-6.1-sol`) next to
+  the per-step effort. `usage.jsonl` rows record the `model`.
+- Every compiled plugin now ships `agent-configs/` (Codex and Antigravity
+  descriptors), because `dispatch_agent.py` runs from whichever plugin hosts
+  the operator, not only from the target harness's plugin.
+- New governed rule in `references/dispatch.md` with
+  `(origin: #385 · 2026-11-10)`; the tables stay in the issue.
+
 ## [26.11.10] - 2026-11-10
 
 ### Changed

@@ -24,6 +24,10 @@ task_suite_files (a glob: the suite command runs once per file),
 task_suite_ok_codes, task_suite_timeout, task_focused_hint, task_commit_paths,
 task_scratch, task_base, task_codex_profile (a Codex config profile the
 implement/fix runs use, `codex exec -p <profile>`; never the reviewers).
+Model precedence for implement/fix (#385): with task_codex_profile set, the
+profile's own model wins (no `-m` is passed); without one, the engineer
+persona's Codex model pin (`-m`, agent-configs/codex/engineer.toml) applies.
+The per-step `model_reasoning_effort` is passed either way, as before.
 Without task_suite_cmd, `[validation] validation_command` runs through the
 shell. See docs/team.toml.example.
 
@@ -65,8 +69,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dispatch_agent import (  # noqa: E402
     ROLE_TO_AGENT,
+    ModelPinError,
     _reresolve_codex_opt_in,
     find_team_toml,
+    load_codex_pins,
     parse_toml,
 )
 
@@ -434,6 +440,17 @@ class Task:
         """The Codex profile of the implement/fix runs; None for Codex's default."""
         return self.config.codex_profile or None
 
+    @property
+    def model(self) -> Optional[str]:
+        """The `-m` of the implement/fix runs (#385): None with a profile (the
+        profile's own model wins), else the engineer persona's Codex pin."""
+        if self.profile:
+            return None
+        try:
+            return load_codex_pins(ROLE_TO_AGENT["dev"]).get("model")
+        except ModelPinError as e:
+            raise TaskError(str(e)) from e
+
     # ---- helpers -------------------------------------------------------
     @property
     def base_ref(self) -> str:
@@ -518,7 +535,7 @@ class Task:
                            timeout=AGENT_TIMEOUT)
         text = log.read_text(encoding="utf-8", errors="replace")
         self.record({"step": step, "harness": "codex", "effort": effort, "profile": self.profile,
-                     "seconds": round(time.monotonic() - started), "exit": code,
+                     "model": self.model, "seconds": round(time.monotonic() - started), "exit": code,
                      **codex_usage(text)})
         limit = codex_limit_message(text)
         if limit:
@@ -531,9 +548,10 @@ class Task:
         return out.read_text(encoding="utf-8", errors="replace") if out.exists() else ""
 
     def codex_cmd(self, effort: str, out: Path) -> List[str]:
-        """The implement/fix argv; without a profile exactly as before #373."""
-        profile = ["-p", self.profile] if self.profile else []
-        return [which("codex"), "exec", *profile, "--json", "-c",
+        """The implement/fix argv: `-p <profile>` (its model wins), else `-m <persona pin>` (#385)."""
+        model = self.model
+        pin = ["-p", self.profile] if self.profile else (["-m", model] if model else [])
+        return [which("codex"), "exec", *pin, "--json", "-c",
                 f"model_reasoning_effort={effort}", "--sandbox", "workspace-write",
                 "-C", str(self.worktree), "-o", str(out), "-"]
 
