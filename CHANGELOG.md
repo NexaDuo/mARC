@@ -15,7 +15,7 @@ date whose `YY.M.D` is already taken.
 - Tighter writer briefs and reading discipline (#392, origin #391). Tech-lead
   dispatch briefs now inline a targeted digest of relevant `AGENTS.md` rules
   rather than directing writers to read the full file, paired with reading
-  discipline (`rg -n` and ranged reads ≤ ~120 lines, no whole-file reads of
+  discipline (ranged reads, no mandated tool, no whole-file reads of
   files > ~10 KB) to cut cache-read and whole-context re-read costs.
 - Writer resume map in compact follow-up dispatches (#392). Follow-up writer
   briefs include a header listing already-touched files, line ranges, and
