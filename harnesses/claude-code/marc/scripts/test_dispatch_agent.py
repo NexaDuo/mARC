@@ -1552,6 +1552,25 @@ def test_model_matrix_385() -> None:
             check(exc is None and res["exit_code"] == 2 and res["command"] == [],
                   f"prepare_dispatch refuses {table} {bad} with exit 2")
 
+        # 7b. Only the target harness's table is validated (PR #387 REV-1): a bad
+        #     codex_profiles.sre neither blocks an agy sre dispatch nor is named.
+        (team / "team.toml").write_text(
+            '[orchestration.codex_profiles]\nsre = "-c bad"\n'
+            '[orchestration.antigravity_models]\ndesign = "--bad"\n', encoding="utf-8")
+        res, err, exc = _capture_stderr(prepare_dispatch, "sre", prompt, "antigravity", True, None, None,
+                                        lambda b: f"/usr/bin/{b}", Path(d))
+        check(exc is None and res["exit_code"] == 0 and res["command"][2:4] == ["--model", "gemini-4-argon-high"]
+              and "codex_profiles" not in err,
+              f"bad codex_profiles.sre does not block agy sre: {res.get('exit_code')} {err!r}")
+        res, err, exc = _capture_stderr(prepare_dispatch, "design", prompt, "codex", True, None, None,
+                                        lambda b: f"/usr/bin/{b}", Path(d))
+        check(exc is None and res["exit_code"] == 0 and "-m" in res["command"] and "antigravity_models" not in err,
+              f"bad antigravity_models.design does not block codex design: {res.get('exit_code')} {err!r}")
+        res, err, exc = _capture_stderr(prepare_dispatch, "sre", prompt, "codex", True, None, None,
+                                        lambda b: f"/usr/bin/{b}", Path(d))
+        check(exc is None and res["exit_code"] == 2 and "codex_profiles" in err,
+              "bad codex_profiles.sre still fails closed for a codex sre dispatch")
+
     # 8. A malformed shipped descriptor fails closed too.
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "agent-configs" / "antigravity").mkdir(parents=True)

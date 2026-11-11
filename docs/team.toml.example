@@ -180,12 +180,18 @@ research = "claude-code"
 # agent-configs/antigravity/*.toml for Antigravity; matrix and evidence in
 # https://github.com/NexaDuo/mARC/issues/385), and zero-config still works with
 # no team.toml at all. Both tables are read only from the team.toml found in
-# the dispatching checkout. A malformed value stops the dispatch (exit 2).
+# the dispatching checkout. A malformed value stops the dispatch (exit 2), but
+# only for the harness that table is for: a bad codex_profiles entry never
+# blocks an Antigravity dispatch, and the other way round.
 #
 # Codex writer roles (dev/sre/design): name a profile from YOUR
-# ~/.codex/config.toml. A profile replaces both shipped pins: no `-m` and no
-# `-c model_reasoning_effort` is passed with it, so the profile's own model and
-# effort win. Read-only Codex reviewers (#351) never get a profile.
+# ~/.codex/config.toml. The profile brings its WHOLE Codex config with it
+# (approval policy, model provider, MCP servers, everything it sets), not just
+# a model, so review it as you would any config you run unattended. It replaces
+# both shipped pins: no `-m` and no `-c model_reasoning_effort` is passed with
+# it, so the profile's own model and effort win. `--worktree --sandbox
+# workspace-write` is still passed and still applies. Read-only Codex reviewers
+# (#351) never get a profile.
 # [orchestration.codex_profiles]
 # dev = "deep"          # e.g. [profiles.deep] model = "<model>" model_reasoning_effort = "max"
 #
@@ -199,6 +205,15 @@ research = "claude-code"
 # Why a team.toml table and not a descriptor file: the installed plugin is
 # immutable from your side, and team.toml is already the per-repo config the
 # router reads, so one table is the smallest override.
+#
+# Which setting wins where (Codex):
+#   - `dispatch_agent.py` / `start` writer runs: [orchestration.codex_profiles]
+#     for that role, else the shipped pins (model + effort).
+#   - `dispatch_agent.py task` implement/fix runs: [task] task_codex_profile,
+#     else the shipped engineer model pin. codex_profiles is NOT read there.
+#     The pipeline always passes its own per-step effort (high to implement,
+#     medium to fix), which overrides the profile's effort in `task` runs.
+#   - With both set, each governs only its own path; neither affects reviewers.
 
 # --- Task pipeline (optional, OFF unless you uncomment it, origin: #361) ---
 # `dispatch_agent.py task` runs one task end to end: Codex implements, the
@@ -240,7 +255,9 @@ research = "claude-code"
 # it, and a Codex usage limit still exits 2. usage.jsonl records the profile.
 # Precedence (#385): with a profile set, its own model wins (no `-m`);
 # without one, the shipped engineer pin (`-m`) applies. The per-step effort
-# (high to implement, medium to fix) is passed either way.
+# (high to implement, medium to fix) is passed either way, so a profile's own
+# model_reasoning_effort is ignored in `task` runs. This key governs only the
+# pipeline's implement/fix runs; plain dispatch uses [orchestration.codex_profiles].
 # task_codex_profile = "local"
 # Reviewers are Claude Code headless unless [orchestration.routes] sends
 # rev/sec to "codex" (the #351 opt-in). A Codex reviewer can read the whole
