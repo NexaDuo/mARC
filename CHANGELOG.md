@@ -35,7 +35,9 @@ date whose `YY.M.D` is already taken.
   (`sonnet` needs 2.1.284, `haiku` 2.1.293, `fable` 2.1.321). Older CLIs
   quietly resolve them to the previous generation, and `fable` resolving to
   Fable 5.1 there is both weaker and pricier than Opus 5.5, so update the
-  CLI before updating the plugin.
+  CLI before updating the plugin. The Claude Code plugin manifest's
+  `minimumVersion` is raised from 2.0.0 to 2.1.321 to match, as is the
+  README's install note.
 - The token-guard runaway-loop advisory (#71) now covers Fable as well as
   Opus (#383). Fable is priced above Opus ($8/$40 vs $4/$20 per MTok) and
   now runs the review gates, so a runaway loop there costs the most. Sonnet

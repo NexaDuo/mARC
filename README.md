@@ -142,7 +142,7 @@ claude plugin marketplace add NexaDuo/mARC
 claude plugin install marc@nexaduo
 ```
 
-`claude plugin install` installs to user scope by default; pass `--scope project` to share the install with collaborators via the repo's `.claude/settings.json`, or `--scope local` to keep it local to your checkout only. This requires Claude Code 2.0.0 or later (the `minimumVersion` declared in [`harnesses/claude-code/marc/.claude-plugin/plugin.json`](harnesses/claude-code/marc/.claude-plugin/plugin.json)).
+`claude plugin install` installs to user scope by default; pass `--scope project` to share the install with collaborators via the repo's `.claude/settings.json`, or `--scope local` to keep it local to your checkout only. This requires Claude Code 2.1.321 or later (the `minimumVersion` declared in [`harnesses/claude-code/marc/.claude-plugin/plugin.json`](harnesses/claude-code/marc/.claude-plugin/plugin.json)).
 
 ### Zero-command install (declarative, for teams)
 
