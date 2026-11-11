@@ -67,6 +67,11 @@ always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16
   → resolve the thread; a won't-fix requires a stated justification before
   resolving. Do this at every push, not once at PR-open, since bots re-comment
   on new commits. (origin: #125 · 2026-07-16) (origin: #139 · 2026-07-20) (origin: #216 · 2026-10-03)
+- **Batch review findings into one fix spec with adversarial self-review.**
+  Send ALL findings of a review round in a single fix spec rather than
+  piecemeal. The fix dispatch must return an adversarial self-review: whether
+  each finding is closed and what new liveness, auth, or regression paths the
+  fix might open. (origin: #391 · 2026-11-11)
 - **Re-read the operating-invariants card before tagging or merging.** Treat
   `invariants-card.md` as a checkpoint at that
   moment, not just a post-compaction reminder. (origin: #41 · 2026-07-21)

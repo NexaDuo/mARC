@@ -8,6 +8,23 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.11] - 2026-11-11
+
+### Changed
+
+- Tighter writer briefs and reading discipline (#392, origin #391). Tech-lead
+  dispatch briefs now inline a targeted digest of relevant `AGENTS.md` rules
+  rather than directing writers to read the full file, paired with reading
+  discipline (ranged reads, no mandated tool, no whole-file reads of
+  files > ~10 KB) to cut cache-read and whole-context re-read costs.
+- Writer resume map in compact follow-up dispatches (#392). Follow-up writer
+  briefs include a header listing already-touched files, line ranges, and
+  verified items to prevent redundant tree re-diffs.
+- Batched review-fix loops with adversarial self-review (#392). All findings of
+  a review round are dispatched in a single fix spec rather than piecemeal, and
+  the fix must return an adversarial self-review detailing how findings are
+  closed and checking for new liveness, auth, or regression paths.
+
 ## [26.11.10.1] - 2026-11-10
 
 ### Changed

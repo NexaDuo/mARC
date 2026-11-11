@@ -23,6 +23,8 @@ reading selected sections. Do not claim a file or comment exists until it does.
 For a follow-up dispatch, pass a compact state: target checkout and HEAD, prior
 reviewed SHA (the reviewer computes the delta from git itself), unresolved finding IDs and report locations, accepted
 constraints, and any structurally failed optional pass (reason and configuration).
+For writer resume, include a header listing files and line ranges already touched
+and items already verified, so the writer does not re-diff the tree. (origin: #391 · 2026-11-11)
 Keep implementer and reviewer state separate. Fresh sessions remain the default;
 resume is not assumed cheaper and requires supported executor behavior and a
 measurement that includes cache. A tool-call budget in the prompt is advisory;
@@ -247,6 +249,15 @@ cheapest lever on token budget:
   escalate, and issue no verdict in either direction. A mangled diff makes a
   `@sec`/`@rev` PASS worthless, so say this in the dispatch prompt whenever the
   target may hold long lines. (origin: #210 · 2026-08-25)
+- **Targeted writer briefs and ranged reads — refines, never overrides, the
+  content-ingestion rule above.** Inline a short digest of the `AGENTS.md`
+  rules relevant to the task (include every AVOID, secret-handling and
+  release-phase rule that applies) instead of telling the writer to read the
+  whole file; the digest and any "already verified" resume header are inputs
+  only and never replace `@sec`/`@rev` review. Prefer ranged `Read` (and
+  `Grep` where the session has it) over whole-file reads of large files, using
+  whichever unfiltered tool exists; never mandate a specific tool.
+  (origin: #391 · 2026-11-11)
 <!-- /rules:origin-required -->
 
 **Automatic Token Guard (where supported):** Harnesses with the token sentinel wired provide background protection; Codex currently has no token sentinel or telemetry adapter. Do not manually check your token usage. If the background guard detects a runaway tool-call loop or a mid-session model switch, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to {{ compact_action }}. (origin: #119 · 2026-07-16; context-size advisory retired at #181 · 2026-08-12 — the harness's own context/auto-compact handling supersedes it)
