@@ -26,10 +26,11 @@ date whose `YY.M.D` is already taken.
 - Measuring escalation (30-day review, due 2026-12-11). Per-role telemetry is
   NOT shipped here: the token telemetry (`token-telemetry.jsonl`) has no role
   field, so `@arch` is not countable there; that work is tracked in #396. Until
-  then, count by marker: issue/PR comments (the marker lives in a comment, not
-  the issue body) whose line starts with `^## @arch decision`, for example
-  `gh issue view <N> --json comments --jq '.comments[].body'` filtered with
-  `grep -c '^## @arch decision'`. This counts only successfully posted
+  then, count by marker: trusted comments (the marker lives in a comment, not
+  the issue body) that start with it, for example
+  `gh issue view <N> --json comments --jq '[.comments[] | select(.authorAssociation
+  == ("OWNER","MEMBER","COLLABORATOR")) | select(.body | startswith("## @arch decision"))]
+  | length'`. This counts only successfully posted
   decisions, not dispatches that failed or returned without posting. Compare
   against issues that matched a trigger. Review questions: escalation rate (if
   it fires on most issues, flip to operator on `fable` and drop `@arch`),

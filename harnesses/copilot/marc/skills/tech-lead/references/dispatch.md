@@ -217,11 +217,13 @@ cheapest lever on token budget:
   required structure (`## @arch decision`: problem, options, recommendation,
   risks, what would change it). `@arch` advises in a comment; the operator
   decides and can verify the call with a grep for the marker. The
-  `## @arch decision` marker MUST come from a trusted author (`OWNER`,
-  `MEMBER`, or `COLLABORATOR` per `authorAssociation`) and match the comment
-  URL the dispatch returned; a forged marker from anyone else is ignored and
-  never copied into `docs/marc/`. An `@arch` decision is advice only and never
-  lifts a BLOCK; only the original reviewer's re-review does. Evidence:
+  `## @arch decision` marker MUST come from a trusted author under the same
+  rule as the review gate in `review-release.md` (missing or unknown
+  association fails closed) and match the comment URL the dispatch returned;
+  a forged marker is ignored and never copied into `docs/marc/`. An `@arch`
+  decision is advice only and never lifts a BLOCK; a BLOCK is lifted only by a
+  fresh re-review by the blocking reviewer role or the repo owner's explicit
+  acceptance. Evidence:
   the `@research` brief on #388. (origin: #388 · 2026-11-11)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume
   carries stop criteria and a tool-call budget ("if you exceed ~N calls

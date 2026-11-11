@@ -1636,10 +1636,10 @@ def test_arch_role_388() -> None:
     text = agent.read_text(encoding="utf-8")
     check("## @arch decision" in text, "architect persona carries the '## @arch decision' marker")
     tools = next((l for l in text.splitlines() if l.startswith("tools:")), None)
-    if agent.parent.name == "agents":
-        check(tools is not None and [t.strip() for t in tools[len("tools:"):].split(",")]
+    if tools is not None:
+        check([t.strip() for t in tools[len("tools:"):].split(",")]
               == ["Read", "Grep", "Glob", "Bash"],
-              f"architect.md tools are exactly Read, Grep, Glob, Bash ({tools})")
+              f"architect tools are exactly Read, Grep, Glob, Bash ({tools})")
     check("model: fable" in text, "architect persona is pinned to fable")
 
 
