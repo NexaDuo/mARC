@@ -601,21 +601,34 @@ class TestCodexProfile(Base):
     def write(self, text):
         TestConfig.write(self, text)
 
-    def test_argv_without_a_profile_is_byte_identical(self):
+    def test_argv_without_a_profile_carries_the_persona_model(self):
+        # #385: no profile -> the engineer persona's Codex model pin; the
+        # per-step effort is unchanged from #373.
         t = _task(self.tmp)
         cmds = self.capture(t)
-        self.assertEqual(cmds, [["codex", "exec", "--json", "-c", "model_reasoning_effort=high",
+        self.assertEqual(cmds, [["codex", "exec", "-m", "gpt-6.1-sol", "--json", "-c",
+                                 "model_reasoning_effort=high",
                                  "--sandbox", "workspace-write", "-C", str(t.worktree),
                                  "-o", str(t.file("impl.out")), "-"]])
         self.assertIsNone(self.ledger(t)[0]["profile"])
+        self.assertEqual(self.ledger(t)[0]["model"], "gpt-6.1-sol")
 
     def test_argv_with_a_profile(self):
+        # #385 precedence: a profile's own model wins, so no -m is passed with it.
         t = _task(self.tmp, config=_config(codex_profile="local"))
         cmds = self.capture(t)
         self.assertEqual(cmds, [["codex", "exec", "-p", "local", "--json", "-c",
                                  "model_reasoning_effort=high", "--sandbox", "workspace-write",
                                  "-C", str(t.worktree), "-o", str(t.file("impl.out")), "-"]])
+        self.assertNotIn("-m", cmds[0])
         self.assertEqual(self.ledger(t)[0]["profile"], "local")
+        self.assertIsNone(self.ledger(t)[0]["model"])
+
+    def test_a_malformed_persona_model_stops_the_run(self):
+        t = _task(self.tmp)
+        with mock.patch.object(tp, "load_codex_pins", side_effect=tp.ModelPinError("bad")):
+            with self.assertRaises(tp.TaskError):
+                self.capture(t)
 
     def test_a_limit_on_the_profile_is_still_a_codex_limit(self):
         t = _task(self.tmp, config=_config(codex_profile="local"))

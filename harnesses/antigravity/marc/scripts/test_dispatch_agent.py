@@ -38,9 +38,12 @@ from dispatch_agent import (  # noqa: E402
     NON_ENFORCING_HARNESSES,
     READ_ONLY_ROLES,
     ROLE_TO_AGENT,
+    ModelPinError,
     ReadOnlyRoutingError,
     UnknownRoleError,
     _validate_spec,
+    load_agy_model,
+    load_codex_pins,
     build_codex_readonly_prompt,
     build_harness_command,
     codex_readonly_opt_in,
@@ -89,15 +92,18 @@ def test_command_generation() -> None:
     # 2. antigravity
     # Personas ship as skills on Antigravity and agy headless ignores `--agent`
     # (#323), so the command names the persona skill in the prompt instead.
-    def agy_cmd(skill: str) -> list:
-        return ["agy", "--dangerously-skip-permissions", "-p",
+    # #385: sre/design ship an Antigravity descriptor (`--model <slug>`);
+    # engineer has none, so it keeps the flag-less argv.
+    def agy_cmd(skill: str, model: Optional[str] = None) -> list:
+        return ["agy", "--dangerously-skip-permissions",
+                *(["--model", model] if model else []), "-p",
                 f"Read the '{skill}' skill instructions before proceeding, "
                 f"then act as the mARC {skill} specialist. {prompt}"]
     roles_agy = {
         "dev": agy_cmd("engineer"),
         "engineer": agy_cmd("engineer"),
-        "sre": agy_cmd("sre"),
-        "design": agy_cmd("design"),
+        "sre": agy_cmd("sre", "gemini-4-argon-high"),
+        "design": agy_cmd("design", "gemini-4-argon-high"),
     }
     for r, expected in roles_agy.items():
         cmd = build_harness_command("antigravity", r, prompt)
@@ -124,10 +130,13 @@ def test_command_generation() -> None:
         except ReadOnlyRoutingError:
             check(True, f"copilot command for read-only '{r}' raises")
 
-    # 4. Codex writers use an explicit sandbox; read-only roles are routed away.
+    # 4. Codex writers use an explicit sandbox plus the persona pins (#385);
+    #    read-only roles are routed away.
     for r in ["dev", "sre", "design"]:
         cmd = build_harness_command("codex", r, prompt)
-        expected = ["codex", "exec", "--worktree", "--sandbox", "workspace-write", f"Act as the mARC {ROLE_TO_AGENT[r]} specialist. {prompt}"]
+        expected = ["codex", "exec", "--worktree", "--sandbox", "workspace-write",
+                    "-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"',
+                    f"Act as the mARC {ROLE_TO_AGENT[r]} specialist. {prompt}"]
         check(cmd == expected, f"codex writer command for '{r}': {cmd}")
 
     # 5. Unknown harness throws ValueError
@@ -796,20 +805,21 @@ def test_codex_readonly_opt_in() -> None:
 
     # 2. Opt-in: exact argv. -C <checkout>, fixed profile, effort pin from the
     #    Codex descriptor, persona-first prompt. No forbidden flag anywhere.
-    # Effort pins come from the Codex agent descriptors, present in `core/`
-    # (agent-configs/codex) and the Codex plugin (agents/*.toml) only; this
-    # test also runs from the other harness copies, which ship none.
+    # Pins come from the Codex agent descriptors: `core/agent-configs/codex`,
+    # mirrored into every compiled plugin's `agent-configs/` (#385), plus the
+    # Codex plugin's native `agents/*.toml`.
     plugin = Path(HERE).parent
     has_descriptors = (plugin / "agent-configs" / "codex").is_dir() or (plugin / "agents" / "review.toml").is_file()
-    efforts = {"rev": "high", "review": "high", "sec": "high", "security": "high", "research": "medium"}
+    efforts = {"rev": "xhigh", "review": "xhigh", "sec": "xhigh", "security": "xhigh", "research": "medium"}
     with tempfile.TemporaryDirectory() as tmpdir:
         checkout = str(Path(tmpdir).resolve())
         for r, effort in efforts.items():
             agent = ROLE_TO_AGENT[r]
             body, pins = load_codex_persona(agent)
-            want = {"model_reasoning_effort": effort} if has_descriptors else {}
+            want = {"model": "gpt-6.1-sol", "model_reasoning_effort": effort} if has_descriptors else {}
             check(pins == want, f"codex pins for '{r}': {pins}")
-            pin_args = ["-c", f'model_reasoning_effort="{effort}"'] if has_descriptors else []
+            pin_args = (["-m", "gpt-6.1-sol", "-c", f'model_reasoning_effort="{effort}"']
+                        if has_descriptors else [])
             cmd = build_harness_command("codex", r, prompt, codex_opt_in=True, cwd=tmpdir)
             expected = (["codex", "exec", "-C", checkout] + _CODEX_RO_PROFILE + pin_args
                         + [build_codex_readonly_prompt(r, agent, body, prompt)])
@@ -1006,7 +1016,7 @@ def test_codex_readonly_opt_in() -> None:
                 check(bad == "" and pins == {}, f"effort {bad!r} rejected or ignored: {pins}")
             except ReadOnlyRoutingError:
                 check(bad != "", f"effort {bad!r} rejected")
-        for good in ("minimal", "low", "medium", "high", "xhigh"):
+        for good in ("minimal", "low", "medium", "high", "xhigh", "max"):
             (Path(d) / "agents" / "review.toml").write_text(
                 f'model_reasoning_effort = "{good}"\n', encoding="utf-8")
             check(load_codex_persona("review", plugin_dir=Path(d))[1] == {"model_reasoning_effort": good},
@@ -1451,6 +1461,126 @@ def _start_wait_cases(tmp_p: Path, started_pids: List[int], harness_pids: List[i
           f"git status stays clean after start/wait (got {status.stdout!r})")
 
 
+def test_model_matrix_385() -> None:
+    """#385: Codex/Antigravity model pins, consumer overrides, profile precedence."""
+    print("\n--- Test: Codex/Antigravity model matrix (#385) ---")
+    prompt = "Implement issue #1"
+    plugin = Path(HERE).parent
+
+    # 1. Every shipped Codex descriptor loads (the #351 allowlists accept the slugs).
+    want_codex = {
+        "engineer": ("gpt-6.1-sol", "high"), "sre": ("gpt-6.1-sol", "high"),
+        "design": ("gpt-6.1-sol", "high"), "research": ("gpt-6.1-sol", "medium"),
+        "review": ("gpt-6.1-sol", "xhigh"), "security": ("gpt-6.1-sol", "xhigh"),
+        "bulk-reader": ("gpt-6-luna", "high"),
+    }
+    for agent, (model, effort) in want_codex.items():
+        pins = load_codex_pins(agent)
+        check(pins == {"model": model, "model_reasoning_effort": effort},
+              f"shipped codex descriptor for '{agent}' loads: {pins}")
+    shipped = sorted(p.stem for p in (plugin / "agent-configs" / "codex").glob("*.toml"))
+    check(shipped == sorted(want_codex), f"codex descriptor set is the matrix: {shipped}")
+
+    # 2. Every shipped Antigravity descriptor loads; only writer roles have one (#323).
+    agy_dir = plugin / "agent-configs" / "antigravity"
+    agy_shipped = sorted(p.stem for p in agy_dir.glob("*.toml"))
+    check(agy_shipped == ["design", "sre"], f"antigravity descriptors are sre/design only: {agy_shipped}")
+    for agent in agy_shipped:
+        check(load_agy_model(agent) == "gemini-4-argon-high", f"antigravity descriptor for '{agent}' loads")
+    check(load_agy_model("engineer") is None, "no antigravity descriptor for engineer -> no model")
+
+    # 3. Antigravity argv: --model from the descriptor, nothing when absent, never --effort.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / ".git").mkdir()
+        for r, model in (("sre", "gemini-4-argon-high"), ("design", "gemini-4-argon-high"), ("dev", None)):
+            cmd = build_harness_command("antigravity", r, prompt, cwd=d)
+            check(("--model" in cmd) == bool(model) and (not model or cmd[cmd.index("--model") + 1] == model),
+                  f"agy argv for '{r}' carries --model {model}: {cmd[:5]}")
+            check("--effort" not in cmd, f"agy argv for '{r}' never passes --effort")
+            check(cmd.index("-p") == len(cmd) - 2, f"agy argv for '{r}' keeps -p <prompt> last")
+
+        # 4. Writer pins on codex, no team.toml: persona model + effort.
+        cmd = build_harness_command("codex", "dev", prompt, cwd=d)
+        check(cmd[5:9] == ["-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"'],
+              f"codex writer argv carries persona pins: {cmd[:9]}")
+
+        # 5. Consumer overrides from the checkout's team.toml.
+        team = Path(d) / ".agents"
+        team.mkdir()
+        (team / "team.toml").write_text(
+            '[orchestration.codex_profiles]\ndev = "local"\nrev = "local"\n'
+            '[orchestration.antigravity_models]\nsre = "claude-sonnet-5-5-high"\n', encoding="utf-8")
+        cmd = build_harness_command("codex", "engineer", prompt, cwd=d)
+        check(cmd == ["codex", "exec", "--worktree", "--sandbox", "workspace-write", "-p", "local",
+                      f"Act as the mARC engineer specialist. {prompt}"],
+              f"a codex profile replaces both persona pins (profile wins): {cmd}")
+        cmd = build_harness_command("codex", "sre", prompt, cwd=d)
+        check("-m" in cmd and "-p" not in cmd, f"a role without a profile keeps the persona pins: {cmd[:9]}")
+        cmd = build_harness_command("antigravity", "sre", prompt, cwd=d)
+        check(cmd[2:4] == ["--model", "claude-sonnet-5-5-high"], f"agy override wins over the descriptor: {cmd[:4]}")
+        cmd = build_harness_command("antigravity", "design", prompt, cwd=d)
+        check(cmd[2:4] == ["--model", "gemini-4-argon-high"], f"unoverridden agy role keeps its descriptor: {cmd[:4]}")
+        # The #351 reviewer argv stays fixed: a codex profile never reaches it.
+        cmd = build_harness_command("codex", "rev", prompt, codex_opt_in=True, cwd=d)
+        check("-p" not in cmd[:-1] and "local" not in cmd[:-1], "codex reviewer argv ignores codex_profiles")
+
+        # 6. The detached runner re-derives the same argv from the checkout (#352).
+        prepared = prepare_dispatch("dev", prompt, harness="codex", dry_run=True,
+                                    which_fn=lambda b: f"/usr/bin/{b}", cwd=Path(d))
+        spec = {"prompt": prompt, "cwd": d, "prepared": prepared}
+        check(_validate_spec(spec)["command"][5:7] == ["-p", "local"], "runner re-check accepts the profile argv")
+        tampered = dict(prepared, command=prepared["command"][:5] + ["-p", "other"] + prepared["command"][7:])
+        try:
+            _validate_spec({"prompt": prompt, "cwd": d, "prepared": tampered})
+            check(False, "a tampered profile in the job spec should be refused")
+        except RuntimeError:
+            check(True, "a tampered profile in the job spec is refused")
+
+        # 7. Malformed overrides fail closed (exit 2, nothing built).
+        for table, bad in (("codex_profiles", '"-c x"'), ("codex_profiles", "3"),
+                           ("antigravity_models", '"--yolo"'), ("antigravity_models", '"Gem ini"')):
+            role = "dev" if table == "codex_profiles" else "sre"
+            harness = "codex" if table == "codex_profiles" else "antigravity"
+            (team / "team.toml").write_text(f"[orchestration.{table}]\n{role} = {bad}\n", encoding="utf-8")
+            try:
+                build_harness_command(harness, role, prompt, cwd=d)
+                check(False, f"{table} {bad} should raise")
+            except ModelPinError:
+                check(True, f"{table} {bad} raises ModelPinError")
+            res, _, exc = _capture_stderr(prepare_dispatch, role, prompt, harness, True, None, None,
+                                          lambda b: f"/usr/bin/{b}", Path(d))
+            check(exc is None and res["exit_code"] == 2 and res["command"] == [],
+                  f"prepare_dispatch refuses {table} {bad} with exit 2")
+
+    # 8. A malformed shipped descriptor fails closed too.
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "agent-configs" / "antigravity").mkdir(parents=True)
+        for bad in ("--model x", "-high", "UPPER", "a b"):
+            (Path(d) / "agent-configs" / "antigravity" / "sre.toml").write_text(f'model = "{bad}"\n', encoding="utf-8")
+            try:
+                load_agy_model("sre", plugin_dir=Path(d))
+                check(False, f"descriptor slug {bad!r} should raise")
+            except ModelPinError:
+                check(True, f"descriptor slug {bad!r} raises ModelPinError")
+
+    # 9. An unknown slug is surfaced, not masked: agy's non-zero exit is the
+    #    result and there is no retry without --model.
+    runner = MagicMock(return_value=subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="", stderr="ERROR: unknown model"))
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / ".git").mkdir()
+        old = os.getcwd()
+        os.chdir(d)
+        try:
+            res = dispatch("sre", prompt, harness="antigravity", which_fn=lambda b: f"/usr/bin/{b}",
+                           runner_fn=runner)
+        finally:
+            os.chdir(old)
+    check(res["exit_code"] == 1 and res["success"] is False and "unknown model" in res["stderr"],
+          f"agy unknown-slug exit surfaces (exit {res['exit_code']})")
+    check(runner.call_count == 1 and "--model" in runner.call_args[0][0], "no silent retry without --model")
+
+
 def main() -> int:
     test_command_generation()
     test_default_hybrid_matrix()
@@ -1463,6 +1593,7 @@ def main() -> int:
     test_read_only_roles_fail_closed()
     test_role_normalization_fail_closed()
     test_codex_readonly_opt_in()
+    test_model_matrix_385()
     test_start_wait_jobs()
 
     if _failures:

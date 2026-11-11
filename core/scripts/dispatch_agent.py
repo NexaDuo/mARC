@@ -70,6 +70,16 @@ Routing resolution:
       only from the team.toml discovered from that checkout: sync dispatch, `start`
       and the runner's re-check all re-discover it there (`mode` included) and refuse
       an opt-in that comes from any other --team-toml, inside or outside the checkout.
+    - Model pins (origin: #385 · 2026-11-10). Codex writer runs carry the persona
+      `model`/`model_reasoning_effort` from the Codex descriptor (`-m`, `-c`), like the
+      read-only path. Antigravity runs carry `--model <slug>` from
+      `agent-configs/antigravity/<agent>.toml` (no descriptor: no flag; never `--effort`,
+      the slug carries the effort). Consumer overrides come from the team.toml
+      discovered from the checkout: [orchestration.codex_profiles] (role -> Codex
+      profile; a set profile replaces both persona pins, so the profile's own model and
+      effort win; writer roles only) and [orchestration.antigravity_models] (role ->
+      slug). A malformed pin or profile fails closed; an unknown agy slug makes agy exit
+      non-zero, and that exit is reported as is.
 """
 from __future__ import annotations
 
@@ -78,6 +88,7 @@ import atexit
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import signal
@@ -169,12 +180,22 @@ CODEX_READONLY_PROFILE_ARGS: Tuple[str, ...] = (
 # so the dual-marker merge gate keeps a grep-verifiable result (#351).
 CODEX_READONLY_VERDICT_ROLES = frozenset({"rev", "sec"})
 # Values Codex accepts for model_reasoning_effort (#351 SEC-3); anything else fails closed.
-CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+# `max` (#385) is the documented first escalation step for a Codex reviewer.
+CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
 _CODEX_MODEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_:/")
+# An `agy --model` slug (#385): a plain lowercase id, the effort suffix included
+# (e.g. "<family>-high"); never option-shaped.
+_AGY_MODEL_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}")
+# A Codex config profile name (`codex exec -p <name>`), same rule as task_codex_profile.
+_CODEX_PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 
 class ReadOnlyRoutingError(RuntimeError):
     """No harness that applies agent definitions is available for a read-only role (#323)."""
+
+
+class ModelPinError(ValueError):
+    """A model pin or profile from a descriptor or team.toml is not a plain id (#385)."""
 
 
 class UnknownRoleError(ValueError):
@@ -442,11 +463,29 @@ def load_codex_persona(mapped_agent: str, plugin_dir: Optional[Path] = None) -> 
             f"cannot read agent definition {md} for the codex read-only route (#351): {e}") from e
     if not body:
         raise ReadOnlyRoutingError(f"agent definition {md} is empty; refusing codex read-only route (#351)")
+    try:
+        pins = load_codex_pins(mapped_agent, base)
+    except ModelPinError as e:
+        raise ReadOnlyRoutingError(f"{e}; refusing codex read-only route (#351)") from e
+    return body, pins
+
+
+def load_codex_pins(mapped_agent: str, plugin_dir: Optional[Path] = None) -> Dict[str, str]:
+    """`model`/`model_reasoning_effort` from the Codex descriptor of an agent (#351, #385).
+
+    Looks in `agents/<agent>.toml` (the Codex plugin) then
+    `agent-configs/codex/<agent>.toml` (`core/` and every compiled plugin). No
+    descriptor or no key: no pin, and Codex uses its configured default.
+    Raises ModelPinError for a value that is not allowlisted.
+    """
+    base = plugin_dir or _plugin_dir()
     pins: Dict[str, str] = {}
-    for desc in (base / "agents" / f"{mapped_agent}.toml",
+    desc: Optional[Path] = None
+    for cand in (base / "agents" / f"{mapped_agent}.toml",
                  base / "agent-configs" / "codex" / f"{mapped_agent}.toml"):
-        if desc.is_file():
-            data = parse_toml(desc)
+        if cand.is_file():
+            desc = cand
+            data = parse_toml(cand)
             for key in ("model", "model_reasoning_effort"):
                 val = data.get(key)
                 if isinstance(val, str) and val.strip():
@@ -456,13 +495,75 @@ def load_codex_persona(mapped_agent: str, plugin_dir: Optional[Path] = None) -> 
     # inside a TOML `-c` value, and the model must never parse as a flag.
     effort = pins.get("model_reasoning_effort")
     if effort is not None and effort not in CODEX_REASONING_EFFORTS:
-        raise ReadOnlyRoutingError(
+        raise ModelPinError(
             f"model_reasoning_effort {effort!r} in {desc} is not one of "
-            f"{sorted(CODEX_REASONING_EFFORTS)}; refusing codex read-only route (#351)")
+            f"{sorted(CODEX_REASONING_EFFORTS)}")
     model = pins.get("model")
     if model is not None and (model.startswith("-") or not set(model) <= _CODEX_MODEL_CHARS):
-        raise ReadOnlyRoutingError(f"model {model!r} in {desc} is not a plain model id (#351)")
-    return body, pins
+        raise ModelPinError(f"model {model!r} in {desc} is not a plain model id (#351)")
+    return pins
+
+
+def load_agy_model(mapped_agent: str, plugin_dir: Optional[Path] = None) -> Optional[str]:
+    """The `agy --model` slug from `agent-configs/antigravity/<agent>.toml` (#385).
+
+    None when the role has no descriptor or the descriptor has no `model`
+    (agy then uses its own default, as before #385). Raises ModelPinError for
+    a slug that is not a plain lowercase id.
+    """
+    desc = (plugin_dir or _plugin_dir()) / "agent-configs" / "antigravity" / f"{mapped_agent}.toml"
+    if not desc.is_file():
+        return None
+    val = parse_toml(desc).get("model")
+    if not isinstance(val, str) or not val.strip():
+        return None
+    return _check_agy_model(val.strip(), str(desc))
+
+
+def _check_agy_model(slug: str, source: str) -> str:
+    if not _AGY_MODEL_RE.fullmatch(slug):
+        raise ModelPinError(f"antigravity model {slug!r} in {source} is not a plain model slug (#385)")
+    return slug
+
+
+def load_model_overrides(role: str, cwd: Optional[str] = None) -> Dict[str, str]:
+    """Per-role overrides from the team.toml discovered from the checkout (#385).
+
+    Returns {"codex_profile": ..., "antigravity_model": ...} with only the keys
+    that are set for this role. Same trust anchor as the #351 opt-in: only the
+    team.toml discovered from `cwd`, so sync dispatch, `start` and the
+    detached runner's re-check build the same argv. Lookup mirrors routing
+    (canonical key first, then the alias that was requested).
+    """
+    start = Path(cwd) if cwd else Path.cwd()
+    if not start.is_dir():
+        return {}
+    path = find_team_toml(None, start_dir=start)
+    config = parse_toml(path)
+    orch = config.get("orchestration", {}) if isinstance(config, dict) else {}
+    if not isinstance(orch, dict):
+        return {}
+    norm = normalize_role(role)
+    canonical = CANONICAL_ROLES[norm]
+    out: Dict[str, str] = {}
+    for table, key in (("codex_profiles", "codex_profile"), ("antigravity_models", "antigravity_model")):
+        entries = orch.get(table)
+        if not isinstance(entries, dict):
+            continue
+        val = entries.get(canonical, entries.get(norm))
+        if val is None:
+            continue
+        if not isinstance(val, str):
+            raise ModelPinError(f"[orchestration.{table}] {norm} in {path} must be a string (#385)")
+        if key == "codex_profile":
+            if not _CODEX_PROFILE_RE.fullmatch(val):
+                raise ModelPinError(
+                    f"[orchestration.codex_profiles] {norm} = {val!r} in {path} is not a plain profile "
+                    f"name (letters, digits, '_', '.', '-'; not starting with '-') (#385)")
+            out[key] = val
+        else:
+            out[key] = _check_agy_model(val, f"{path} [orchestration.antigravity_models]")
+    return out
 
 
 def build_codex_readonly_prompt(role: str, mapped_agent: str, body: str, prompt: str) -> str:
@@ -526,7 +627,14 @@ def build_harness_command(
         # The Antigravity plugin ships personas as skills (skills/<name>/SKILL.md),
         # not agents, and agy headless ignores `--agent` anyway (#323). So no
         # `--agent` flag: the prompt tells the stock agent to load the persona skill.
-        return ["agy", "--dangerously-skip-permissions", "-p",
+        # Model (#385): team.toml override, else the role's descriptor, else no
+        # flag. Only the effort-suffixed slug, never `--effort` too (how the two
+        # combine is undocumented). An unknown slug makes headless agy exit
+        # non-zero; that failure is returned, never retried without --model.
+        model = (load_model_overrides(role, cwd).get("antigravity_model")
+                 or load_agy_model(mapped_agent))
+        model_args = ["--model", model] if model else []
+        return ["agy", "--dangerously-skip-permissions", *model_args, "-p",
                 f"Read the '{mapped_agent}' skill instructions before proceeding, "
                 f"then act as the mARC {mapped_agent} specialist. {prompt}"]
     elif harness == "copilot":
@@ -536,7 +644,18 @@ def build_harness_command(
         # `-p` is a profile flag, not an agent selector. State the role in the
         # prompt and use a managed worktree for mutating runs. (Read-only roles
         # returned above, #351.)
-        return ["codex", "exec", "--worktree", "--sandbox", "workspace-write",
+        # Pins (#385): a team.toml codex profile for this role wins outright (CLI
+        # `-m`/`-c` would override the profile's own model and effort, so none
+        # is passed with it); otherwise the persona pins, as on the read-only path.
+        profile = load_model_overrides(role, cwd).get("codex_profile")
+        if profile:
+            pin_args = ["-p", profile]
+        else:
+            pins = load_codex_pins(mapped_agent)
+            pin_args = (["-m", pins["model"]] if "model" in pins else []) + (
+                ["-c", f'model_reasoning_effort="{pins["model_reasoning_effort"]}"']
+                if "model_reasoning_effort" in pins else [])
+        return ["codex", "exec", "--worktree", "--sandbox", "workspace-write", *pin_args,
                 f"Act as the mARC {mapped_agent} specialist. {prompt}"]
     else:
         raise ValueError(f"Unsupported harness: {harness!r}")
@@ -860,8 +979,9 @@ def prepare_dispatch(
                 f"discovered from the checkout; refusing (#351)")
         cmd = build_harness_command(resolved_harness, role, prompt,
                                     codex_opt_in=opt_in, cwd=str(cwd) if cwd else None)
-    except ReadOnlyRoutingError as e:
-        # e.g. an opted-in Codex reviewer whose persona file is missing (#351).
+    except (ReadOnlyRoutingError, ModelPinError) as e:
+        # e.g. an opted-in Codex reviewer whose persona file is missing (#351),
+        # or a malformed model pin / profile (#385).
         err_msg = f"[mARC dispatch] Error: {e}"
         sys.stderr.write(err_msg + "\n")
         return {
@@ -1366,7 +1486,7 @@ def run_job(job_dir_arg: str, lock_fd: Optional[int] = None) -> int:
                                   runner_fn=_run_in_own_group)
     except Exception as e:  # never leave a job without a result
         base = prepared if isinstance(prepared, dict) else {}
-        result = dict(base, exit_code=2 if isinstance(e, ReadOnlyRoutingError) else 1,
+        result = dict(base, exit_code=2 if isinstance(e, (ReadOnlyRoutingError, ModelPinError)) else 1,
                       stdout="", stderr=f"[mARC dispatch] Error: {e}",
                       success=False, error=str(e), duration_sec=0.0)
     result["job_id"] = spec.get("job_id", job_dir.name)

@@ -1,0 +1,5 @@
+# mARC Antigravity descriptor (origin: #385). dispatch_agent.py passes `model`
+# as `agy --model <slug>` for this role; the slug carries the effort suffix
+# (see `agy models`), so no separate --effort is passed. Override per consumer
+# repo with team.toml [orchestration.antigravity_models].
+model = "gemini-4-argon-high"

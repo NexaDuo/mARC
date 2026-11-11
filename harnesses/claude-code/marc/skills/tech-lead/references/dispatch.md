@@ -184,6 +184,17 @@ cheapest lever on token budget:
   `fable`/`opus`, or downgrading it to `haiku`, remains the operator's
   lever, never a silent blanket default flip without new evidence.
   (origin: #383 · 2026-11-10)
+- **Codex and Antigravity runs carry the shipped model matrix; don't
+  hand-pick models per dispatch.** `dispatch_agent.py` passes the per-role
+  pins from `agent-configs/codex/*.toml` (`-m` + effort, writers and opt-in
+  reviewers alike) and `agent-configs/antigravity/*.toml` (`--model <slug>`
+  only, never `--effort`; roles without a descriptor get no flag). The table
+  and its evidence live in issue #385, not here. A consumer changes a role
+  through team.toml (`[orchestration.codex_profiles]`, whose profile beats
+  the pins; `[orchestration.antigravity_models]`). If Codex reviews prove too
+  shallow, the next release step is `max` effort on the same model, before a
+  pricier model.
+  (origin: #385 · 2026-11-10)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume
   carries stop criteria and a tool-call budget ("if you exceed ~N calls
   without converging, stop and report"), N sized to the task. The raw

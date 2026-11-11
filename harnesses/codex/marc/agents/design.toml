@@ -1,5 +1,6 @@
 name = "design"
 description = "mARC frontend and user experience specialist."
-model_reasoning_effort = "medium"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = "Discover the repository UI conventions, implement the requested flow, and validate the affected user behavior with the available checks."

@@ -175,6 +175,31 @@ sec = "claude-code"
 rev = "claude-code"
 research = "claude-code"
 
+# Per-role model overrides (optional, origin: #385). Without them, dispatch uses
+# the model pins the plugin ships (agent-configs/codex/*.toml for Codex,
+# agent-configs/antigravity/*.toml for Antigravity; matrix and evidence in
+# https://github.com/NexaDuo/mARC/issues/385), and zero-config still works with
+# no team.toml at all. Both tables are read only from the team.toml found in
+# the dispatching checkout. A malformed value stops the dispatch (exit 2).
+#
+# Codex writer roles (dev/sre/design): name a profile from YOUR
+# ~/.codex/config.toml. A profile replaces both shipped pins: no `-m` and no
+# `-c model_reasoning_effort` is passed with it, so the profile's own model and
+# effort win. Read-only Codex reviewers (#351) never get a profile.
+# [orchestration.codex_profiles]
+# dev = "deep"          # e.g. [profiles.deep] model = "<model>" model_reasoning_effort = "max"
+#
+# Antigravity: one `agy --model` slug per role, the effort suffix included (see
+# `agy models`). Only writer roles ever route to agy (#323). An unknown or
+# plan-gated slug makes headless agy exit non-zero, and dispatch reports it.
+# [orchestration.antigravity_models]
+# sre = "claude-sonnet-5-5-high"   # escalation when the default stalls; separate agy quota pool, non-trial Pro or higher
+# design = "gemini-4-carbon-high"  # Ultra/Enterprise plans only
+#
+# Why a team.toml table and not a descriptor file: the installed plugin is
+# immutable from your side, and team.toml is already the per-repo config the
+# router reads, so one table is the smallest override.
+
 # --- Task pipeline (optional, OFF unless you uncomment it, origin: #361) ---
 # `dispatch_agent.py task` runs one task end to end: Codex implements, the
 # suite runs, @rev/@sec review headless, Codex fixes. It reads this section
@@ -213,6 +238,9 @@ research = "claude-code"
 # config. A plain name (letters, digits, '_', '.', '-', not starting with
 # '-'); anything else stops the run before Codex starts. Reviewers never get
 # it, and a Codex usage limit still exits 2. usage.jsonl records the profile.
+# Precedence (#385): with a profile set, its own model wins (no `-m`);
+# without one, the shipped engineer pin (`-m`) applies. The per-step effort
+# (high to implement, medium to fix) is passed either way.
 # task_codex_profile = "local"
 # Reviewers are Claude Code headless unless [orchestration.routes] sends
 # rev/sec to "codex" (the #351 opt-in). A Codex reviewer can read the whole

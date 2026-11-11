@@ -633,6 +633,20 @@ def main():
                     os.makedirs(dest_dir, exist_ok=True)
                     shutil.copy2(os.path.join(descriptor_dir, name), os.path.join(dest_dir, name))
 
+        # Per-harness model descriptors (origin: #385): dispatch_agent.py runs
+        # from whichever plugin hosts the operator and reads
+        # `agent-configs/<target>/<agent>.toml` next to its scripts/, so every
+        # plugin ships the whole tree. Mirrored exactly (stale files removed).
+        src_cfg = os.path.join(core_dir, "agent-configs")
+        dest_cfg = os.path.join(harness_marc_path, "agent-configs")
+        if os.path.isdir(dest_cfg):
+            shutil.rmtree(dest_cfg)
+        if os.path.isdir(src_cfg):
+            shutil.copytree(src_cfg, dest_cfg,
+                            ignore=lambda _d, names: [n for n in names
+                                                      if not n.endswith(".toml")
+                                                      and not os.path.isdir(os.path.join(_d, n))])
+
         # Mirror core/scripts/ verbatim (byte-identical, no templating).
         core_scripts_dir = os.path.join(core_dir, "scripts")
         dest_scripts_dir = os.path.join(harness_marc_path, "scripts")
