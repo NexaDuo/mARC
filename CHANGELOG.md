@@ -29,7 +29,7 @@ date whose `YY.M.D` is already taken.
   then, count by marker: trusted comments (the marker lives in a comment, not
   the issue body) that start with it, for example
   `gh issue view <N> --json comments --jq '[.comments[] | select(.authorAssociation
-  == ("OWNER","MEMBER","COLLABORATOR")) | select(.body | startswith("## @arch decision"))]
+  == ("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | startswith("## @arch decision"))]
   | length'`. This counts only successfully posted
   decisions, not dispatches that failed or returned without posting. Compare
   against issues that matched a trigger. Review questions: escalation rate (if
