@@ -1627,13 +1627,20 @@ def test_arch_role_388() -> None:
           == ["claude", "--dangerously-skip-permissions", "--agent", "architect"],
           "claude-code command selects the architect agent")
     # Marker and read-only tool contract in the agent definition (mirrors the @sec/@rev markers).
-    agent = Path(HERE).parent / "agents" / "architect.md"
+    root = Path(HERE).parent
+    agent = next((c for c in (root / "agents" / "architect.md",
+                              root / "skills" / "architect" / "SKILL.md") if c.is_file()), None)
+    check(agent is not None, "architect persona file found (agents/ or skills/architect/)")
+    if agent is None:
+        return
     text = agent.read_text(encoding="utf-8")
-    check("## @arch decision" in text, "architect.md carries the '## @arch decision' marker")
-    tools = next(l for l in text.splitlines() if l.startswith("tools:"))
-    check(not any(t in tools for t in ("Edit", "Write", "WebFetch", "WebSearch", "NotebookEdit")),
-          f"architect.md tools are read-only ({tools})")
-    check("model: fable" in text, "architect.md is pinned to fable")
+    check("## @arch decision" in text, "architect persona carries the '## @arch decision' marker")
+    tools = next((l for l in text.splitlines() if l.startswith("tools:")), None)
+    if agent.parent.name == "agents":
+        check(tools is not None and [t.strip() for t in tools[len("tools:"):].split(",")]
+              == ["Read", "Grep", "Glob", "Bash"],
+              f"architect.md tools are exactly Read, Grep, Glob, Bash ({tools})")
+    check("model: fable" in text, "architect persona is pinned to fable")
 
 
 def main() -> int:

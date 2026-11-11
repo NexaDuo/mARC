@@ -81,7 +81,7 @@ requirements for repositories without those environments.
    (`@sec`/`@rev`/`@research`/`@arch`) run only behind a verified no-write tool
    boundary, and via `dispatch_agent.py` only on `claude-code` (never
    `antigravity`/`copilot`/`codex`); fail closed if neither holds.
-   (origin: #323 · 2026-09-23)
+   (origin: #323 · 2026-09-23) (origin: #388 · 2026-11-11)
 4. When a PR exists, read [review-release.md](references/review-release.md).
    Dispatch independent `@sec` and `@rev` immediately (each prompt carries a
    `reviewer: <harness>/<dispatch-id>` value you mint), adjudicate bot findings
