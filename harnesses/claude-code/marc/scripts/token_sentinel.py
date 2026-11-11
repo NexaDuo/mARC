@@ -19,8 +19,9 @@ Two modes share ONE counting implementation (DRY):
     and may emit a non-blocking advisory (Claude Code
     `hookSpecificOutput.additionalContext` + a top-level `systemMessage`). It
     NEVER blocks, denies, or aborts a tool call, and ALWAYS exits 0. Two guards:
-      - runaway-loop (#71): the CURRENT turn is on Opus AND has crossed a
-        consecutive-tool-call threshold -> suggest `/compact` or a Sonnet drop.
+      - runaway-loop (#71; tier scope widened at #383): the CURRENT turn is on
+        a premium tier (Opus or Fable) AND has crossed a consecutive-tool-call
+        threshold -> suggest `/compact` or a Sonnet drop.
       - model-switch (#73): a genuine MAIN-thread mid-session model switch
         (A->B) carrying the cache-invalidation fingerprint (cache-write spike,
         cache-read collapse) -> note the context was re-cached and suggest
@@ -71,7 +72,7 @@ import tempfile
 
 # --- Automatic-guard tuning (origin: #71) ----------------------------------
 # Consecutive assistant tool-call API requests within one user turn that trip
-# the Opus runaway advisory. Override with the env var; a turn that reaches N
+# the premium-tier (Opus/Fable) runaway advisory. Override with the env var; a turn that reaches N
 # warns once, then again at 2N, 3N, ... (band debounce). Kept in lockstep with
 # the manual CLI's default --calls so the two views agree on "runaway".
 DEFAULT_HOOK_THRESHOLD = 25
@@ -316,9 +317,22 @@ def analyze(path: str):
 
 # --- Automatic PostToolUse guard (origin: #71) ------------------------------
 
-def is_opus_model(model: str) -> bool:
-    """True for an Opus-tier model id; the guard only warns on Opus turns."""
-    return "opus" in (model or "").lower()
+# Model families the runaway guard watches (origin: #71, widened at #383 ·
+# 2026-11-10). Fable is priced above Opus ($8/$40 vs $4/$20 per MTok) and now
+# runs the @sec/@rev gates, so a runaway loop on it is the costliest case.
+# Sonnet (the specialist default) and Haiku stay unguarded: they are the
+# cheaper tiers the advisory points to.
+PREMIUM_MODEL_FAMILIES = ("opus", "fable")
+
+
+def is_premium_model(model: str) -> bool:
+    """True for an Opus- or Fable-tier model id; the guard only warns on those."""
+    lowered = (model or "").lower()
+    return any(family in lowered for family in PREMIUM_MODEL_FAMILIES)
+
+
+# Back-compat alias for callers that imported the pre-#383 name.
+is_opus_model = is_premium_model
 
 
 def hook_threshold() -> int:
@@ -369,7 +383,7 @@ def should_warn(*, model: str, count: int, threshold: int, turn_index: int,
     memory lives in a tiny per-session temp file keyed by session + turn. A new
     turn (fresh turn_index) starts a clean band, so the guard re-arms naturally.
     """
-    if not is_opus_model(model):
+    if not is_premium_model(model):
         return False
     band = count // threshold  # 0 below N, 1 in [N,2N), 2 in [2N,3N), ...
     if band < 1:
@@ -393,14 +407,16 @@ def build_advisory(*, model: str, count: int, threshold: int) -> dict:
     """
     advice = (
         f"[mARC token-guard] Runaway-loop guard: this turn has made {count} "
-        f"consecutive tool calls on an Opus-tier model ({model}), past the "
+        f"consecutive tool calls on a premium-tier (Opus/Fable) model "
+        f"({model}), past the "
         f"{threshold}-call threshold. This is advisory only — nothing was "
         f"blocked. Consider `/compact` to shrink context, or dropping to a "
         f"Sonnet-tier model for the rest of this loop to bound token spend."
     )
     return {
         "systemMessage": (
-            f"[mARC] token-guard: {count} consecutive Opus tool calls this turn "
+            f"[mARC] token-guard: {count} consecutive premium-tier tool calls "
+            f"this turn "
             f"(>{threshold}). Advisory only. Consider /compact or Sonnet."
         ),
         "hookSpecificOutput": {
@@ -547,7 +563,7 @@ def run_hook(stdin_text: str) -> int:
 
     advisories: list[dict] = []
 
-    # Guard 1 (#71): runaway Opus tool-loop.
+    # Guard 1 (#71, #383): runaway premium-tier (Opus/Fable) tool-loop.
     if should_warn(model=model, count=count, threshold=threshold,
                    turn_index=turn_index, session_key=session_key):
         advisories.append(build_advisory(model=model, count=count,

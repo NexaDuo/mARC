@@ -151,19 +151,26 @@ cheapest lever on token budget:
   missing, read-only roles fall back to `claude-code` only; other roles fall back to
   the native host, then any available harness, with a diagnostic warning.
   (origin: #323 · 2026-09-23)
-- **`opus` is the specialist default; `haiku` is for mechanical/bulk work —
-  superseded from the earlier "sonnet by default" rule.** (origin: #69 ·
-  2026-07-10, superseded — `sonnet` by default was the original rule; origin:
-  #331 · 2026-09-22, superseded — pinned only `@sec` to `opus` as a
-  per-role exception on top of the `sonnet` default) `@dev`/`@sre`/`@design`/
-  `@rev`/`@research`/`@sec` all run on `opus`: independent Vals.ai evidence
-  (Terminal-Bench 4.0, Vals Index) shows Opus 5.5 clearing Sonnet 5 by a wide
-  margin on agentic coding/reasoning tasks at a comparable cost/test, so the
-  original "cheaper tier by default" tradeoff no longer holds. `bulk-reader`
-  stays on `haiku` for its one-shot, tool-minimal summarization role.
-  Downgrading a specific bounded dispatch to `sonnet`/`haiku` remains the
-  operator's cost lever — never a silent blanket default flip without new
-  evidence. (origin: #335 · 2026-09-22)
+- **`sonnet` is the specialist default; `fable` for the `@sec`/`@rev` gates;
+  `haiku` is for mechanical/bulk work.** (origin: #69 · 2026-07-10,
+  superseded: `sonnet` by default was the original rule; origin: #331 ·
+  2026-09-22, superseded: pinned only `@sec` to `opus` as a per-role
+  exception on top of the `sonnet` default; origin: #335 · 2026-09-22,
+  superseded: "`opus` is the specialist default; `haiku` is for
+  mechanical/bulk work", on Vals.ai evidence of Opus 5.5 clearing Sonnet 5)
+  `@dev`/`@sre`/`@design`/`@research` run on `sonnet`; `@sec`/`@rev` run on
+  `fable`; `bulk-reader` stays on `haiku`. New independent Vals.ai evidence
+  (2026-11-10) dominates Opus 5.5: Sonnet 5.5 matches it (Vals Index 70.85%
+  vs 70.14%, Terminal-Bench 4.0 64.14% vs 65.15%) at ~35% lower cost/test
+  ($16.18 vs $24.77), and Fable 5.2 beats it (71.31%, #1/36; 65.15%) at a
+  lower cost/test ($17.94), so the pre-merge gates get the strongest tier
+  and implementers the parity-cheaper one. Haiku 5.5 (58.73%, $3.18/test)
+  keeps the one-shot, tool-minimal summarization role. The aliases resolve
+  to these generations only on Claude Code >= 2.1.321; older CLIs fall back
+  to the previous generation. Escalating a specific bounded dispatch to
+  `fable`/`opus`, or downgrading it to `haiku`, remains the operator's
+  lever, never a silent blanket default flip without new evidence.
+  (origin: #383 · 2026-11-10)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume
   carries stop criteria and a tool-call budget ("if you exceed ~N calls
   without converging, stop and report"), N sized to the task. The raw
@@ -232,7 +239,7 @@ cheapest lever on token budget:
 <!-- /rules:origin-required -->
 
 **Automatic Token Guard (where supported):** Harnesses with the token sentinel wired provide background protection; Codex currently has no token sentinel or telemetry adapter. Do not manually check your token usage. If the background guard detects a runaway tool-call loop or a mid-session model switch, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to {{ compact_action }}. (origin: #119 · 2026-07-16; context-size advisory retired at #181 · 2026-08-12 — the harness's own context/auto-compact handling supersedes it)
-Escalate to Opus at a natural break, not mid-session (cache invalidation). (origin: #73 · 2026-07-12)
+Escalate to a higher tier at a natural break, not mid-session (cache invalidation). (origin: #73 · 2026-07-12; reworded at #383 · 2026-11-10, no longer Opus-specific)
 
 <!-- rules:origin-required -->
 - **Never volunteer compaction or session-restart advice.** The token sentinel

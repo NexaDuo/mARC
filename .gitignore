@@ -50,3 +50,7 @@ __pycache__/
 /codex_*.jsonl
 /codex_manifest.json
 /codex_iterations.txt
+
+# Local actionlint download from the Tier 1 CI runner (PR #384 SEC-1)
+/actionlint
+/actionlint_*.tar.gz

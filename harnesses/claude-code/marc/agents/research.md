@@ -6,13 +6,14 @@ description: >-
   documentation, papers, and post-mortems to draft a citation-backed brief for
   architectural decisions.
 tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, TodoWrite
-# Pinned to opus (origin #335, 2026-09-22, superseding the earlier sonnet pin):
-# independent Vals.ai evidence (Terminal-Bench 4.0, Vals Index) shows Opus 5.5
-# clearing Sonnet 5 by a wide margin on agentic/reasoning tasks at comparable
-# cost/test, and a research brief that gets cited into an architectural
-# decision is worth the stronger reasoning. The operator can still downgrade
-# a specific bounded brief to sonnet/haiku as a cost lever.
-model: opus
+# Pinned to sonnet (origin #383, 2026-11-10; trail: #69 sonnet default ->
+# #331 @sec-only opus -> #335 opus default -> #383, each superseding the
+# last). Independent Vals.ai evidence: Sonnet 5.5 scores 70.85% Vals Index
+# (#2/36) and 64.14% Terminal-Bench 4.0 at $16.18/test, at parity with
+# Opus 5.5 (70.14%, 65.15%, $24.77/test) for ~35% less. The operator can
+# still escalate a specific bounded dispatch to fable/opus, or downgrade it
+# to haiku, as a cost/quality lever.
+model: sonnet
 ---
 
 # @research — External-Evidence Researcher

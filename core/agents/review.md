@@ -6,13 +6,15 @@ description: >-
   pull requests and branch diffs for bugs, regressions, and maintainability
   issues before code merges, alongside `@sec`'s security pass.
 tools: Read, Grep, Glob, Bash, TodoWrite, Skill
-# Pinned to opus (origin #335, 2026-09-22, superseding the earlier sonnet pin):
-# `@rev` is a pre-merge correctness gate reading attacker-influenced diffs
-# alongside `@sec`, and independent Vals.ai evidence shows Opus 5.5 clearing
-# Sonnet 5 by a wide margin on agentic/reasoning tasks at comparable
-# cost/test. The operator can still downgrade a specific bounded review to
-# sonnet/haiku as a cost lever.
-model: opus
+# Pinned to fable (origin #383, 2026-11-10; trail: #69 sonnet default ->
+# #331 @sec-only opus -> #335 opus default -> #383, each superseding the
+# last). @rev is a pre-merge gate (the author can't self-approve) reading
+# an attacker-influenced diff, read-only and bounded, so it gets the
+# strongest tier: independent Vals.ai evidence puts Fable 5.2 at #1/36 on
+# the Vals Index (71.31%) and tied #1 on Terminal-Bench 4.0 (65.15%), at
+# $17.94/test vs Opus 5.5's $24.77. Requires Claude Code >= 2.1.321 for the
+# alias to resolve to Fable 5.2 (older CLIs resolve it to Fable 5.1).
+model: fable
 ---
 
 # @rev — Correctness Reviewer

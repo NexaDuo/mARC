@@ -7,7 +7,8 @@ description: >-
   dispatched directly by a human or `@techlead` — the read-guard hook is its
   only caller.
 tools: Read
-# Pinned to haiku (cheapest tier, was never a "sonnet default" here): this
+# Pinned to haiku (cheapest tier, was never a "sonnet default" here; the
+# alias resolves to Haiku 5.5 on Claude Code >= 2.1.293, per #383): this
 # role does exactly one thing — read a named file and produce a factual
 # summary as its final response. No reasoning depth is needed, and the tool
 # surface is Read-only BY DESIGN (issue #320/#322 review, HIGH finding: a

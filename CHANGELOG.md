@@ -8,6 +8,43 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.10] - 2026-11-10
+
+### Changed
+
+- Specialist model matrix for November 2026 (#383). `@dev`, `@sre`,
+  `@design` and `@research` now pin `model: sonnet`; the `@sec` and `@rev`
+  pre-merge gates pin `model: fable`; `bulk-reader` stays on `haiku`, which
+  now resolves to Haiku 5.5. This supersedes the #335 rule "`opus` is the
+  specialist default; `haiku` is for mechanical/bulk work" in
+  `references/dispatch.md`. The rule is kept with its origin trail (#69,
+  #331, #335) marked superseded, and the new one carries
+  `(origin: #383 · 2026-11-10)`. Evidence (independent Vals.ai results,
+  verified 2026-11-10): Sonnet 5.5 scores 70.85% on the Vals Index (#2/36)
+  and 64.14% on Terminal-Bench 4.0 at $16.18/test, at parity with Opus 5.5
+  (70.14%, 65.15%, $24.77/test) for about 35% less; Fable 5.2 ranks #1/36 on
+  the Vals Index (71.31%) and ties #1 on Terminal-Bench 4.0 (65.15%) at
+  $17.94/test; Haiku 5.5 scores 58.73% at $3.18/test (Haiku 4.5: 22.90%).
+  Escalating a specific bounded dispatch to `fable`/`opus`, or downgrading
+  it to `haiku`, is still the operator's lever. The "Escalate to Opus at a
+  natural break" line now reads "Escalate to a higher tier", keeping its
+  cache-invalidation point. As in #335, `model:` has no effect on
+  Antigravity, Copilot or Codex.
+- **Minimum Claude Code version: 2.1.321.** The aliases resolve to
+  Fable 5.2 / Haiku 5.5 / Sonnet 5.5 only on Claude Code 2.1.321 or later
+  (`sonnet` needs 2.1.284, `haiku` 2.1.293, `fable` 2.1.321). Older CLIs
+  quietly resolve them to the previous generation, and `fable` resolving to
+  Fable 5.1 there is both weaker and pricier than Opus 5.5, so update the
+  CLI before updating the plugin. The Claude Code plugin manifest's
+  `minimumVersion` is raised from 2.0.0 to 2.1.321 to match, as is the
+  README's install note.
+- The token-guard runaway-loop advisory (#71) now covers Fable as well as
+  Opus (#383). Fable is priced above Opus ($8/$40 vs $4/$20 per MTok) and
+  now runs the review gates, so a runaway loop there costs the most. Sonnet
+  and Haiku turns stay unguarded, and the advisory still suggests `/compact`
+  or dropping to Sonnet. `is_opus_model` remains as an alias of the new
+  `is_premium_model`.
+
 ## [26.10.19] - 2026-10-19
 
 ### Added
