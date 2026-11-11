@@ -24,7 +24,7 @@ Two kinds of subdirectory live here:
   overwritten by the benchmark script and are safe to treat as a permanent
   record.
 
-Every directory holds the same file set: the per-task
+Every `run-<id>/` directory holds the same file set: the per-task
 `baseline-*.jsonl` / `post-*.jsonl` / `toggle_baseline-*.jsonl` /
 `toggle_post-*.jsonl` (one line per `claude` invocation), `task_names.txt`,
 and `manifest.json` (`model`, `tasks`, `iterations`, `task_hash`, `tag`,
@@ -169,6 +169,11 @@ never find it:
 ```
 GITHUB_REF_NAME=<tag> LOCAL_RUN=true LOCAL_RUN_CONFIG_DIR=~/marc-bench-config GITHUB_EVENT_NAME=workflow_dispatch REAL_RUN_INPUT=true scripts/run_token_benchmark.sh
 ```
+
+The tag must already exist and be the commit you have checked out: the
+script walks back from it to find the previous release, but arms B, C and D
+measure your working tree. A tag that points elsewhere stores rows under a
+tag they were not measured at, and the next release reuses them as arm A.
 
 A run writes `docs/marc/benchmarks/<tag>/`: `manifest.json` plus one
 `baseline-<task>.jsonl` per task (copies of the arm-B rows). **Commit that
