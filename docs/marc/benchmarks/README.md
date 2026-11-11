@@ -12,9 +12,8 @@ Two kinds of subdirectory live here:
   `run_token_benchmark.sh` reads back on the *next* release to skip
   re-running arm A (the previous release's baseline) when the task set,
   model, and CLI version haven't drifted (`task_hash` in `manifest.json`);
-  `resolve_prev_release_tag()` walks back past any ancestor tag with no
-  manifest here (a patch tag, or a release that was never measured) to find
-  one. A run against a branch ref (e.g. running locally on `main` without
+  `resolve_cached_baseline_tag()` checks only the exact comparison target's
+  manifest here, with no ancestor walk (issue #313). A run against a branch ref (e.g. running locally on `main` without
   first tagging) writes here too, keyed by that branch name (e.g. `main/`)
   rather than a tag — expect that directory to be overwritten by the next
   such run; it is a cache, not an archive.
@@ -162,20 +161,33 @@ done, ideally right after tagging a release so the walk in
 
 ### After the run: commit the output
 
-A run writes `docs/marc/benchmarks/<tag>/` (`manifest.json` plus
-`baseline-<task>.jsonl`, one per task) into your checkout. **Commit that
-directory, under the tag it was measured at** (issue #318):
+The output directory is named by `GITHUB_REF_NAME`, which defaults to `main`
+when unset. **Set it to the release tag you are measuring** (issue #318), or
+the output lands in `docs/marc/benchmarks/main/` and the next release can
+never find it:
 
-- Next release's arm A reuses it only if
-  `docs/marc/benchmarks/$PREV_TAG/manifest.json` exists, where `$PREV_TAG`
-  is the exact comparison target. `resolve_cached_baseline_tag()` does no
-  ancestor walking and no substitution (issue #313), so artifacts committed
-  under any other tag never hit.
+```
+GITHUB_REF_NAME=<tag> LOCAL_RUN=true LOCAL_RUN_CONFIG_DIR=~/marc-bench-config GITHUB_EVENT_NAME=workflow_dispatch REAL_RUN_INPUT=true scripts/run_token_benchmark.sh
+```
+
+A run writes `docs/marc/benchmarks/<tag>/`: `manifest.json` plus one
+`baseline-<task>.jsonl` per task (copies of the arm-B rows). **Commit that
+directory under that tag.**
+
+- The next release's arm A reuses it only when
+  `docs/marc/benchmarks/$PREV_TAG/manifest.json` exists for the exact
+  comparison target (`resolve_cached_baseline_tag()` does no ancestor
+  walking and no substitution, issue #313) **and** its `task_hash` matches
+  (task set, model, CLI version, iterations) **and** every per-task baseline
+  file is present. Otherwise arm A reruns.
 - Skipping the commit means the next release pays for arm A again, roughly a
-  third of the full run's invocations, from your subscription window.
-- A run whose output is discarded is unrecoverable, not just uncached: the
-  JSONL rows are the measurement, and nothing else holds them. Land them via
-  a reviewed PR before cleaning the checkout or switching branches.
+  third of a full run's invocations, from your subscription window.
+- The directory holds only part of the measurement. The arm A, C and D rows,
+  `task_names.txt` and `iterations.txt` stay untracked in the checkout root,
+  so copy them somewhere durable (for example a `run-<id>/` directory) before
+  cleaning the checkout if you want the full record.
+- `docs/marc/` is published by GitHub Pages. Skim the files before
+  committing, and land them via a reviewed PR, never a direct commit.
 
 ## Codex arm (issue #346)
 
