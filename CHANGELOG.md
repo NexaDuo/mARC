@@ -36,7 +36,9 @@ date whose `YY.M.D` is already taken.
   descriptor, no flag; never `--effort`, because the slug carries the
   effort). An unknown slug makes headless agy exit non-zero and that exit is
   reported, never retried without `--model`. A malformed pin fails closed
-  with exit 2. `max` is now an accepted Codex effort.
+  with exit 2. `max` is now an accepted Codex effort because
+  `codex debug models` (codex-cli 0.163.0) lists it for `gpt-6.1-sol`; no
+  shipped pin uses it yet.
 - Consumer overrides, read from the team.toml in the dispatching checkout:
   `[orchestration.codex_profiles]` (role to Codex profile; a profile
   replaces both pins, so its own model and effort win; writer roles only,
@@ -49,7 +51,11 @@ date whose `YY.M.D` is already taken.
   the per-step effort. `usage.jsonl` rows record the `model`.
 - Every compiled plugin now ships `agent-configs/` (Codex and Antigravity
   descriptors), because `dispatch_agent.py` runs from whichever plugin hosts
-  the operator, not only from the target harness's plugin.
+  the operator, not only from the target harness's plugin. The compile step
+  copies only regular `*.toml` files from `codex/` and `antigravity/` and
+  refuses symlinks. Each override table is validated only for its own
+  harness, and `docs/team.toml.example` spells out that a Codex profile
+  brings its whole config and which setting wins on which path.
 - New governed rule in `references/dispatch.md` with
   `(origin: #385 · 2026-11-10)`; the tables stay in the issue.
 
