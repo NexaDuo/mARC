@@ -160,6 +160,23 @@ anywhere in this script either; skip it. Run with `git fetch --tags` already
 done, ideally right after tagging a release so the walk in
 `resolve_prev_release_tag()` finds the right baseline.
 
+### After the run: commit the output
+
+A run writes `docs/marc/benchmarks/<tag>/` (`manifest.json` plus
+`baseline-<task>.jsonl`, one per task) into your checkout. **Commit that
+directory, under the tag it was measured at** (issue #318):
+
+- Next release's arm A reuses it only if
+  `docs/marc/benchmarks/$PREV_TAG/manifest.json` exists, where `$PREV_TAG`
+  is the exact comparison target. `resolve_cached_baseline_tag()` does no
+  ancestor walking and no substitution (issue #313), so artifacts committed
+  under any other tag never hit.
+- Skipping the commit means the next release pays for arm A again, roughly a
+  third of the full run's invocations, from your subscription window.
+- A run whose output is discarded is unrecoverable, not just uncached: the
+  JSONL rows are the measurement, and nothing else holds them. Land them via
+  a reviewed PR before cleaning the checkout or switching branches.
+
 ## Codex arm (issue #346)
 
 A before/after measurement of the **Codex** harness, run by hand, never by
