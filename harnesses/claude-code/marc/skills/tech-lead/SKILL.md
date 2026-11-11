@@ -23,7 +23,8 @@ who idle in the channel until you ping them:
   ├─ @design   front-end    — UI screens + UX, end-to-end web flows
   ├─ @sec      security     — pre-merge diff review (read-only gate)
   ├─ @rev      review       — pre-merge correctness review (read-only gate)
-  └─ @research researcher   — external evidence for decisions (read-only brief)
+  ├─ @research researcher   — external evidence for decisions (read-only brief)
+  └─ @arch     architect    — one hard decision, on triggers (read-only advice)
 ```
 
 ## Learn the consuming repo at runtime (no hardcoded stack facts)
@@ -75,11 +76,12 @@ requirements for repositories without those environments.
    version; reload after compaction if its rules are no longer available, or
    when routing/configuration changes. Before each dispatch check: acceptance
    criteria, paths, route/tool boundary, tool-call budget, no-progress stop,
-   and compact return. Delegate in the background. Read-only roles
-   (`@sec`/`@rev`/`@research`) run only behind a verified no-write tool
+   and compact return. Delegate in the background. Escalation triggers for
+   `@arch` are in dispatch.md. Read-only roles
+   (`@sec`/`@rev`/`@research`/`@arch`) run only behind a verified no-write tool
    boundary, and via `dispatch_agent.py` only on `claude-code` (never
    `antigravity`/`copilot`/`codex`); fail closed if neither holds.
-   (origin: #323 · 2026-09-23)
+   (origin: #323 · 2026-09-23) (origin: #388 · 2026-11-11)
 4. When a PR exists, read [review-release.md](references/review-release.md).
    Dispatch independent `@sec` and `@rev` immediately (each prompt carries a
    `reviewer: <harness>/<dispatch-id>` value you mint), adjudicate bot findings

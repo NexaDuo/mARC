@@ -8,6 +8,35 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.12] - 2026-11-11
+
+### Added
+
+- `@arch` read-only architect specialist (#388). A flat-pool consultant
+  (`core/agents/architect.md`, `fable`, tools Read/Grep/Glob/Bash, comment-only)
+  that `@techlead` must dispatch under four explicit triggers (`@sec`/`@rev`
+  conflict, security/multi-harness/architecture surface, stuck specialist or
+  second failed fix loop, decision-record) so the operator can run on a cheaper
+  model without losing depth on hard calls. It posts one `## @arch decision`
+  comment (problem, options, recommendation, risks, what would change it).
+  `dispatch_agent.py` treats `arch`/`architect` as read-only: it routes only to
+  `claude-code` and fails closed on antigravity, copilot and codex, with no
+  codex opt-in. Counter-rule: when the whole session context is needed, switch
+  the operator model instead. Evidence: the `@research` brief on #388.
+- Measuring escalation (30-day review, due 2026-12-11). Per-role telemetry is
+  NOT shipped here: the token telemetry (`token-telemetry.jsonl`) has no role
+  field, so `@arch` is not countable there; that work is tracked in #396. Until
+  then, count by marker: trusted comments (the marker lives in a comment, not
+  the issue body) that start with it, for example
+  `gh issue view <N> --json comments --jq '[.comments[] | select(.authorAssociation
+  == ("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | startswith("## @arch decision"))]
+  | length'`. This counts only successfully posted
+  decisions, not dispatches that failed or returned without posting. Compare
+  against issues that matched a trigger. Review questions: escalation rate (if
+  it fires on most issues, flip to operator on `fable` and drop `@arch`),
+  trigger hits with no marker (under-calling), re-opened PRs and BLOCKs under a
+  Sonnet operator, and cost per merged issue including `@arch` tokens.
+
 ## [26.11.11] - 2026-11-11
 
 ### Changed

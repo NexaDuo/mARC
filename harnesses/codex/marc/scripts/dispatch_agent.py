@@ -6,7 +6,7 @@ Stdlib only (no third-party dependencies). Can be invoked directly or imported:
     python3 dispatch_agent.py --role research --prompt "Investigate auth providers" --json
 
 CLI Options:
-    --role <role>         Specialist role (dev, sre, design, sec, rev, research, engineer, security, review).
+    --role <role>         Specialist role (dev, sre, design, sec, rev, research, arch, engineer, security, review, architect).
     --prompt <prompt>     Task prompt with context, acceptance criteria, and constraints.
     --harness <harness>   Target harness (auto, native, claude-code, antigravity, copilot, codex). Default: auto.
     --timeout <seconds>   Subprocess execution timeout in seconds. Default: 300.
@@ -44,7 +44,7 @@ Routing resolution:
       falls back to host/native harness.
     - --role is normalized (whitespace stripped, one leading '@' dropped, lowercased);
       an unknown role is rejected with exit code 2 and nothing is dispatched (#323).
-    - Read-only roles (READ_ONLY_ROLES: rev/research/sec/bulk-reader and aliases) never
+    - Read-only roles (READ_ONLY_ROLES: rev/research/sec/arch/bulk-reader and aliases) never
       run on a harness that does not apply mARC agent definitions
       (NON_ENFORCING_HARNESSES: antigravity, copilot, codex), whatever the source of the route
       (#323). They are re-routed to claude-code with a stderr diagnostic; if claude-code
@@ -113,6 +113,8 @@ ROLE_TO_AGENT: Dict[str, str] = {
     "rev": "review",
     "review": "review",
     "research": "research",
+    "arch": "architect",  # read-only advisor (#388)
+    "architect": "architect",
     # Minimal-tool worker (issue #320, #322/#323 review): read-only-by-design
     # specialist the read-guard hook delegates untrusted-file summarization
     # to. Kept distinct from "research" (which carries Bash/WebFetch/
@@ -130,6 +132,8 @@ CANONICAL_ROLES: Dict[str, str] = {
     "rev": "rev",
     "review": "rev",
     "research": "research",
+    "arch": "arch",
+    "architect": "arch",
     "bulk-reader": "bulk-reader",
 }
 
@@ -145,7 +149,7 @@ HARNESS_BINARIES: Dict[str, str] = {
 # #323: in headless `-p` mode `agy --agent <name>` does not load the named agent
 # (it silently falls back to the default agent with every tool), so these roles
 # must never be dispatched to antigravity. Aliases resolve through CANONICAL_ROLES.
-READ_ONLY_ROLES = frozenset({"rev", "research", "sec", "bulk-reader"})
+READ_ONLY_ROLES = frozenset({"rev", "research", "sec", "arch", "bulk-reader"})
 
 # Harnesses whose headless dispatch path does NOT apply mARC agent definitions
 # (persona, model pin, `tools:` restriction). Issue #323: agy headless ignores
@@ -273,6 +277,8 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "rev": "claude-code",
         "review": "claude-code",
         "research": "claude-code",
+        "arch": "claude-code",
+        "architect": "claude-code",
         "sre": "claude-code",
         "design": "claude-code",
         # Pinned to claude-code regardless of host (issue #320/#323 review):
@@ -293,6 +299,8 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "rev": "claude-code",
         "review": "claude-code",
         "research": "claude-code",
+        "arch": "claude-code",
+        "architect": "claude-code",
         "sre": "antigravity",
         "design": "antigravity",
         "bulk-reader": "claude-code",
@@ -305,6 +313,8 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "rev": "claude-code",
         "review": "claude-code",
         "research": "claude-code",
+        "arch": "claude-code",
+        "architect": "claude-code",
         "sre": "copilot",
         "design": "copilot",
         "bulk-reader": "claude-code",
@@ -319,6 +329,8 @@ DEFAULT_HYBRID_MATRIX: Dict[str, Dict[str, str]] = {
         "rev": "claude-code",
         "review": "claude-code",
         "research": "claude-code",
+        "arch": "claude-code",
+        "architect": "claude-code",
         # Bulk-reader must use the only harness with a verified read-only
         # tool boundary until Codex isolation is proven empirically.
         "bulk-reader": "claude-code",
@@ -1635,7 +1647,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument(
         "--role",
         required=True,
-        help="Specialist role (dev, sre, design, sec, rev, research, engineer, security, review)",
+        help="Specialist role (dev, sre, design, sec, rev, research, arch, engineer, security, review, architect)",
     )
     parser.add_argument(
         "--prompt",
