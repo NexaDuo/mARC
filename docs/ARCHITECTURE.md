@@ -50,7 +50,7 @@ The specialists are subagents in a single flat pool (`agents/` on most harnesses
 **every** leader:
 
 - `@dev` (`engineer.md`), `@sre` (`sre.md`), `@design` (`design.md`),
-  `@sec` (`security.md`), `@rev` (`review.md`), `@research` (`research.md`).
+  `@sec` (`security.md`), `@rev` (`review.md`), `@research` (`research.md`), `@arch` (`architect.md`).
 
 Any leader skill can convene any specialist — the bench is common infrastructure,
 not owned by a particular leader. New specialists are added by dropping another

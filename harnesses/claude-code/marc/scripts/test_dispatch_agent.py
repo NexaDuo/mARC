@@ -33,6 +33,7 @@ sys.path.insert(0, HERE)
 
 from dispatch_agent import (  # noqa: E402
     CANONICAL_ROLES,
+    CODEX_READONLY_ROLES,
     DEFAULT_HYBRID_MATRIX,
     HARNESS_BINARIES,
     NON_ENFORCING_HARNESSES,
@@ -1600,6 +1601,41 @@ def test_model_matrix_385() -> None:
     check(runner.call_count == 1 and "--model" in runner.call_args[0][0], "no silent retry without --model")
 
 
+def test_arch_role_388() -> None:
+    """@arch is a read-only, claude-code-only role; its definition carries the marker (#388)."""
+    print("\n[arch] read-only architect role (#388)")
+    check("arch" in READ_ONLY_ROLES, "arch is in READ_ONLY_ROLES")
+    check(ROLE_TO_AGENT.get("arch") == "architect" and ROLE_TO_AGENT.get("architect") == "architect",
+          "arch/architect map to the 'architect' agent")
+    check(CANONICAL_ROLES.get("architect") == "arch", "architect aliases to canonical arch")
+    check("arch" not in CODEX_READONLY_ROLES, "arch is never a codex read-only opt-in role")
+    for host in DEFAULT_HYBRID_MATRIX:
+        for r in ("arch", "architect"):
+            check(DEFAULT_HYBRID_MATRIX[host].get(r) == "claude-code",
+                  f"matrix[{host}][{r}] routes to claude-code")
+    env_cc = {"CLAUDE_PLUGIN_ROOT": "/plugin"}
+    for h in ("antigravity", "copilot", "codex"):
+        check(is_forbidden_readonly_route("arch", h), f"arch forbidden on {h}")
+        check(is_forbidden_readonly_route("@Architect", h, True), f"@Architect forbidden on {h} even with codex opt-in flag")
+        try:
+            build_harness_command(h, "arch", "x")
+            check(False, f"{h} command for arch should raise")
+        except ReadOnlyRoutingError:
+            check(True, f"{h} command for arch raises")
+    check(not is_forbidden_readonly_route("arch", "claude-code"), "arch allowed on claude-code")
+    check(build_harness_command("claude-code", "arch", "x")[:4]
+          == ["claude", "--dangerously-skip-permissions", "--agent", "architect"],
+          "claude-code command selects the architect agent")
+    # Marker and read-only tool contract in the agent definition (mirrors the @sec/@rev markers).
+    agent = Path(HERE).parent / "agents" / "architect.md"
+    text = agent.read_text(encoding="utf-8")
+    check("## @arch decision" in text, "architect.md carries the '## @arch decision' marker")
+    tools = next(l for l in text.splitlines() if l.startswith("tools:"))
+    check(not any(t in tools for t in ("Edit", "Write", "WebFetch", "WebSearch", "NotebookEdit")),
+          f"architect.md tools are read-only ({tools})")
+    check("model: fable" in text, "architect.md is pinned to fable")
+
+
 def main() -> int:
     test_command_generation()
     test_default_hybrid_matrix()
@@ -1614,6 +1650,7 @@ def main() -> int:
     test_codex_readonly_opt_in()
     test_model_matrix_385()
     test_start_wait_jobs()
+    test_arch_role_388()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")

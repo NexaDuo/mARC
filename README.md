@@ -104,8 +104,9 @@ Think of your project as an IRC channel. **`@techlead`** holds channel-operator 
 | `@sec`       | security (read-only) | pre-merge diff review; one half of the mandatory merge gate |
 | `@rev`       | review (read-only)   | pre-merge correctness review; the other half of the mandatory merge gate |
 | `@research`  | researcher (read-only) | external evidence (such as benchmarks or documentation) as a cited brief |
+| `@arch`      | architect (read-only) | one hard decision, escalated to on explicit triggers; advises in a `## @arch decision` comment |
 
-`@techlead` is a skill (`/marc:tech-lead`), while `@dev`, `@sre`, `@design`, `@sec`, `@rev`, and `@research` are subagents that it dispatches. `@techlead` is the first of several planned leader skills, including `founder` and `eng-director`, which will convene the same shared specialist bench.
+`@techlead` is a skill (`/marc:tech-lead`), while `@dev`, `@sre`, `@design`, `@sec`, `@rev`, `@research`, and `@arch` are subagents that it dispatches. `@techlead` is the first of several planned leader skills, including `founder` and `eng-director`, which will convene the same shared specialist bench.
 
 ## Generic by design: repository configuration
 
