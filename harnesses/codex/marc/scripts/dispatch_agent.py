@@ -442,10 +442,12 @@ def load_codex_persona(mapped_agent: str, plugin_dir: Optional[Path] = None) -> 
     (as the antigravity path names its persona skill in the prompt). The body
     is the shipped `agents/<agent>.md` next to this script, front matter
     stripped (`skills/<agent>/SKILL.md` in the Antigravity plugin). Pins come
-    only from the Codex agent descriptor (`agents/<agent>.toml` in the Codex
-    plugin, `agent-configs/codex/<agent>.toml` in `core/`): `model` -> `-m`,
-    `model_reasoning_effort` -> `-c`. A host plugin without that descriptor
-    passes no pin, and Codex uses its configured default. The `.md`
+    only from the Codex agent descriptor via load_codex_pins
+    (`agents/<agent>.toml` in the Codex plugin, else
+    `agent-configs/codex/<agent>.toml`, which `core/` and every compiled
+    plugin ship since #385): `model` -> `-m`, `model_reasoning_effort` -> `-c`.
+    A checkout without that descriptor (e.g. a stripped copy) passes no pin,
+    and Codex uses its configured default. The `.md`
     front matter's `model:` names a Claude model and is never passed to codex.
     A missing persona fails closed: a reviewer never runs without its contract.
     """
@@ -526,44 +528,46 @@ def _check_agy_model(slug: str, source: str) -> str:
     return slug
 
 
-def load_model_overrides(role: str, cwd: Optional[str] = None) -> Dict[str, str]:
-    """Per-role overrides from the team.toml discovered from the checkout (#385).
+_OVERRIDE_TABLES: Dict[str, str] = {"codex": "codex_profiles", "antigravity": "antigravity_models"}
 
-    Returns {"codex_profile": ..., "antigravity_model": ...} with only the keys
-    that are set for this role. Same trust anchor as the #351 opt-in: only the
-    team.toml discovered from `cwd`, so sync dispatch, `start` and the
-    detached runner's re-check build the same argv. Lookup mirrors routing
-    (canonical key first, then the alias that was requested).
+
+def load_model_override(harness: str, role: str, cwd: Optional[str] = None) -> Optional[str]:
+    """The per-role override for ONE target harness, from the checkout's team.toml (#385).
+
+    codex -> [orchestration.codex_profiles] (a profile name), antigravity ->
+    [orchestration.antigravity_models] (a slug); any other harness -> None.
+    Only that harness's table is read and validated, so a bad entry in the
+    other table neither blocks this dispatch nor shows up in its error
+    (PR #387 REV-1); a bad entry in this table fails closed. Same trust anchor
+    as the #351 opt-in: only the team.toml discovered from `cwd`, so sync
+    dispatch, `start` and the detached runner's re-check build the same argv.
+    Lookup mirrors routing (canonical key first, then the requested alias).
     """
+    table = _OVERRIDE_TABLES.get(harness)
+    if table is None:
+        return None
     start = Path(cwd) if cwd else Path.cwd()
     if not start.is_dir():
-        return {}
+        return None
     path = find_team_toml(None, start_dir=start)
     config = parse_toml(path)
     orch = config.get("orchestration", {}) if isinstance(config, dict) else {}
-    if not isinstance(orch, dict):
-        return {}
+    entries = orch.get(table) if isinstance(orch, dict) else None
+    if not isinstance(entries, dict):
+        return None
     norm = normalize_role(role)
-    canonical = CANONICAL_ROLES[norm]
-    out: Dict[str, str] = {}
-    for table, key in (("codex_profiles", "codex_profile"), ("antigravity_models", "antigravity_model")):
-        entries = orch.get(table)
-        if not isinstance(entries, dict):
-            continue
-        val = entries.get(canonical, entries.get(norm))
-        if val is None:
-            continue
-        if not isinstance(val, str):
-            raise ModelPinError(f"[orchestration.{table}] {norm} in {path} must be a string (#385)")
-        if key == "codex_profile":
-            if not _CODEX_PROFILE_RE.fullmatch(val):
-                raise ModelPinError(
-                    f"[orchestration.codex_profiles] {norm} = {val!r} in {path} is not a plain profile "
-                    f"name (letters, digits, '_', '.', '-'; not starting with '-') (#385)")
-            out[key] = val
-        else:
-            out[key] = _check_agy_model(val, f"{path} [orchestration.antigravity_models]")
-    return out
+    val = entries.get(CANONICAL_ROLES[norm], entries.get(norm))
+    if val is None:
+        return None
+    if not isinstance(val, str):
+        raise ModelPinError(f"[orchestration.{table}] {norm} in {path} must be a string (#385)")
+    if harness == "codex":
+        if not _CODEX_PROFILE_RE.fullmatch(val):
+            raise ModelPinError(
+                f"[orchestration.codex_profiles] {norm} = {val!r} in {path} is not a plain profile "
+                f"name (letters, digits, '_', '.', '-'; not starting with '-') (#385)")
+        return val
+    return _check_agy_model(val, f"{path} [orchestration.antigravity_models]")
 
 
 def build_codex_readonly_prompt(role: str, mapped_agent: str, body: str, prompt: str) -> str:
@@ -631,7 +635,7 @@ def build_harness_command(
         # flag. Only the effort-suffixed slug, never `--effort` too (how the two
         # combine is undocumented). An unknown slug makes headless agy exit
         # non-zero; that failure is returned, never retried without --model.
-        model = (load_model_overrides(role, cwd).get("antigravity_model")
+        model = (load_model_override("antigravity", role, cwd)
                  or load_agy_model(mapped_agent))
         model_args = ["--model", model] if model else []
         return ["agy", "--dangerously-skip-permissions", *model_args, "-p",
@@ -647,7 +651,7 @@ def build_harness_command(
         # Pins (#385): a team.toml codex profile for this role wins outright (CLI
         # `-m`/`-c` would override the profile's own model and effort, so none
         # is passed with it); otherwise the persona pins, as on the read-only path.
-        profile = load_model_overrides(role, cwd).get("codex_profile")
+        profile = load_model_override("codex", role, cwd)
         if profile:
             pin_args = ["-p", profile]
         else:

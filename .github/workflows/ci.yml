@@ -92,6 +92,9 @@ jobs:
             exit 1
           fi
 
+      - name: agent-configs mirror refuses symlinks (#385)
+        run: python3 scripts/test_compile_agent_configs.py
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"

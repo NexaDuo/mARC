@@ -126,6 +126,50 @@ def compile_file(source_path, dest_path, config):
         df.write(content)
     print(f"Compiled: {source_path} -> {dest_path}")
 
+AGENT_CONFIG_SUBDIRS = ("codex", "antigravity")
+
+
+def mirror_agent_configs(src_cfg, dest_cfg):
+    """Mirror core/agent-configs/{codex,antigravity}/*.toml into a plugin (#385).
+
+    Copies only regular `*.toml` files from the known subdirectories and
+    refuses symlinks (file or directory) with a warning, so a link under
+    core/ can never pull an outside file into a shipped plugin (PR #387
+    SEC-1). The destination is rebuilt from scratch, so stale files go.
+    Returns the list of skipped symlink paths.
+    """
+    skipped = []
+    if os.path.isdir(dest_cfg) and not os.path.islink(dest_cfg):
+        shutil.rmtree(dest_cfg)
+    elif os.path.lexists(dest_cfg):
+        os.unlink(dest_cfg)
+    if os.path.islink(src_cfg) or not os.path.isdir(src_cfg):
+        if os.path.islink(src_cfg):
+            skipped.append(src_cfg)
+        return skipped
+    for sub in AGENT_CONFIG_SUBDIRS:
+        src_sub = os.path.join(src_cfg, sub)
+        if os.path.islink(src_sub):
+            skipped.append(src_sub)
+            continue
+        if not os.path.isdir(src_sub):
+            continue
+        for name in sorted(os.listdir(src_sub)):
+            src = os.path.join(src_sub, name)
+            if not name.endswith(".toml"):
+                continue
+            if os.path.islink(src):
+                skipped.append(src)
+                continue
+            if not os.path.isfile(src):
+                continue
+            os.makedirs(os.path.join(dest_cfg, sub), exist_ok=True)
+            shutil.copyfile(src, os.path.join(dest_cfg, sub, name))
+    for path in skipped:
+        print(f"Warning: refusing to copy symlink {path} into {dest_cfg} (#385)", file=sys.stderr)
+    return skipped
+
+
 def sync_scripts(core_scripts_dir, dest_scripts_dir):
     """Mirror core/scripts/ into a harness's marc/scripts/ verbatim (no
     templating — unlike the .md prose, scripts are byte-identical across
@@ -637,15 +681,8 @@ def main():
         # from whichever plugin hosts the operator and reads
         # `agent-configs/<target>/<agent>.toml` next to its scripts/, so every
         # plugin ships the whole tree. Mirrored exactly (stale files removed).
-        src_cfg = os.path.join(core_dir, "agent-configs")
-        dest_cfg = os.path.join(harness_marc_path, "agent-configs")
-        if os.path.isdir(dest_cfg):
-            shutil.rmtree(dest_cfg)
-        if os.path.isdir(src_cfg):
-            shutil.copytree(src_cfg, dest_cfg,
-                            ignore=lambda _d, names: [n for n in names
-                                                      if not n.endswith(".toml")
-                                                      and not os.path.isdir(os.path.join(_d, n))])
+        mirror_agent_configs(os.path.join(core_dir, "agent-configs"),
+                             os.path.join(harness_marc_path, "agent-configs"))
 
         # Mirror core/scripts/ verbatim (byte-identical, no templating).
         core_scripts_dir = os.path.join(core_dir, "scripts")
