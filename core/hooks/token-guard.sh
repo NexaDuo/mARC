@@ -3,7 +3,7 @@
 # ---------------------------------------------------------------------------
 # Warn-only, non-blocking follow-up to the manual token sentinel (#69). Three
 # guards run off the same shared Python logic:
-#   * runaway-loop (#71): while a runaway tool-loop is happening on an Opus-tier
+#   * runaway-loop (#71): while a runaway tool-loop is happening on an Opus/Fable-tier
 #     model, nudge toward `/compact` or a Sonnet drop.
 #   * model-switch (#73): on a genuine main-thread mid-session model switch that
 #     re-cached the whole context (subagent/sidechain models are ignored), nudge

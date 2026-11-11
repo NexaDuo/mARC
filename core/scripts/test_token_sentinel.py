@@ -8,11 +8,13 @@ drives `token_sentinel.py --hook` as a subprocess exactly the way Claude Code
 would.
 
 Runaway-loop guard (#71):
-  * the advisory fires ONCE when a turn first crosses the Opus threshold, and is
+  * the advisory fires ONCE when a turn first crosses the premium-tier (Opus,
+    and since #383 Fable) threshold, and is
     debounced (silent) on the next tool call in the same band;
   * it re-arms and fires again at the 2N band;
   * it does NOT fire below the threshold;
-  * it does NOT fire for a Sonnet-only turn, however long;
+  * it fires for a Fable turn (#383: the @sec/@rev gate tier);
+  * it does NOT fire for a Sonnet-only or Haiku-only turn, however long;
   * the emitted payload is NON-BLOCKING (no `decision`, correct hookEventName);
   * the hook ALWAYS exits 0, including on empty / garbage stdin.
 
@@ -48,6 +50,8 @@ SENTINEL = os.path.join(HERE, "token_sentinel.py")
 THRESHOLD = 5  # small, so fixtures stay tiny
 OPUS = "claude-opus-4-8-20260101"
 SONNET = "claude-sonnet-4-5-20250101"
+FABLE = "claude-fable-5-2-20261109"
+HAIKU = "claude-haiku-5-5-20261007"
 
 _failures: list[str] = []
 
@@ -235,7 +239,23 @@ def main() -> int:
         sonnet = write_transcript(fixtures, "sonnet.jsonl", SONNET, 3 * THRESHOLD)
         rc, out = run_hook(state_tmp, sonnet, "sess-sonnet")
         check(rc == 0, "sonnet-only: exit 0")
-        check(out.strip() == "", "sonnet-only: no advisory (Opus-only guard)")
+        check(out.strip() == "", "sonnet-only: no advisory (premium-tier-only guard)")
+
+        # 4b. Fable turn crossing N -> fires (#383: gates run on fable).
+        fable = write_transcript(fixtures, "fable.jsonl", FABLE, THRESHOLD)
+        rc, out = run_hook(state_tmp, fable, "sess-fable")
+        check(rc == 0, "fable crossing N: exit 0")
+        check(out.strip() != "", "fable crossing N: advisory fires (premium tier)")
+        if out.strip():
+            data = parse_advisory(out)
+            check("Sonnet" in data.get("systemMessage", ""),
+                  "fable advisory still points to the cheaper Sonnet tier")
+
+        # 4c. Haiku-only turn, well past threshold -> never fires.
+        haiku = write_transcript(fixtures, "haiku.jsonl", HAIKU, 3 * THRESHOLD)
+        rc, out = run_hook(state_tmp, haiku, "sess-haiku")
+        check(rc == 0, "haiku-only: exit 0")
+        check(out.strip() == "", "haiku-only: no advisory (premium-tier-only guard)")
 
         # 5. Robustness: garbage stdin, empty stdin, missing transcript -> exit 0, silent.
         rc, out = run_hook(state_tmp, None, "sess-x", stdin_override="not json {{{")
