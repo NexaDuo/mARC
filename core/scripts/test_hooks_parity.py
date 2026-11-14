@@ -209,7 +209,7 @@ def check_every_spec_hook_is_shipped(spec: dict, all_hook_ids_by_harness: dict[s
 def check_command_env_fallbacks(harness: str, marc_dir: str, config: dict, hooks_obj: dict) -> None:
     """Regression test for #220: verify that every script-backed hook command and inline
     command in compiled hooks.json has robust fallbacks for unset environment variables
-    (${VAR:-$PWD} for plugin root, ${VAR:-${OLDPWD:-$PWD}} for project dir)."""
+    (${VAR:-$PWD} for both plugin root and project dir)."""
     import subprocess
 
     plugin_root_env = config["plugin_root_env"]
@@ -245,26 +245,27 @@ def check_command_env_fallbacks(harness: str, marc_dir: str, config: dict, hooks
     check(bool(commands), f"{harness}: extracted commands for env validation")
 
     for label, cmd in commands:
+        check("OLDPWD" not in cmd, f"{harness} ({label}): ignores the shell's OLDPWD (#370)")
         if "/hooks/" in cmd:
             # Script command: must use ${VAR:-$PWD}/hooks/
             check(
                 f"${{{plugin_root_env}:-$PWD}}/hooks/" in cmd,
                 f"{harness} ({label}): script path uses ${{{plugin_root_env}:-$PWD}} fallback",
             )
-            # If not native, must export CLAUDE_PLUGIN_ROOT with :-$PWD and CLAUDE_PROJECT_DIR with :-${OLDPWD:-$PWD}
+            # If not native, export both Claude variables with :-$PWD fallbacks.
             if plugin_root_env != "CLAUDE_PLUGIN_ROOT":
                 check(
                     f'export CLAUDE_PLUGIN_ROOT="${{{plugin_root_env}:-$PWD}}"' in cmd,
                     f"{harness} ({label}): exports CLAUDE_PLUGIN_ROOT with :-$PWD fallback",
                 )
                 check(
-                    f'export CLAUDE_PROJECT_DIR="${{{project_dir_env}:-${{OLDPWD:-$PWD}}}}"' in cmd,
-                    f"{harness} ({label}): exports CLAUDE_PROJECT_DIR with :-${{OLDPWD:-$PWD}} fallback",
+                    f'export CLAUDE_PROJECT_DIR="${{{project_dir_env}:-$PWD}}"' in cmd,
+                    f"{harness} ({label}): exports CLAUDE_PROJECT_DIR with :-$PWD fallback",
                 )
         if "team.toml" in cmd:
             check(
-                f"${{{project_dir_env}:-${{OLDPWD:-$PWD}}}}" in cmd,
-                f"{harness} ({label}): team.toml path uses ${{{project_dir_env}:-${{OLDPWD:-$PWD}}}} fallback",
+                f"${{{project_dir_env}:-$PWD}}" in cmd,
+                f"{harness} ({label}): team.toml path uses ${{{project_dir_env}:-$PWD}} fallback",
             )
         if "hook-missing" in cmd:
             check(

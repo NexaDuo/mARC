@@ -301,7 +301,7 @@ def _script_hook_command(hook, config):
     if not is_native:
         prefix = (
             f'export CLAUDE_PLUGIN_ROOT="${{{plugin_root_env}:-$PWD}}"; '
-            f'export CLAUDE_PROJECT_DIR="${{{project_dir_env}:-${{OLDPWD:-$PWD}}}}"; '
+            f'export CLAUDE_PROJECT_DIR="${{{project_dir_env}:-$PWD}}"; '
         )
 
     not_found_msg = (

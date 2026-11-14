@@ -8,6 +8,12 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.14] - 2026-11-14
+
+### Fixed
+
+- Codex hooks no longer read the shell's `OLDPWD`; closes #370.
+
 ## [26.11.12] - 2026-11-11
 
 ### Added
