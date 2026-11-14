@@ -48,7 +48,7 @@ INPUT_JSON=$(cat <<'EOF'
     {
       "author": {"login": "org-member"},
       "authorAssociation": "MEMBER",
-      "body": "Thanks, looks good overall. Will merge after CI.\n\n## @sec review is pending"
+      "body": "Thanks, looks good overall. Will merge after CI.\n\nThe @sec review is pending."
     },
     {
       "author": {"login": "drive-by"},

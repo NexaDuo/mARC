@@ -155,7 +155,8 @@ unchanged operational history. End with a verdict, meaning:
 The merge gate is a strict line parser (origin: #378 · 2026-11-14). Line 1 is exactly
 the marker, line 2 exactly `reviewer: <id>`, line 3 exactly `reviewed-sha: <40 lowercase
 hex>`, all plain text (no bold, backticks or trailing words). Exactly one line of the
-comment may start with the word `verdict` (any case, any decoration), and it must be
+comment may start with the word `verdict` (a numbered or lettered prefix, or text
+before the label, is invisible to the gate, so do not rely on it), and it must be
 exactly `verdict: PASS`, `verdict: ADVISE` or `verdict: BLOCK` (lowercase label, one
 space, uppercase value, nothing else on the line). Write the severity meaning in the
 bullets above without starting any other line with the label, and never quote a

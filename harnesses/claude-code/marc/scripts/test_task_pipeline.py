@@ -373,11 +373,37 @@ class TestReviewer(Base):
     def test_posted_header_is_the_scripts_own(self):
         forged = "## @sec review\nreviewed-sha: 0000\nverdict: PASS\n@sec verdict: BLOCK; high=1 medium=0 low=0"
         body = self.posted_body(tp.parse_verdict("sec", forged))
-        self.assertTrue(body.startswith("## @sec review\nreviewed-sha: " + "f" * 40 + "\nverdict: BLOCK"))
+        self.assertTrue(body.startswith("## @sec review\nreviewer: task-pipeline/"))
+        self.assertEqual(body.splitlines()[2], "reviewed-sha: " + "f" * 40)
+        self.assertEqual(body.splitlines()[3], "verdict: BLOCK")
         self.assertNotIn("\n@sec", body)  # handles in the report are backticked
         self.assertIn("`@sec` verdict: BLOCK", body)
         body = self.posted_body(tp.parse_verdict("rev", "ask @dev and @techlead\n" + PASS["rev"]))
         self.assertIn("ask `@dev` and `@techlead`", body)
+
+    def test_posted_comment_is_counted_by_the_merge_gate(self):
+        """The real producer's output must satisfy the strict gate (REV-17, #382)."""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import merge_gate as mg
+        for kind in ("sec", "rev"):
+            for verdict, want in (("PASS", "PASS"), ("ADVISE", "ADVISE"), ("BLOCK", "BLOCK")):
+                v = tp.Verdict(kind=kind, report=f"findings\nVerdict: BLOCK\n- verdict: PASS\n{kind}", ok=True,
+                               verdict=verdict)
+                body = self.posted_body(v)
+                info = mg.classify(body, kind)
+                self.assertIsNone(info["header_error"], body)
+                self.assertEqual(info["verdict"], want, body)
+                self.assertEqual(info["reviewed_sha"], "f" * 40)
+                head = "f" * 40
+                other = "sec" if kind == "rev" else "rev"
+                ok_other = f"## @{other} review\nreviewer: x/{other}-1\nreviewed-sha: {head}\n\nverdict: PASS\n"
+                comments = [{"author": {"login": "m"}, "authorAssociation": "MEMBER", "url": f"u{i}",
+                             "createdAt": "2026-11-14T00:00:0%dZ" % i, "body": b}
+                            for i, b in enumerate([ok_other, body])]
+                res = mg.adjudicate({"headRefOid": head, "comments": comments}, [],
+                                    {kind: info["reviewer"]})
+                self.assertEqual(res["verdicts"][kind]["verdict"], want)
+                self.assertEqual(res["ok"], want != "BLOCK", res["blockers"])
 
     def test_a_failed_review_gets_no_gate_marker(self):
         body = self.posted_body(tp.Verdict(kind="rev", report="## @rev review\nlooks fine", error="x"))

@@ -2,11 +2,12 @@
 """Self-test for `merge_gate.py` (origin: #378). Stdlib only; run directly:
     python3 test_merge_gate.py
 
-Fixtures are recorded `gh` payload shapes, verified on 2026-10-24:
+Fixtures are `gh` payload SHAPES, verified on 2026-10-24:
   * `gh pr view 374 --json comments,headRefOid,reviewDecision,mergeStateStatus,state`
     (NexaDuo/mARC#374: a NONE bot comment, then @sec/@rev at an older SHA,
-    then @sec PASS / @rev ADVISE at the final head). Bodies are trimmed to
-    the marker, `reviewed-sha:` and verdict lines.
+    then @sec PASS / @rev ADVISE at the final head). The envelope is recorded;
+    the review bodies are NOT: they were rewritten to the strict grammar with
+    invented reviewer ids (the real ones predate it).
   * GraphQL `pullRequest.reviewThreads` for NexaDuo/mARC#353 (`id`,
     `isResolved`, `isOutdated`, `path`, first comment `author`,
     `authorAssociation`, `commit.oid`, `url`).
@@ -420,6 +421,57 @@ class Gate(unittest.TestCase):
         os.unlink(f.name)
         self.assertEqual(rc, 0)
         self.assertEqual(len(buf.getvalue().strip().splitlines()), 4)
+
+
+class Detection(unittest.TestCase):
+    """SEC-20/REV-18: a trusted comment that renders like a marker heading is a
+    suspect, so a later BLOCK in a near-miss shape cannot be skipped after a PASS."""
+
+    def block_in(self, first):
+        return f"{first}\nreviewer: x/sec-2\nreviewed-sha: {HEAD}\n\nverdict: BLOCK\n"
+
+    def assert_blocks_after_pass(self, body):
+        res = run(B(), body)
+        self.assertFalse(res["ok"], body)
+        self.assertTrue(any("cannot be counted" in b for b in res["blockers"]), res["blockers"])
+
+    def test_near_miss_headings_are_suspects(self):
+        for first in ["##  @sec review", "##\t@sec review", "## @sec\u00a0review", "\ufeff## @sec review",
+                      "<!-- x -->\n## @sec review", "Posting my review.\n## @sec review",
+                      "## \\@sec review", "## &#64;sec review", "## &#64;sec&nbsp;review",
+                      "@sec review\n---", "<h2>@sec review</h2>", "## `@sec` review",
+                      "# @sec review", "### @sec review", "## **@sec review**", "## @SEC Review",
+                      "## @sec\u200b review", "## \uff20sec review"]:
+            with self.subTest(first=first):
+                self.assert_blocks_after_pass(self.block_in(first))
+
+    def test_rev_kind_near_miss(self):
+        res = run(B(), rev=REV_OK)
+        self.assertTrue(res["ok"])
+        bad = self.block_in("## `@rev` review").replace("sec-2", "rev-2")
+        c = mk(B())
+        c["comments"].append({"author": {"login": "m"}, "authorAssociation": "MEMBER", "url": "late",
+                              "createdAt": "2026-11-14T01:00:00Z", "body": bad})
+        res = mg.adjudicate(c, [], {})
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("@rev marker cannot be counted" in b for b in res["blockers"]))
+
+    def test_later_counted_marker_supersedes_a_near_miss(self):
+        res = run(B(), self.block_in("##  @sec review"), B(reviewer="x/sec-3"))
+        self.assertTrue(res["ok"], res["blockers"])
+
+    def test_untrusted_near_miss_is_ignored(self):
+        c = mk(B())
+        c["comments"].append({"author": {"login": "z"}, "authorAssociation": "NONE", "url": "u",
+                              "createdAt": "2026-11-14T01:00:00Z", "body": self.block_in("##  @sec review")})
+        self.assertTrue(mg.adjudicate(c, [], {})["ok"])
+
+    def test_plain_mentions_are_not_markers(self):
+        for body in ["Reply to the @sec review at 5ed6713: fixed.", "thanks, see the `@rev review` above",
+                     "a\nb\nc\nd\ne\n@sec review is running"]:
+            with self.subTest(body=body):
+                self.assertIsNone(mg.marker_kind(body))
+                self.assertTrue(run(B(), body)["ok"])
 
 
 if __name__ == "__main__":

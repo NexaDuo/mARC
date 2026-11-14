@@ -50,10 +50,12 @@ injectable runner so tests drive it with recorded output.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import subprocess
 import sys
+import unicodedata
 from typing import Callable, Optional
 
 TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -86,13 +88,40 @@ def _default_runner(cmd: list) -> str:
     return r.stdout
 
 
+_ZERO_WIDTH_RE = re.compile("[\u200b-\u200d\u2060\ufeff\u00ad]")
+_TAG_RE = re.compile(r"<!--|-->|<[^>]*>")
+_DECOR_RE = re.compile(r"[`*_~\\\u200e\u200f]")
+DETECT_LINES = 5  # a heading-like line within the first few non-blank lines is a marker
+
+
+def _detect_lines(body: str) -> list:
+    """First DETECT_LINES non-blank lines in a normalised, rendering-like form. Used
+    ONLY to decide whether a trusted comment could be read as a marker; never to count."""
+    t = html.unescape(unicodedata.normalize("NFKC", body))
+    t = _ZERO_WIDTH_RE.sub("", unicodedata.normalize("NFKC", t))
+    t = _DECOR_RE.sub("", _TAG_RE.sub(" ", t))
+    out = []
+    for ln in re.split(r"[\r\n\u2028\u2029\x0b\x0c]", t):
+        ln = re.sub(r"\s+", " ", ln).strip().lower()
+        if ln:
+            out.append(ln.lstrip("#> -+=|").lstrip())
+            if len(out) == DETECT_LINES:
+                break
+    return out
+
+
 def marker_kind(body: str) -> Optional[str]:
-    """Detection is deliberately loose (prefix, leading blanks tolerated): a trusted
-    comment that merely resembles a marker is a suspect, never ignored."""
-    head = body.lstrip().lower()
-    for k in KINDS:
-        if head.startswith(f"## @{k} review"):
-            return k
+    """Detection runs on a normalised form (NFKC, BOM/zero-width/NBSP, whitespace,
+    HTML tags/comments/entities, emphasis/backticks/backslashes, any heading level or
+    setext form) over the first few lines, so a trusted comment that renders like a
+    marker heading is a suspect and not silently skipped (SEC-20/REV-18, #382). This
+    is wider than @arch rule 2's exact prefix. It is a heuristic over what a reader
+    sees: prose that only mentions a review mid-line is out of reach by design. The
+    strict header grammar (classify) alone decides whether a marker COUNTS."""
+    for ln in _detect_lines(body):
+        for k in KINDS:
+            if ln.startswith(f"@{k} review"):
+                return k
     return None
 
 

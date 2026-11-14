@@ -27,7 +27,13 @@ date whose `YY.M.D` is already taken.
   one `verdict: PASS|ADVISE|BLOCK` line. Bold, heading or trailing-prose forms
   are malformed and block until the same reviewer re-posts. Reviewers on an
   older plugin version running against a newer gate (or the reverse) get
-  blocked gates until both sides update.
+  blocked gates until both sides update. Marker detection runs on a
+  normalised rendering (NFKC, zero-width, HTML, entities, emphasis, any heading
+  level, first five lines), so a near-miss heading from a trusted author is a
+  blocking suspect, not silently skipped (SEC-20/REV-18). This refines the
+  exact-prefix detection of @arch rule 2; the strict grammar still decides what
+  counts. `dispatch_agent.py task` posts review comments in the strict header
+  shape, so pipeline reviews satisfy the gate (REV-17).
 
 ### Deprecated
 
