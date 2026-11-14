@@ -218,6 +218,21 @@ class TestConfig(Base):
         self.assertEqual(c.commit_paths, ["src", "tests/"])
         self.assertEqual(c.codex_review, {"rev": False, "sec": False})
 
+    def test_check_hint_replaces_the_ignored_focused_hint(self):
+        self.write('[task]\ntask_suite_cmd = "make test"\ntask_focused_hint = "pytest -q x"\n')
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(tp.load_config(self.tmp).check_hint, tp.DEFAULT_CHECK_HINT)
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("task_focused_hint is ignored", lines[0])
+        self.assertIn("task_check_hint", lines[0])
+        self.write('[task]\ntask_suite_cmd = "make test"\ntask_check_hint = "tsc --noEmit"\n')
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(tp.load_config(self.tmp).check_hint, "tsc --noEmit")
+        self.assertEqual(err.getvalue(), "")  # no warning without the old key
+
     def test_validation_command_is_the_fallback(self):
         self.write('[validation]\nvalidation_command = "npm test"\n')
         self.assertEqual(tp.load_config(self.tmp).suite_cmd, "npm test")
@@ -432,6 +447,51 @@ class TestLoop(Base):
         self.assertEqual(t.run(), tp.EXIT_TESTS)
         self.assertEqual([s for s, _ in t.codex_steps], ["impl", "fixtests-0-0", "fixtests-0-1"])
         self.assertEqual(t.reviewed, [])
+
+    def test_sandboxed_codex_never_runs_the_suite_the_pipeline_does(self):
+        """#349: a sandbox may refuse test temp dirs even inside the workspace.
+        The real codex() and run_suite() run here; only the codex binary is faked."""
+        class Sandboxed(FakeTask):
+            codex = tp.Task.codex
+            run_suite = tp.Task.run_suite
+
+        counter = self.tmp / "suite-runs"
+        suite = self.tmp / "suite.py"
+        suite.write_text(  # fails on its first run, passes after the fix round
+            "import pathlib, sys\n"
+            f"p = pathlib.Path({str(counter)!r})\n"
+            "n = len(p.read_text()) if p.exists() else 0\n"
+            "p.write_text('x' * (n + 1))\n"
+            "if n == 0:\n    print('SUITE-FAIL-MARK'); sys.exit(1)\n")
+        t = _task(self.tmp, cls=Sandboxed,
+                  config=_config(suite_cmd=[sys.executable, str(suite)])).setup([PASS])
+        t.worktree.mkdir()
+        t.prompt, t.commit_msg = self.tmp / "p.md", self.tmp / "m.txt"
+        t.prompt.write_text("do it")
+        t.commit_msg.write_text("feat: demo")
+        events, real_run = [], tp.run_to_file
+
+        def fake_run(cmd, **kw):
+            if cmd[0] == "codex":  # the sandboxed writer: edits files, runs nothing
+                events.append(("codex", cmd, kw["stdin"].read_text()))
+                t.changed = True
+                kw["out"].write_text("")
+                return 0
+            events.append(("suite", cmd, kw.get("cwd")))
+            return real_run(cmd, **kw)
+
+        with mock.patch.object(tp, "run_to_file", fake_run), mock.patch.object(tp, "which", lambda n: n):
+            self.assertEqual(t.run(), tp.EXIT_OK)
+        self.assertEqual([e[0] for e in events], ["codex", "suite", "codex", "suite"])
+        self.assertEqual(counter.read_text(), "xx")  # the pipeline ran the suite twice
+        for _, cmd, prompt in (e for e in events if e[0] == "codex"):
+            self.assertEqual(cmd[cmd.index("--sandbox") + 1], "workspace-write")
+            self.assertNotIn(str(suite), " ".join(cmd) + prompt)
+            self.assertIn("Do NOT run tests", prompt)
+            self.assertIn(f"Check only with {tp.DEFAULT_CHECK_HINT}.", prompt)
+            self.assertNotIn("Focused tests", prompt)
+        self.assertEqual(events[1][2], t.worktree)  # outside the sandbox, in the worktree
+        self.assertIn("SUITE-FAIL-MARK", events[2][2])  # the failure came back as a fix round
 
     def test_git_failure_reports_exit_6_with_result_line(self):
         class PushFails(FakeTask):
