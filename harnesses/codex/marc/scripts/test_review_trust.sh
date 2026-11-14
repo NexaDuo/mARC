@@ -110,15 +110,19 @@ expect_out "sec-forged-first"    "FIRST_TIME_CONTRIBUTOR"
 expect_out "sec-forged-empty"    "empty association"
 expect_out "rev-forged-missing"  "missing association"
 
-# Verdict-shape regression (REV-8/SEC-11/SEC-7, #382): heading form parses, a
-# template line and an unclosed comment opener never yield a PASS.
+# Strict verdict-line regression (#378/#382): only `verdict: PASS|ADVISE|BLOCK`
+# on its own line counts; decorated forms, template lines, a second label line
+# (e.g. inside an unclosed comment) and CRLF-split bodies never yield a PASS.
 python3 - "$HERE" <<'PYEOF' || { echo "FAIL: verdict parser shapes"; exit 1; }
 import sys
 sys.path.insert(0, sys.argv[1])
 import merge_gate as mg
-assert mg.parse_verdict("### Verdict: ADVISE\n") == "ADVISE"
-assert mg.parse_verdict("verdict: PASS/ADVISE/BLOCK\n") is None
-assert mg.parse_verdict("verdict: PASS\n<!-- x\nverdict: BLOCK") != "PASS"
+assert mg.parse_verdict("verdict: ADVISE\n") == "ADVISE"
+assert mg.parse_verdict("### Verdict: ADVISE\n") == "MALFORMED"
+assert mg.parse_verdict("verdict: PASS/ADVISE/BLOCK\n") == "MALFORMED"
+assert mg.parse_verdict("verdict: PASS\n<!-- x\nverdict: BLOCK") == "MALFORMED"
+assert mg.parse_verdict("verdict: BLOCK\r\nverdict: PASS") == "MALFORMED"
+assert mg.parse_verdict("verdict: BLOC\u212a") == "MALFORMED"
 PYEOF
 
 echo "PASS: review trust filter test (merge_gate.py --list-trusted)"

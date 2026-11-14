@@ -38,7 +38,10 @@ always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16
   `merge_gate.py` enforces it.** Both `## @sec review` / `## @rev review`
   markers, from a trusted author (association missing/untrusted fails closed),
   with `reviewed-sha:` equal to the current HEAD and a verdict; BLOCK from
-  either blocks. Trust boundary: the association check filters
+  either blocks. The gate parses a strict header (exact marker, `reviewer:`
+  and 40-hex `reviewed-sha:` lines) and exactly one `verdict: PASS|ADVISE|BLOCK`
+  line; a trusted marker it cannot fully read blocks until the same reviewer
+  re-posts (the operator never edits a review to make it parse). Trust boundary: the association check filters
   non-collaborator forgeries, it does not authenticate the reviewer. Mint a
   unique `reviewer: <harness>/<dispatch-id>` per dispatch and pass it as
   `--expect-reviewer` (SHOULD: audit traceability, not authentication).
@@ -46,6 +49,7 @@ always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16
   per thread, verify the fix, reply citing the commit (or a stated won't-fix
   justification), resolve; repeat at every push.
   (origin: #125 · 2026-07-16) (origin: #139 · 2026-07-20) (origin: #216 · 2026-10-03)
+  (origin: #378 · 2026-11-14)
 - **Batch review findings into one fix spec with adversarial self-review.**
   Send ALL findings of a review round in a single fix spec rather than
   piecemeal. The fix dispatch must return an adversarial self-review: whether

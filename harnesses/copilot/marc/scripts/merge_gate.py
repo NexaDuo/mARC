@@ -13,16 +13,23 @@ plus the PR's review threads (GraphQL `reviewThreads`) and decides:
     closed) (#216).
   * The latest trusted marker per reviewer whose `reviewed-sha:` equals the
     current `headRefOid` is the verdict; an older SHA does not count (#125).
-  * The verdict is the line-anchored `verdict: PASS|ADVISE|BLOCK` field
-    (markdown emphasis tolerated), ignoring fenced code and HTML comments.
-    The value must end the line (a `PASS/ADVISE/BLOCK` template or trailing
-    prose is no verdict); an unclosed `<!--` is ambiguous (fail closed).
-    BLOCK, no verdict, or two distinct values (ambiguous) blocks the merge.
-    A trusted BLOCK that cannot be bound (other `reviewer:`, short/missing SHA)
-    and is newer than the counted verdict also blocks (SEC-9, #382).
-    `reviewed-sha:` must be the full 40-char HEAD SHA.
-  * A `reviewer:` line that is present but differs from the dispatched value
-    (`--expect-reviewer`) is not counted (#216).
+  * Strict line grammar (#378, @arch decision on #382); the body is read raw
+    (CRLF/CR normalised, trailing blanks per line stripped; no fence or HTML
+    comment stripping, so nothing can disagree with the rendered comment):
+      line 1  exactly `## @sec review` / `## @rev review`
+      line 2  exactly `reviewer: <id>` (required; equal to --expect-reviewer)
+      line 3  exactly `reviewed-sha: <40 lowercase hex>`
+      result  exactly one line may lead with a `verdict` label and it must be
+              `verdict: PASS|ADVISE|BLOCK` (lowercase label, uppercase value).
+              Zero, two, or a differently shaped one is MALFORMED.
+  * Allowlist: a kind passes only when its counted result is PASS or ADVISE.
+    A marker with a valid header, HEAD sha and matching reviewer is the counted
+    one for its kind (latest wins) whatever its result is.
+  * An uncounted trusted marker is skippable only if (a) its header is valid and
+    its full SHA is not HEAD, or (b) it is at HEAD with a different reviewer
+    and a strict PASS/ADVISE. Everything else is a suspect and blocks until a
+    later counted marker of the same kind supersedes it. The blocker prints the
+    offending line; the same reviewer re-posts, the operator never edits it.
   * Unresolved, non-outdated review threads (inline bot/human findings) block:
     "CI green" is not permission to advance (#139).
   * `reviewDecision == REVIEW_REQUIRED` is reported early as a blocker that needs
@@ -51,22 +58,14 @@ from typing import Callable, Optional
 
 TRUSTED = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 KINDS = ("sec", "rev")
-# A verdict is a `verdict:` FIELD at the start of a line, optionally wrapped in
-# markdown emphasis (`**Verdict: PASS**`, `Verdict: **PASS**`). Prose that
-# merely mentions a verdict mid-line, blockquotes, fenced code and HTML
-# comments never count (SEC-1, #382).
-# The value must END the line (emphasis, a period, and one trailing parenthetical
-# aside are allowed): `Verdict: PASS would need X` and `PASS/ADVISE/BLOCK`
-# (a template listing every value) are no verdict. An optional heading (`###`)
-# or list (`-`) prefix is accepted: reviewers post that form (REV-8, SEC-11, #382).
-_VERDICT_RE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+)?[*_]{0,3}[ \t]*verdict[ \t]*[*_]{0,3}[ \t]*:"
-                         r"[ \t]*[*_`]{0,3}[ \t]*(PASS|ADVISE|BLOCK)[*_`]{0,3}\.?[*_`]{0,3}[ \t]*"
-                         r"(?:\([^\n]*\))?[ \t]*$")
-_SHA_RE = re.compile(r"(?im)^[ \t]*reviewed-sha[ \t]*:[ \t]*`?([0-9a-f]{40})\b")
-_REVIEWER_RE = re.compile(r"(?im)^[ \t]*reviewer[ \t]*:[ \t]*`?([^`\s]+)")
-_FENCE_RE = re.compile(r"(?ms)^[ \t]*(```|~~~).*?(^[ \t]*\1[^\n]*$|\Z)")
-_HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?(-->|\Z)")
-_CLOSED_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
+# Every pattern is ASCII-only: a Kelvin sign or dotless i must never read as a
+# letter of the value (SEC-16, #382).
+_REVIEWER_RE = re.compile(r"reviewer: (\S+)", re.ASCII)
+_SHA_RE = re.compile(r"reviewed-sha: ([0-9a-f]{40})", re.ASCII)
+_RESULT_RE = re.compile(r"verdict: (PASS|ADVISE|BLOCK)", re.ASCII)
+# Any line that LEADS with a verdict label, in any decoration: it must be the
+# one strict result line or the whole body is MALFORMED (SEC-17, REV-13).
+_CANDIDATE_RE = re.compile(r"[^A-Za-z0-9\n]*verdict[^A-Za-z0-9\n]*[:\uff1a]", re.ASCII | re.IGNORECASE)
 MAX_THREAD_PAGES = 20
 
 THREADS_QUERY = (
@@ -76,16 +75,6 @@ THREADS_QUERY = (
     "comments(first:1){nodes{author{login} authorAssociation commit{oid} url body}}}}}}}"
 )
 
-
-def strip_non_prose(body: str) -> str:
-    """Drop fenced code blocks and HTML comments (an unclosed one runs to the end)."""
-    return _FENCE_RE.sub("", _HTML_COMMENT_RE.sub("", body))
-
-
-def _has_unclosed_comment(body: str) -> bool:
-    """An `<!--` outside fenced code with no `-->` would hide everything after it
-    from the parser while the rendered comment shows it: fail closed (SEC-7, #382)."""
-    return "<!--" in _CLOSED_COMMENT_RE.sub("", _FENCE_RE.sub("", body))
 
 Runner = Callable[[list], str]
 
@@ -98,8 +87,11 @@ def _default_runner(cmd: list) -> str:
 
 
 def marker_kind(body: str) -> Optional[str]:
+    """Detection is deliberately loose (prefix, leading blanks tolerated): a trusted
+    comment that merely resembles a marker is a suspect, never ignored."""
+    head = body.lstrip().lower()
     for k in KINDS:
-        if body.startswith(f"## @{k} review"):
+        if head.startswith(f"## @{k} review"):
             return k
     return None
 
@@ -110,22 +102,50 @@ def trusted_markers(comments: list) -> list:
             if marker_kind(c.get("body") or "") and (c.get("authorAssociation") or "") in TRUSTED]
 
 
-AMBIGUOUS = "AMBIGUOUS"
+MALFORMED = "MALFORMED"
+OK_RESULTS = ("PASS", "ADVISE")
 
 
-def parse_verdict(body: str) -> Optional[str]:
-    """The single `verdict:` field value; AMBIGUOUS (fail closed) when the
-    body carries more than one distinct value."""
-    if _has_unclosed_comment(body):
-        return AMBIGUOUS
-    # Two strip orders: a fence opener inside a comment (or the reverse) must not
-    # hide a verdict from one view; any disagreement is ambiguous (fail closed).
-    views = (strip_non_prose(body),
-             _HTML_COMMENT_RE.sub("", _FENCE_RE.sub("", body)))
-    found = {v.upper() for view in views for v in _VERDICT_RE.findall(view)}
-    if not found:
-        return None
-    return found.pop() if len(found) == 1 else AMBIGUOUS
+def _clip(line: str) -> str:
+    return repr(line if len(line) <= 120 else line[:117] + "...")
+
+
+def classify(body: str, kind: str) -> dict:
+    """Parse one marker body against the strict grammar. Never raises; every
+    shape that is not exactly right is reported in `header_error` / `problem`."""
+    lines = [ln.rstrip(" \t") for ln in body.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    lines += [""] * (3 - len(lines))
+    out: dict = {"reviewer": None, "reviewed_sha": None, "header_error": None,
+                 "verdict": MALFORMED, "problem": ""}
+    if lines[0] != f"## @{kind} review":
+        out["header_error"] = f"line 1 is not exactly `## @{kind} review`: {_clip(lines[0])}"
+    m = _REVIEWER_RE.fullmatch(lines[1])
+    if m:
+        out["reviewer"] = m.group(1)
+    elif not out["header_error"]:
+        out["header_error"] = f"line 2 is not exactly `reviewer: <id>`: {_clip(lines[1])}"
+    m = _SHA_RE.fullmatch(lines[2])
+    if m:
+        out["reviewed_sha"] = m.group(1)
+    elif not out["header_error"]:
+        out["header_error"] = f"line 3 is not exactly `reviewed-sha: <40 hex>`: {_clip(lines[2])}"
+    cands = [ln for ln in lines if _CANDIDATE_RE.match(ln)]
+    if not cands:
+        out["problem"] = "no `verdict: PASS|ADVISE|BLOCK` line"
+    elif len(cands) > 1:
+        out["problem"] = f"{len(cands)} lines lead with a verdict label (exactly one allowed), e.g. {_clip(cands[1])}"
+    else:
+        m = _RESULT_RE.fullmatch(cands[0])
+        if m:
+            out["verdict"] = m.group(1)
+        else:
+            out["problem"] = f"verdict line is not exactly `verdict: PASS|ADVISE|BLOCK`: {_clip(cands[0])}"
+    return out
+
+
+def parse_verdict(body: str) -> str:
+    """PASS | ADVISE | BLOCK | MALFORMED for the result line alone (header ignored)."""
+    return classify(body, "sec")["verdict"]
 
 
 def sha_matches(reviewed: Optional[str], head: str) -> bool:
@@ -139,7 +159,7 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
     blockers: list[str] = []
     verdicts: dict = {}
     ignored: list[dict] = []
-    suspect: dict = {}  # kind -> skipped trusted BLOCK-ish markers newer than the counted verdict
+    suspect: dict = {}  # kind -> uncounted trusted markers that block until superseded
 
     for c in pr.get("comments") or []:
         body = c.get("body") or ""
@@ -148,51 +168,39 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
             continue
         info = {"kind": kind, "url": c.get("url", ""), "login": (c.get("author") or {}).get("login", ""),
                 "association": c.get("authorAssociation") or "", "created_at": c.get("createdAt", "")}
-        prose = strip_non_prose(body)
-        m = _SHA_RE.search(prose)
-        info["reviewed_sha"] = m.group(1) if m else None
-        r = _REVIEWER_RE.search(prose)
-        info["reviewer"] = r.group(1) if r else None
-        info["verdict"] = parse_verdict(body)
+        info.update(classify(body, kind))
         if info["association"] not in TRUSTED:
             ignored.append({**info, "reason": "untrusted author association"})
             continue
-        # Only PASS/ADVISE need the reviewer+SHA binding to count. A trusted BLOCK
-        # (or conflicting verdicts) that cannot be bound (missing/short/bolded SHA,
-        # other reviewer) is skipped for selection but never silently: it blocks
-        # until a later bound verdict supersedes it (SEC-9, #382). A full 40-char
-        # SHA that is not HEAD is a plain older round.
-        risky = info["verdict"] in ("BLOCK", AMBIGUOUS)
-        sha_ok = sha_matches(info["reviewed_sha"], head)
         want = expect_reviewer.get(kind)
-        mismatch = bool(want and info["reviewer"] and info["reviewer"] != want)
-        if not sha_ok:
-            ignored.append({**info, "reason": "reviewed-sha is not the current HEAD"})
-            if risky and info["reviewed_sha"] is None:
-                suspect.setdefault(kind, []).append(info)
+        if info["header_error"]:
+            # Closed skip list (rule 7): an unreadable header is never skippable.
+            ignored.append({**info, "reason": info["header_error"]})
+            suspect.setdefault(kind, []).append(info)
             continue
-        if mismatch:
+        if not sha_matches(info["reviewed_sha"], head):
+            ignored.append({**info, "reason": "reviewed-sha is not the current HEAD"})  # older round
+            continue
+        if want and info["reviewer"] != want:
             ignored.append({**info, "reason": f"reviewer {info['reviewer']!r} != dispatched {want!r}"})
-            if risky:
+            if info["verdict"] not in OK_RESULTS:
                 suspect.setdefault(kind, []).append(info)
             continue
-        verdicts[kind] = info  # comments are chronological; the latest wins
+        verdicts[kind] = info  # counted whatever its result; the latest wins
         suspect.pop(kind, None)
 
     for k in KINDS:
         v = verdicts.get(k)
         for sus in suspect.get(k, []):
-            blockers.append(f"trusted @{k} {sus['verdict']} not bound to this HEAD/reviewer (reviewer "
-                            f"{sus['reviewer']!r}, reviewed-sha {sus['reviewed_sha']!r}): fail closed, "
-                            f"re-review or resolve it: {sus['url']}")
+            why = sus["header_error"] or sus["problem"] or f"result {sus['verdict']} from reviewer {sus['reviewer']!r}"
+            blockers.append(f"trusted @{k} marker cannot be counted ({why}); fail closed until the same "
+                            f"reviewer re-posts a corrected comment (never edit it as the operator): {sus['url']}")
         if v is None:
             blockers.append(f"no trusted `## @{k} review` at HEAD {head[:12]} (re-review at HEAD)")
-        elif v["verdict"] is None:
-            blockers.append(f"@{k} review at HEAD has no verdict line: {v['url']}")
-        elif v["verdict"] == "BLOCK":
-            blockers.append(f"@{k} verdict is BLOCK: {v['url']}")
-        elif v["verdict"] == AMBIGUOUS:
-            blockers.append(f"@{k} review at HEAD carries conflicting `verdict:` lines (fail closed): {v['url']}")
+        elif v["verdict"] not in OK_RESULTS:
+            why = v["problem"] if v["verdict"] == MALFORMED else "reviewer BLOCK"
+            blockers.append(f"@{k} counted result is {v['verdict']} ({why}); "
+                            f"the same reviewer re-posts if it is a formatting slip: {v['url']}")
 
     open_threads = []
     stale_threads = []

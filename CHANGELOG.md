@@ -21,7 +21,13 @@ date whose `YY.M.D` is already taken.
   `worktrees`, and the new `merge_gate.py` checks reviewer markers, trusted
   authors, `reviewed-sha` at HEAD, unresolved threads in one call (CI is checked separately).
   `concurrent-operators.md` and `review-release.md` shrink accordingly, with
-  every governed rule keeping its origin tag.
+  every governed rule keeping its origin tag. The gate reads review comments
+  with a strict line grammar and blocks by default: exact marker on line 1,
+  `reviewer: <id>` and a 40-hex `reviewed-sha:` on lines 2 and 3, and exactly
+  one `verdict: PASS|ADVISE|BLOCK` line. Bold, heading or trailing-prose forms
+  are malformed and block until the same reviewer re-posts. Reviewers on an
+  older plugin version running against a newer gate (or the reverse) get
+  blocked gates until both sides update.
 
 ### Deprecated
 

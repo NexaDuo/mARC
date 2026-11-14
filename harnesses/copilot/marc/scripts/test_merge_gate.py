@@ -41,19 +41,19 @@ PR_374 = json.loads(r'''{
     {"author": {"login": "alexandre-machado"}, "authorAssociation": "MEMBER",
      "createdAt": "2026-10-19T04:09:16Z", "id": "IC_kwDOTM3EE88AAAABdReIFQ",
      "url": "https://github.com/NexaDuo/mARC/pull/374#issuecomment-6259443733",
-     "body": "## @sec review\n\nreviewed-sha: c10e9ea13cfb179c93da596ce0472826d7745afd\n\nScope: three-dot diff.\n\nVerdict: **PASS**"},
+     "body": "## @sec review\nreviewer: x/sec-1\nreviewed-sha: c10e9ea13cfb179c93da596ce0472826d7745afd\n\nScope: reshaped to the strict grammar (#378).\n\nverdict: PASS"},
     {"author": {"login": "alexandre-machado"}, "authorAssociation": "MEMBER",
      "createdAt": "2026-10-19T04:12:11Z", "id": "IC_kwDOTM3EE88AAAABdRgFgg",
      "url": "https://github.com/NexaDuo/mARC/pull/374#issuecomment-6259475842",
-     "body": "## @rev review\n\nreviewed-sha: c10e9ea13cfb179c93da596ce0472826d7745afd\n\n**Verdict: PASS.** Findings 1 and 2 are non-blocking (ADVISE level)."},
+     "body": "## @rev review\nreviewer: x/rev-1\nreviewed-sha: c10e9ea13cfb179c93da596ce0472826d7745afd\n\nScope: reshaped to the strict grammar (#378).\n\nverdict: PASS"},
     {"author": {"login": "alexandre-machado"}, "authorAssociation": "MEMBER",
      "createdAt": "2026-10-19T12:37:50Z", "id": "IC_kwDOTM3EE88AAAABdZC1mQ",
      "url": "https://github.com/NexaDuo/mARC/pull/374#issuecomment-6267385241",
-     "body": "## @sec review\n\nreviewed-sha: 2588cec2c505b2d49162b59333741afdf3ed2634\nscope: delta `c10e9ea..2588cec`\n\n**Verdict: PASS**"},
+     "body": "## @sec review\nreviewer: x/sec-1\nreviewed-sha: 2588cec2c505b2d49162b59333741afdf3ed2634\n\nScope: reshaped to the strict grammar (#378).\n\nverdict: PASS"},
     {"author": {"login": "alexandre-machado"}, "authorAssociation": "MEMBER",
      "createdAt": "2026-10-19T12:37:50Z", "id": "IC_kwDOTM3EE88AAAABdZC1mw",
      "url": "https://github.com/NexaDuo/mARC/pull/374#issuecomment-6267385243",
-     "body": "## @rev review\n\nreviewed-sha: 2588cec2c505b2d49162b59333741afdf3ed2634\nscope: delta\n\n**Verdict: ADVISE** (low findings only; the medium finding from the previous round is resolved)"}
+     "body": "## @rev review\nreviewer: x/rev-1\nreviewed-sha: 2588cec2c505b2d49162b59333741afdf3ed2634\n\nScope: reshaped to the strict grammar (#378).\n\nverdict: ADVISE"}
   ]
 }''')
 
@@ -113,6 +113,27 @@ def pr(**kw):
     return p
 
 
+def B(kind="sec", sha=HEAD, reviewer="x/sec-1", result="verdict: PASS", extra=""):
+    """A strict-grammar review body (#378)."""
+    return f"## @{kind} review\nreviewer: {reviewer}\nreviewed-sha: {sha}\n{extra}\n{result}\n"
+
+
+REV_OK = B("rev", reviewer="x/rev-1", result="verdict: ADVISE")
+
+
+def mk(*sec_bodies, rev=REV_OK):
+    """A PR whose @rev is a counted ADVISE and whose @sec comments are `sec_bodies` in order."""
+    comments = [{"author": {"login": "m"}, "authorAssociation": "MEMBER", "url": f"u-{i}",
+                 "createdAt": f"2026-11-14T00:00:{i:02d}Z", "body": b}
+                for i, b in enumerate([rev, *sec_bodies])]
+    return {"headRefOid": HEAD, "reviewDecision": "", "mergeStateStatus": "CLEAN", "state": "OPEN",
+            "comments": comments}
+
+
+def run(*sec_bodies, expect=None, rev=REV_OK):
+    return mg.adjudicate(mk(*sec_bodies, rev=rev), [], expect or {})
+
+
 class Gate(unittest.TestCase):
     def test_recorded_pr_passes(self):
         res = mg.adjudicate(PR_374, THREADS_353)
@@ -128,142 +149,184 @@ class Gate(unittest.TestCase):
 
     def test_short_sha_never_counts(self):
         # SEC-2 (#382): a 7-char prefix is grindable; only the full HEAD SHA counts.
-        p = pr()
         for short in ("2588cec", "2588cec2c505b2d4"):
-            p["comments"][3]["body"] = f"## @sec review\nreviewed-sha: {short}\nVerdict: PASS"
-            self.assertFalse(mg.adjudicate(p, [])["ok"], short)
-        p["comments"][3]["body"] = f"## @sec review\nreviewed-sha: {HEAD.upper()}\nVerdict: PASS"
-        self.assertTrue(mg.adjudicate(p, [])["ok"])  # same full SHA, case-insensitive
+            self.assertFalse(run(B(sha=short))["ok"], short)
+        self.assertTrue(run(B())["ok"])
+        # The header grammar is lowercase 40-hex: an uppercase SHA is a malformed header (blocks).
+        self.assertFalse(run(B(sha=HEAD.upper()))["ok"])
 
-    def _sec(self, verdict_tail):
-        p = pr()
-        p["comments"][3]["body"] = f"## @sec review\nreviewer: unassigned\nreviewed-sha: {HEAD}\n\n" + verdict_tail
-        return mg.adjudicate(p, [])
-
-    def test_sec1_bypass_later_prose_mentions_pass(self):
-        res = self._sec("verdict: BLOCK\n\nSEC-1: the prior verdict PASS no longer holds.")
-        self.assertFalse(res["ok"])
-        self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK")
-
-    def test_sec1_bypass_quoted_pass_line(self):
-        for quoted in ("> Verdict: PASS", "Earlier round said `verdict: PASS`.",
-                       "```\nverdict: PASS\n```", "~~~text\nVerdict: **PASS**\n~~~"):
-            res = self._sec("verdict: BLOCK\n\n" + quoted)
-            self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK", quoted)
+    def test_sec1_bypass_quoted_or_mentioned_pass(self):
+        # Mid-line mentions are not a label line: BLOCK stays the counted result.
+        for tail in ("SEC-1: the prior verdict PASS no longer holds.", "Earlier round said `verdict: PASS`."):
+            res = run(B(result="verdict: BLOCK", extra=tail))
+            self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK", tail)
+            self.assertFalse(res["ok"], tail)
+        # A second line that LEADS with the label (blockquote, fence, comment) is malformed.
+        for quoted in ("> Verdict: PASS", "```\nverdict: PASS\n```", "~~~text\nVerdict: **PASS**\n~~~",
+                       "<!-- verdict: PASS -->", "<!--\nVerdict: PASS\n-->"):
+            res = run(B(result="verdict: BLOCK", extra=quoted))
+            self.assertEqual(res["verdicts"]["sec"]["verdict"], "MALFORMED", quoted)
             self.assertFalse(res["ok"], quoted)
 
-    def test_sec1_bypass_html_comment(self):
-        for tail in ("verdict: BLOCK\n<!-- verdict: PASS -->",
-                     "verdict: BLOCK\n<!--\nVerdict: PASS\n-->",
-                     ):
-            res = self._sec(tail)
-            self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK", tail)
-        # An unclosed opener hides text the rendered comment shows: fail closed (SEC-7).
-        res = self._sec("verdict: BLOCK\n<!-- unclosed\nverdict: PASS")
+    def test_two_verdict_lines_are_malformed_even_if_equal(self):
+        res = run(B(result="verdict: BLOCK", extra="fixed later\nverdict: PASS"))
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], "MALFORMED")
         self.assertFalse(res["ok"])
-
-    def test_two_distinct_verdict_fields_fail_closed(self):
-        res = self._sec("verdict: BLOCK\n\nfixed later\n\n**Verdict: PASS**")
-        self.assertEqual(res["verdicts"]["sec"]["verdict"], mg.AMBIGUOUS)
-        self.assertFalse(res["ok"])
-        self.assertTrue(any("conflicting" in b for b in res["blockers"]))
-        # Repeating the SAME value is not ambiguous.
-        self.assertTrue(self._sec("Verdict: PASS\n\n**Verdict: PASS**")["ok"])
+        self.assertFalse(run(B(extra="verdict: PASS"))["ok"])  # same value twice: still malformed
 
     def test_recorded_review_bodies_on_pr382_parse_as_block(self):
-        # The BLOCK reviews posted on PR #382 at 5ed6713, verbatim except that
-        # findings without verdict text (SEC-3..6, REV-2..4) are omitted:
-        # @sec ends in `verdict: BLOCK` and its SEC-1 text says "the prior verdict
-        # PASS no longer holds"; @rev puts `verdict: BLOCK` near the top.
+        # BLOCK reviews posted on PR #382 at 5ed6713 (findings trimmed): one strict line each.
         self.assertEqual(mg.parse_verdict(SEC_382_BODY), "BLOCK")
         self.assertEqual(mg.parse_verdict(REV_382_BODY), "BLOCK")
-        self.assertEqual(mg._SHA_RE.search(SEC_382_BODY).group(1), "5ed67134b7542258e4203633c78435f4c8ed7594")
+        self.assertEqual(mg.classify(SEC_382_BODY, "sec")["reviewed_sha"], "5ed67134b7542258e4203633c78435f4c8ed7594")
 
-    def _bodies(self, sec_extra="", sec_first=None):
-        p = pr()
-        p["comments"][3]["body"] = sec_first or f"## @sec review\nreviewer: x/sec-1\nreviewed-sha: {HEAD}\nverdict: PASS"
-        p["comments"].append({"author": {"login": "m"}, "authorAssociation": "MEMBER", "url": "u-late",
-                              "createdAt": "2026-10-20T00:00:00Z", "body": sec_extra})
-        return p
+    def test_rev12_old_formats_are_rejected_by_design(self):
+        # REV-12 (#382): reviews of #395 posted `**Verdict: X.** prose`, a parenthetical aside and a heading
+        # form. The strict grammar rejects them on purpose: the reviewer re-posts the exact line.
+        for line in ("**Verdict: PASS.** Findings are non-blocking.", "**Verdict: ADVISE** (low findings only).",
+                     "### Verdict: ADVISE", "**Verdict: ADVISE**", "Verdict: ADVISE", "Verdict: PASS",
+                     "- verdict: PASS", "verdict: pass", "verdict:  PASS", "verdict: PASS.",
+                     "verdict: PASS (note)", "verdict:PASS"):
+            res = run(B(result=line))
+            self.assertEqual(res["verdicts"]["sec"]["verdict"], "MALFORMED", line)
+            self.assertFalse(res["ok"], line)
+            self.assertTrue(any(line in b for b in res["blockers"]) or line in str(res["verdicts"]["sec"]["problem"]), line)
 
-    def test_sec9_unbound_trusted_block_after_pass_blocks(self):
-        # SEC-9 (#382): a trusted BLOCK posted after a counted PASS is never skipped.
+    def test_template_and_prose_lines_are_not_a_verdict(self):
+        for line in ("verdict: PASS/ADVISE/BLOCK", "verdict: PASS|ADVISE|BLOCK", "verdict: PASS or BLOCK",
+                     "Verdict: PASS would need SEC-1 fixed"):
+            self.assertEqual(mg.parse_verdict(line), "MALFORMED", line)
+        self.assertEqual(mg.parse_verdict("no label here"), "MALFORMED")
+
+    def test_sec9_unbound_or_unreadable_trusted_marker_after_pass_blocks(self):
+        # SEC-9 + REV-13 (#382): after a counted PASS, a later trusted marker that is not a clean
+        # skip never passes silently, whatever shape its result or header has.
         cases = {
-            "other reviewer": f"## @sec review\nreviewer: other/sec-9\nreviewed-sha: {HEAD}\nverdict: BLOCK",
-            "unassigned": f"## @sec review\nreviewer: unassigned\nreviewed-sha: {HEAD}\nverdict: BLOCK",
-            "short sha": f"## @sec review\nreviewer: x/sec-1\nreviewed-sha: {HEAD[:7]}\nverdict: BLOCK",
-            "no sha": "## @sec review\nreviewer: x/sec-1\nverdict: BLOCK",
-            "bold sha label": f"## @sec review\nreviewer: x/sec-1\n**reviewed-sha:** {HEAD}\nverdict: BLOCK",
+            "other reviewer bold block": B(reviewer="other/sec-9", result="**Verdict: BLOCK** - reason"),
+            "other reviewer comma": B(reviewer="other/sec-9", result="**Verdict: BLOCK**, reason"),
+            "unassigned block": B(reviewer="unassigned", result="verdict: BLOCK"),
+            "other reviewer no result": B(reviewer="other/sec-9", result="findings only"),
+            "short sha plus reason": f"## @sec review\nreviewer: x/sec-1\nreviewed-sha: {HEAD[:7]} reason\nverdict: BLOCK\n",
+            "short sha": B(sha=HEAD[:7], result="verdict: BLOCK"),
+            "no sha line": "## @sec review\nreviewer: x/sec-1\nverdict: BLOCK\n",
+            "no result line": B(result="findings"),
+            "bold sha label": f"## @sec review\nreviewer: x/sec-1\n**reviewed-sha:** {HEAD}\nverdict: BLOCK\n",
+            "crlf no sha": "## @sec review\r\nreviewer: x/sec-1\r\nverdict: BLOCK\r\n",
+            "same reviewer bold block": B(result="**Verdict: BLOCK** - reason"),
+            "line 1 suffix": f"## @sec review (round 2)\nreviewer: x/sec-1\nreviewed-sha: {HEAD}\nverdict: BLOCK\n",
+            "leading blank line": "\n" + B(result="verdict: BLOCK"),
+            "marker case": B(result="verdict: BLOCK").replace("## @sec review", "## @SEC Review"),
+            "other sha uppercase": B(sha=OLD.upper(), result="verdict: BLOCK"),
         }
-        for label, body in cases.items():
-            p = self._bodies(body, f"## @sec review\nreviewer: x/sec-1\nreviewed-sha: {HEAD}\nverdict: PASS")
-            res = mg.adjudicate(p, [], {"sec": "x/sec-1"})
-            self.assertFalse(res["ok"], label)
-            self.assertTrue(any("fail closed" in b for b in res["blockers"]), label)
-        # Control: the same comment is harmless when it is a PASS/ADVISE (binding needed to count).
-        p = self._bodies(f"## @sec review\nreviewer: other/sec-9\nreviewed-sha: {HEAD}\nverdict: ADVISE")
-        self.assertTrue(mg.adjudicate(p, [], {"sec": "x/sec-1"})["ok"])
-        # A later bound verdict supersedes the unbound BLOCK; an older full SHA is a plain old round.
-        p = self._bodies(f"## @sec review\nreviewed-sha: {OLD}\nverdict: BLOCK")
-        self.assertTrue(mg.adjudicate(p, [])["ok"])
+        for label, late in cases.items():
+            for expect in ({"sec": "x/sec-1"}, {}):
+                res = run(B(), late, expect=expect)
+                self.assertFalse(res["ok"], f"{label} {expect}")
+                self.assertTrue(any("fail closed" in b or "counted result" in b for b in res["blockers"]), label)
 
-    def test_rev8_verdict_formats_reviewers_post(self):
-        for line in ("### Verdict: ADVISE", "**Verdict: ADVISE**", "Verdict: ADVISE", "verdict: ADVISE",
-                     "- Verdict: ADVISE", "**Verdict:** ADVISE", "Verdict: **ADVISE** (low findings only)",
-                     "**Verdict: ADVISE.**", "## **Verdict: ADVISE**"):
-            self.assertEqual(mg.parse_verdict(f"## @rev review\nreviewed-sha: {HEAD}\n\nbody\n\n{line}\n"),
-                             "ADVISE", line)
+    def test_closed_skip_list(self):
+        # (a) valid header at another FULL sha: an older round, skipped even if it is a BLOCK.
+        self.assertTrue(run(B(), B(sha=OLD, result="verdict: BLOCK"))["ok"])
+        # (b) at HEAD, other reviewer, strict PASS/ADVISE: skipped; but a BLOCK from it is not.
+        self.assertTrue(run(B(), B(reviewer="other/sec-9", result="verdict: ADVISE"), expect={"sec": "x/sec-1"})["ok"])
+        self.assertFalse(run(B(), B(reviewer="other/sec-9", result="verdict: BLOCK"), expect={"sec": "x/sec-1"})["ok"])
+        # Without --expect-reviewer a later HEAD marker is counted whatever the reviewer says.
+        res = run(B(), B(reviewer="other/sec-9", result="verdict: BLOCK"))
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK")
 
-    def test_sec11_trailing_prose_and_template_are_not_a_verdict(self):
-        for line in ("Verdict: PASS would need SEC-1 fixed", "verdict: PASS/ADVISE/BLOCK",
-                     "verdict: PASS|ADVISE|BLOCK", "verdict: PASS or BLOCK"):
-            self.assertIsNone(mg.parse_verdict(line), line)
-        # The SEC-11 attack: a prose PASS sentence plus the real heading-form BLOCK.
-        body = "Verdict: PASS would need SEC-1 fixed\n\n### Verdict: BLOCK\n"
-        self.assertEqual(mg.parse_verdict(body), "BLOCK")
+    def test_later_counted_marker_supersedes_suspects(self):
+        # REV-16 (supersede half, #382): an unbound BLOCK is cleared by a later bound verdict.
+        unbound = "## @sec review\nreviewer: x/sec-1\nverdict: BLOCK\n"
+        self.assertFalse(run(B(), unbound)["ok"])
+        self.assertTrue(run(B(), unbound, B(result="verdict: ADVISE"))["ok"])
+        self.assertTrue(run(unbound, B())["ok"])  # a suspect before the counted marker is superseded too
+        # A counted marker never hides a LATER suspect.
+        self.assertFalse(run(unbound, B(), unbound)["ok"])
 
-    def test_sec7_unclosed_comment_cannot_hide_block(self):
-        for body in ("verdict: PASS\n`<!--`\nverdict: BLOCK",
-                     "verdict: PASS\n<!-- note\nverdict: BLOCK",
-                     "verdict: PASS\n```\n<!--\n```\nverdict: BLOCK"):
-            v = mg.parse_verdict(body)
-            self.assertIn(v, ("BLOCK", mg.AMBIGUOUS), body)
-            self.assertNotEqual(v, "PASS", body)
+    def test_crlf_bodies_normalise(self):
+        # REV-14 / SEC-18 (#382): CRLF endings (web UI) read like LF; a trailing CR cannot split fail-open.
+        clean = B().replace("\n", "\r\n")
+        res = run(clean)
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], "PASS")
+        self.assertTrue(res["ok"])
+        self.assertTrue(run(B().replace("\n", "\r"))["ok"])  # lone CR too
+        two = B(result="verdict: BLOCK", extra="x").replace("\n", "\r\n").rstrip("\r\n") + "\r\nverdict: PASS"
+        self.assertEqual(mg.parse_verdict(two), "MALFORMED")
+        self.assertFalse(run(two)["ok"])
 
-    def test_recorded_379_heading_verdict_parses(self):
-        # #379 @sec ended in a heading-form verdict line (REV-8, #382).
-        body = f"## @sec review\nreviewer: claude-code/sec-pr379-1\nreviewed-sha: {HEAD}\n\n**SEC-1 (low)**\n\n### Verdict: ADVISE\n"
-        p = pr()
-        p["comments"][3]["body"] = body
-        res = mg.adjudicate(p, [])
-        self.assertEqual(res["verdicts"]["sec"]["verdict"], "ADVISE")
+    def test_inline_comment_opener_is_just_text(self):
+        # REV-15 (#382): nothing is stripped, so a quoted opener cannot poison a clean review.
+        res = run(B(extra="The parser used to choke on `<!--` in prose."))
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], "PASS")
         self.assertTrue(res["ok"])
 
-    def test_reviewer_first_token(self):
-        # SEC-4 (#382): trailing text after the id must not hide a mismatch.
-        p = pr()
-        p["comments"][3]["body"] = (f"## @sec review\nreviewer: claude-code/sec-9 (round 2)\n"
-                                    f"reviewed-sha: {HEAD}\nVerdict: PASS")
-        res = mg.adjudicate(p, [], {"sec": "claude-code/sec-1"})
+    def test_sec7_residual_hiding_shapes_are_malformed(self):
+        # SEC-7 residuals (#382): degenerate comment openers, inline-code fence lookalikes and an
+        # indented fence hid a displayed BLOCK from the stripper. With no stripping, every line
+        # that leads with the label counts, so the second line makes the body malformed.
+        for hidden in ("<!--->\nverdict: BLOCK\n-->", "<!---->\nverdict: BLOCK", "<!-- x\nverdict: BLOCK",
+                       "```inline``` text\nverdict: BLOCK\n```", "    ```\nverdict: BLOCK\n    ```",
+                       "```\nverdict: BLOCK\n```"):
+            res = run(B(extra=hidden))
+            self.assertEqual(res["verdicts"]["sec"]["verdict"], "MALFORMED", hidden)
+            self.assertFalse(res["ok"], hidden)
+
+    def test_sec16_non_ascii_lookalikes_never_pass(self):
+        # SEC-16 (#382): Kelvin sign / long s / dotless i spelled values matched under Unicode case-folding.
+        for value in ("BLOCK", "ADVIſE", "PİSS", "PAſſ", "ВLOCK"):
+            for shape in (f"verdict: {value}", f"verdict: {value}"):
+                res = run(B(result=shape))
+                self.assertFalse(res["ok"], shape)
+                self.assertEqual(res["verdicts"]["sec"]["verdict"], "MALFORMED", shape)
+        # Fullwidth colon, no-break space and zero-width space fail closed too.
+        for shape in ("verdict： PASS", "verdict:​PASS", "verdict: PASS"):
+            self.assertFalse(run(B(result=shape))["ok"], shape)
+        # A lookalike label line next to a strict PASS: the lookalike leads with the label -> malformed.
+        self.assertFalse(run(B(extra=" verdict: BLOCK"))["ok"])
+
+    def test_sec17_aside_pass_plus_hidden_block_is_malformed(self):
+        # SEC-17 (#382): a loosely shaped PASS plus a bold BLOCK once counted as PASS.
+        body = B(result="- verdict: PASS (delta only)", extra="**Verdict: BLOCK** - SEC-9 still open")
+        res = run(body)
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], "MALFORMED")
         self.assertFalse(res["ok"])
-        self.assertEqual(res["ignored_markers"][-1]["reviewer"], "claude-code/sec-9")
+
+    def test_sec19_reviewer_line_is_required(self):
+        # SEC-19 (#382): under --expect-reviewer a PASS without a (readable) reviewer line never counts,
+        # and the marker must be the whole first line.
+        want = {"sec": "x/sec-1"}
+        for body in (f"## @sec review\nreviewed-sha: {HEAD}\nverdict: PASS\n",
+                     f"## @sec review\n**reviewer:** x/sec-1\nreviewed-sha: {HEAD}\nverdict: PASS\n",
+                     f"## @sec reviewer notes\nreviewer: x/sec-1\nreviewed-sha: {HEAD}\nverdict: PASS\n"):
+            res = run(body, expect=want)
+            self.assertFalse(res["ok"], body)
+            self.assertNotIn("sec", res["verdicts"], body)
+        # A missing reviewer line cannot supersede an earlier counted BLOCK either.
+        self.assertFalse(run(B(result="verdict: BLOCK"), f"## @sec review\nreviewed-sha: {HEAD}\nverdict: PASS\n",
+                             expect=want)["ok"])
+        # Reviewer values must be equal, not prefixes.
+        self.assertFalse(run(B(reviewer="x/sec-10"), expect=want)["ok"])
+        self.assertTrue(run(B(), expect=want)["ok"])
+
+    def test_untrusted_marker_never_suspect_or_counted(self):
+        p = mk(B())
+        p["comments"].append({"author": {"login": "z"}, "authorAssociation": "NONE", "url": "u-x",
+                              "createdAt": "2026-11-14T01:00:00Z", "body": B(result="verdict: BLOCK")})
+        self.assertTrue(mg.adjudicate(p, [])["ok"])
+
+    def test_blocker_prints_offending_line(self):
+        res = run(B(result="**Verdict: PASS.** fine"))
+        self.assertTrue(any("**Verdict: PASS.** fine" in b and "re-posts" in b for b in res["blockers"]), res["blockers"])
+        res = run(B(), "## @sec review\nreviewer: oops\nverdict: BLOCK\n")
+        self.assertTrue(any("line 3 is not exactly" in b for b in res["blockers"]), res["blockers"])
 
     def test_block_verdict_blocks(self):
-        p = pr()
-        p["comments"][4]["body"] = f"## @rev review\nreviewed-sha: {HEAD}\nVerdict: **BLOCK**"
-        res = mg.adjudicate(p, [])
+        res = run(B(), rev=B("rev", reviewer="x/rev-1", result="verdict: BLOCK"))
         self.assertFalse(res["ok"])
         self.assertTrue(any("BLOCK" in b for b in res["blockers"]))
 
     def test_missing_verdict_blocks(self):
-        p = pr()
-        p["comments"][4]["body"] = f"## @rev review\nreviewed-sha: {HEAD}\nstill reading"
-        self.assertFalse(mg.adjudicate(p, [])["ok"])
-
-    def test_task_pipeline_verdict_line_shape(self):
-        p = pr()
-        p["comments"][3]["body"] = f"## @sec review\nreviewed-sha: {HEAD}\nverdict: PASS"
-        self.assertEqual(mg.adjudicate(p, [])["verdicts"]["sec"]["verdict"], "PASS")
+        self.assertFalse(run(B(result="still reading"))["ok"])
 
     def test_untrusted_or_missing_association_fails_closed(self):
         for assoc in ("NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "", None):
@@ -277,11 +340,11 @@ class Gate(unittest.TestCase):
 
     def test_expected_reviewer_mismatch_not_counted(self):
         p = pr()
-        p["comments"][3]["body"] = f"## @sec review\nreviewer: claude-code/sec-pr374-9\nreviewed-sha: {HEAD}\nVerdict: PASS"
-        self.assertFalse(mg.adjudicate(p, [], {"sec": "claude-code/sec-pr374-1"})["ok"])
+        p["comments"][3]["body"] = B(reviewer="claude-code/sec-pr374-9")
+        res = mg.adjudicate(p, [], {"sec": "claude-code/sec-pr374-1"})
+        self.assertNotIn("sec", res["verdicts"])
+        self.assertFalse(res["ok"])
         self.assertTrue(mg.adjudicate(p, [], {"sec": "claude-code/sec-pr374-9"})["ok"])
-        # Absent reviewer line is tolerated (SHOULD, not MUST).
-        self.assertTrue(mg.adjudicate(PR_374, [], {"sec": "claude-code/sec-pr374-1"})["ok"])
 
     def test_unresolved_thread_blocks_outdated_does_not(self):
         res = mg.adjudicate(PR_374, [thread()])

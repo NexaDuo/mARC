@@ -146,15 +146,21 @@ concrete issue (the bug, regression, or gap this introduces or leaves), whether
 it's **verified** or **assumed**, and a concrete fix. Prefix each finding with a
 stable ID (`REV-1`, `REV-2`, ...); on follow-up rounds keep prior IDs and number
 new findings after the highest one used. Omit routine praise and
-unchanged operational history. End with a **verdict**:
-- **BLOCK** — a high/critical correctness finding (a real bug, a broken test, a
+unchanged operational history. End with a verdict, meaning:
+- `BLOCK` — a high/critical correctness finding (a real bug, a broken test, a
   regression) must be resolved or explicitly accepted before merge.
-- **ADVISE** — only medium/low findings; merge may proceed with them noted.
-- **PASS** — nothing found.
+- `ADVISE` — only medium/low findings; merge may proceed with them noted.
+- `PASS` — nothing found.
 
-The merge gate reads exactly one line shaped `verdict: PASS|ADVISE|BLOCK` (one
-value, alone on its line) plus the `reviewer:` line and a `reviewed-sha:` line
-holding the full 40-char HEAD SHA; write each as a plain `field: value` line.
+The merge gate is a strict line parser (origin: #378 · 2026-11-14). Line 1 is exactly
+the marker, line 2 exactly `reviewer: <id>`, line 3 exactly `reviewed-sha: <40 lowercase
+hex>`, all plain text (no bold, backticks or trailing words). Exactly one line of the
+comment may start with the word `verdict` (any case, any decoration), and it must be
+exactly `verdict: PASS`, `verdict: ADVISE` or `verdict: BLOCK` (lowercase label, one
+space, uppercase value, nothing else on the line). Write the severity meaning in the
+bullets above without starting any other line with the label, and never quote a
+template or example line that starts with it (not in a fence, quote or bullet). A
+malformed header or result line blocks the merge until you re-post a corrected comment.
 
 Unless the dispatch prompt forbade posting, comment the marked findings + verdict
 on the PR. Report the verdict (and findings, if in report-only mode) back to
