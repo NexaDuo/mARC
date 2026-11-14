@@ -111,7 +111,7 @@ Google documents/opens a public marketplace-registration command.
       is now a real, self-contained, compiled directory per harness
       (`scripts/compile_prompts.py` from `core/hooks/hooks.spec.json`) — do not
       reintroduce the symlink.
-- [x] Native Antigravity hook dialect compiler (`hook_dialect: "antigravity"`) targeting `PreInvocation`, `PostToolUse`, `Stop` with `$PWD`/`$OLDPWD` fallbacks and session/conversation ID extraction (origin: #193, #220, #221)
+- [x] Native Antigravity hook dialect compiler (`hook_dialect: "antigravity"`) targeting `PreInvocation`, `PostToolUse`, `Stop` with a `$PWD` fallback (the `$OLDPWD` step was dropped in #370) and session/conversation ID extraction (origin: #193, #220, #221)
 - [x] Subagent orchestration with `Workspace: "share"`, Gemini model tiers, `define_subagent`, and `send_message` (origin: #193)
 - [x] Cross-harness script and hooks parity test gates (`test_hooks_parity.py`, `test_script_parity.py`)
 - [ ] Implement dual `.claude/` and `.agents/` directory lookup across all shell helpers

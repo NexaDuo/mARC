@@ -28,7 +28,7 @@ What each CLI really provides (evidence, see also scripts/probe_shell_env.py):
   * Codex: hooks get PLUGIN_ROOT, CLAUDE_PLUGIN_ROOT, PLUGIN_DATA,
     CLAUDE_PLUGIN_DATA, run via `<shell> -lc` (openai/codex
     codex-rs/hooks/src/engine/discovery.rs, command_runner.rs); cwd = the
-    session cwd (assumed). The model's shell gets none of them (observed by
+    session cwd (verified in #370). The model's shell gets none of them (observed by
     probe_shell_env.py on 0.156.1 and 0.162.1).
   * Copilot: hooks get PLUGIN_ROOT, COPILOT_PLUGIN_ROOT, CLAUDE_PLUGIN_ROOT,
     COPILOT_PLUGIN_DATA, CLAUDE_PLUGIN_DATA, COPILOT_PROJECT_DIR,
@@ -81,10 +81,7 @@ HARNESS = ""
 # matching and fails red. An XFAIL is printed and counted, never hidden; if
 # the check starts passing (XPASS) that is a failure, so the entry gets
 # removed in the fixing PR.
-XFAIL = {
-    ("codex", "team-toml@SessionStart[*]: the workspace's team.toml reaches the session"):
-        "https://github.com/NexaDuo/mARC/issues/370",
-}
+XFAIL = {}
 
 
 def check(ok: bool, msg: str) -> bool:
