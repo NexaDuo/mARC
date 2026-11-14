@@ -43,7 +43,7 @@ import compile_prompts  # noqa: E402
 
 AGY = os.path.join(REPO, "harnesses", "antigravity", "marc")
 CORE = os.path.join(REPO, "core")
-REFS = ["dispatch.md", "planning.md", "review-release.md"]
+REFS = ["dispatch.md", "planning.md", "review-release.md", "concurrent-operators.md"]
 
 _failures: list[str] = []
 
@@ -56,6 +56,37 @@ def check(cond: bool, msg: str) -> None:
 
 CWD_FALLBACK = re.compile(r"\$\{[A-Za-z_]+:-(\.|\$PWD)\}/scripts|(^|[\s\"'(])\./scripts/")
 INVOCATION = re.compile(r'python3 "(.+?)/([A-Za-z0-9_.\-]+\.py)"')
+
+
+FENCE = re.compile(r"(?ms)^```[^\n]*\n(.*?)^```")
+
+
+def resolve_invocations(text: str, expr: str) -> list[tuple[str, str]]:
+    """Bundled-script invocations, with `"$S/<name>.py"` credited to the
+    resolver only when the SAME fenced block assigns `S="<resolver>"` before
+    the use (#378 SEC-3/REV-2: each agent shell call starts fresh, so an `S`
+    set in another block is empty). Invocations outside fences count as-is."""
+    out: list[tuple[str, str]] = []
+    for block in [m.group(1) for m in FENCE.finditer(text)] + [FENCE.sub("", text)]:
+        assign = block.find(f'S="{expr}"')
+        for m in INVOCATION.finditer(block):
+            e, n = m.group(1), m.group(2)
+            if e == "$S" and assign != -1 and assign < m.start():
+                e = expr
+            out.append((e, n))
+    return out
+
+
+def guard_self_test(expr: str) -> None:
+    """Negative cases: the guard must reject `$S` used without a same-block assignment."""
+    ok = f'```bash\nS="{expr}"; python3 "$S/board.py" claim\n```\n'
+    other_block = f'```bash\nS="{expr}"\n```\n```bash\npython3 "$S/merge_gate.py" --pr 1\n```\n'
+    after_use = f'```bash\npython3 "$S/board.py" x\nS="{expr}"\n```\n'
+    check(all(e == expr for e, _ in resolve_invocations(ok, expr)), "guard accepts same-block S= one-liner")
+    check(any(e != expr for e, _ in resolve_invocations(other_block, expr)),
+          "guard rejects $S set only in another fenced block")
+    check(any(e != expr for e, _ in resolve_invocations(after_use, expr)),
+          "guard rejects $S used before its assignment")
 
 
 def compile_config() -> dict:
@@ -192,6 +223,7 @@ def main() -> int:
     check("agy plugin list --json" in expr and ":-" not in expr,
           "resolver expression uses `agy plugin list --json` and has no `:-` default")
 
+    guard_self_test(expr)
     with tempfile.TemporaryDirectory() as tmp:
         compiled = compile_refs(config, os.path.join(tmp, "out"))
         for name, text in compiled.items():
@@ -205,7 +237,7 @@ def main() -> int:
             check("AGY_PLUGIN_ROOT:-." not in text, f"{rel}: no `${{AGY_PLUGIN_ROOT:-.}}`")
             check(not CWD_FALLBACK.search(text), f"{rel}: no cwd fallback for bundled scripts")
 
-        invocations = [m for t in compiled.values() for m in INVOCATION.findall(t)]
+        invocations = [inv for t in compiled.values() for inv in resolve_invocations(t, expr)]
         names = sorted({n for _, n in invocations})
         check(len(names) >= 3, f"found bundled-script invocations: {names}")
         check(all(e == expr for e, _ in invocations),

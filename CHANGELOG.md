@@ -16,6 +16,24 @@ date whose `YY.M.D` is already taken.
   and the pipeline runs the suite outside the sandbox and sends failures back
   as a fix round, as before. The new optional `[task] task_check_hint` names
   that check.
+- The `@techlead` claim protocol and the pre-merge gate now run as bundled
+  scripts instead of prose (#378). `board.py` gains `claim`, `withdraw` and
+  `worktrees`, and the new `merge_gate.py` checks reviewer markers, trusted
+  authors, `reviewed-sha` at HEAD, unresolved threads in one call (CI is checked separately).
+  `concurrent-operators.md` and `review-release.md` shrink accordingly, with
+  every governed rule keeping its origin tag. The gate reads review comments
+  with a strict line grammar and blocks by default: exact marker on line 1,
+  `reviewer: <id>` and a 40-hex `reviewed-sha:` on lines 2 and 3, and exactly
+  one `verdict: PASS|ADVISE|BLOCK` line. Bold, heading or trailing-prose forms
+  are malformed and block until the same reviewer re-posts. Reviewers on an
+  older plugin version running against a newer gate (or the reverse) get
+  blocked gates until both sides update. Marker detection runs on a
+  normalised rendering (NFKC, zero-width, HTML, entities, emphasis, any heading
+  level, first five lines), so a near-miss heading from a trusted author is a
+  blocking suspect, not silently skipped (SEC-20/REV-18). This refines the
+  exact-prefix detection of @arch rule 2; the strict grammar still decides what
+  counts. `dispatch_agent.py task` posts review comments in the strict header
+  shape, so pipeline reviews satisfy the gate (REV-17).
 
 ### Deprecated
 

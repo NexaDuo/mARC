@@ -118,6 +118,8 @@ CLAUDE_REVIEW_DENIED = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "We
 # Whole tokens with a digit in them: "task-runner-retry-on-timeout" is not a key.
 SECRET_RE = re.compile(r"(?<![\w-])(?:gh[opsu]_|github_pat_|pypi-|sk-)(?=[\w-]*\d)[\w-]{20,}"
                        r"|(?<!\w)AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY")
+# Mirrors merge_gate._CANDIDATE_RE: any line that leads with a verdict label.
+GATE_LABEL_RE = re.compile(r"[^A-Za-z0-9\n]*verdict[^A-Za-z0-9\n]*[:\uff1a]", re.ASCII | re.IGNORECASE)
 VERDICT_RE = re.compile(
     r"^[\s`*_]*@(rev|sec) verdict:\s*(PASS|ADVISE|BLOCK)\s*;\s*high=(\d+)\s+medium=(\d+)\s+low=(\d+)"
     r"[\s`*_.]*$",
@@ -837,19 +839,25 @@ class Task:
         """The header is the script's, not the reviewer's: the report is model
         output steered by the diff it read, so it must not choose the marker,
         the SHA or the verdict a merge-gate reader sees."""
-        who = "Claude Code headless" if self.reviewer(v.kind) == "claude" else "Codex"
+        who = "claude-code-headless" if self.reviewer(v.kind) == "claude" else "codex"
         full = self.git("rev-parse", f"{sha}^{{commit}}")
         report = v.report.strip() or f"(empty report: {v.error})"
         # team handles in backticks: bare ones would notify GitHub users of that name
         report = re.sub(r"(?<![`\w])@(rev|sec|dev|sre|design|research|techlead|scribe)\b",
                         r"`@\1`", report)
         if v.ok:
-            head = f"## @{v.kind} review\nreviewed-sha: {full}\nverdict: {v.verdict}"
+            # Strict gate header (merge_gate.py, #378): marker, `reviewer: <id>` (no
+            # spaces), 40-hex sha, then exactly ONE line led by the verdict label. Report
+            # lines that lead with the label are defused so they cannot make it two.
+            report = "\n".join(("(report) " + ln) if GATE_LABEL_RE.match(ln) else ln
+                               for ln in report.splitlines())
+            body = (f"## @{v.kind} review\nreviewer: task-pipeline/{who}-{v.kind}-{full[:12]}\n"
+                    f"reviewed-sha: {full}\nverdict: {v.verdict}\n\n"
+                    f"Counts: high={v.high} medium={v.medium} low={v.low}; parsed by the task "
+                    f"pipeline (#361) from the report's last line.\n\n---\n\n{report}")
         else:  # no gate marker: a failed run must not read as a review
-            head = f"## task pipeline: `@{v.kind}` reviewer gave no verdict\nreviewed-sha: {full}"
-        body = (f"{head} (high={v.high} medium={v.medium} low={v.low}; parsed by the task "
-                f"pipeline from the report's last line)\nreviewer: {who}, task pipeline (#361)\n\n"
-                f"---\n\n{report}") if v.ok else f"{head}\nreviewer: {who}\n\n---\n\n{report}"
+            body = (f"## task pipeline: `@{v.kind}` reviewer gave no verdict\n"
+                    f"reviewed-sha: {full}\nreviewer: {who}\n\n---\n\n{report}")
         f = self.file(f"review-{v.kind}-comment.md")
         f.write_text(body + "\n", encoding="utf-8")
         self.gh("pr", "comment", pr, "--body-file", str(f))
