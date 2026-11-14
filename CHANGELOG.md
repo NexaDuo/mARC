@@ -12,7 +12,7 @@ date whose `YY.M.D` is already taken.
 
 ### Fixed
 
-- Codex hooks no longer read the shell's `OLDPWD`; closes #370.
+- Compiled hook commands in all four harnesses no longer fall back to the shell's `OLDPWD`, only to `$PWD`. Only Codex behaviour changes (the others always have a project dir set), so Codex hooks now resolve the session cwd; closes #370.
 
 ## [26.11.12] - 2026-11-11
 
