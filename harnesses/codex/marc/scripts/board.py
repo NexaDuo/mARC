@@ -1025,7 +1025,11 @@ def _cmd_worktrees(args: argparse.Namespace) -> int:
         print(json.dumps(out, indent=2, sort_keys=True))
     else:
         if args.branch is not None:
-            print(f"branch {args.branch}: " + (f"TAKEN at {out['branch_path']}" if out["branch_taken"] else "free"))
+            state = ("TAKEN at " + out["branch_path"] + (" (dead worktree: escalate to the user)"
+                                                         if out.get("branch_holder_dead") else "")
+                     if out["branch_taken"]
+                     else "free (checked out in this worktree)" if out.get("branch_is_current") else "free")
+            print(f"branch {args.branch}: {state}")
         for d in out["dead"]:
             print(f"  dead worktree {d['path']} -> ask the user to run: {d['remedy']}")
         if out["advice"]:
@@ -1033,7 +1037,7 @@ def _cmd_worktrees(args: argparse.Namespace) -> int:
         for w in out["warnings"]:
             print(f"  ! {w}")
     if args.branch is not None and out.get("branch_taken"):
-        return 1
+        return 3 if out.get("branch_holder_dead") else 1
     return 3 if out["dead"] else 0
 
 

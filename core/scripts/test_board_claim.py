@@ -326,6 +326,31 @@ class CliExitCodes(unittest.TestCase):
         self.assertEqual(rc, 3)
 
 
+class WorktreesCli(CliExitCodes):
+    """REV-10 (#382): `board.py worktrees --branch` exit codes match the docs:
+    0 free, 1 taken by a live holder, 3 held by a dead worktree."""
+
+    def wt(self, branch):
+        def gh(cmd):
+            if cmd[:4] == ["git", "-C", cmd[2], "worktree"]:
+                return PORCELAIN
+            if "--show-toplevel" in cmd:
+                return "/repo/.claude/worktrees/me\n"
+            if "rev-parse" in cmd:
+                return BASE + "\n"
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return "[]"
+            return ""
+        return self.run_cli(["worktrees", "--branch", branch], gh)[0]
+
+    def test_codes(self):
+        # (other dead worktrees in the fixture make a free branch exit 3, never 1)
+        self.assertEqual(self.wt("fix/343-agy-hook-dispatcher"), 1)  # live holder: taken
+        self.assertEqual(self.wt("feat/gone"), 3)  # dead holder: escalate, not "pick another"
+        self.assertNotEqual(self.wt("cost/378-scriptify"), 1)  # own worktree is not taken
+        self.assertNotEqual(self.wt("brand/new"), 1)
+
+
 class Worktrees(unittest.TestCase):
     def assess(self, linked=None, exists=None, dirty=None, branch=None):
         entries = bc.parse_worktrees(PORCELAIN)
@@ -388,6 +413,21 @@ class Worktrees(unittest.TestCase):
         self.assertTrue(out["branch_taken"])
         self.assertEqual(out["branch_path"], "/repo-worktrees/agy-343")
         self.assertFalse(self.assess(branch="feat/new")["branch_taken"])
+
+    def test_own_worktree_does_not_take_the_branch(self):
+        # REV-10 (#382): the caller's own checkout is not "taken elsewhere".
+        out = self.assess(branch="cost/378-scriptify")
+        self.assertFalse(out["branch_taken"])
+        self.assertTrue(out["branch_is_current"])
+        self.assertEqual(out["dead"], [d for d in out["dead"] if d["path"] != "/repo/.claude/worktrees/me"])
+
+    def test_dead_holder_flagged(self):
+        out = self.assess(branch="feat/gone")
+        self.assertTrue(out["branch_taken"])
+        self.assertTrue(out["branch_holder_dead"])
+        live = self.assess(branch="fix/343-agy-hook-dispatcher")
+        self.assertTrue(live["branch_taken"])
+        self.assertFalse(live["branch_holder_dead"])
 
     def test_no_base_no_dead(self):
         out = bc.assess_worktrees(bc.parse_worktrees(PORCELAIN), None, lambda b: None)

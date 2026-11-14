@@ -15,7 +15,11 @@ plus the PR's review threads (GraphQL `reviewThreads`) and decides:
     current `headRefOid` is the verdict; an older SHA does not count (#125).
   * The verdict is the line-anchored `verdict: PASS|ADVISE|BLOCK` field
     (markdown emphasis tolerated), ignoring fenced code and HTML comments.
+    The value must end the line (a `PASS/ADVISE/BLOCK` template or trailing
+    prose is no verdict); an unclosed `<!--` is ambiguous (fail closed).
     BLOCK, no verdict, or two distinct values (ambiguous) blocks the merge.
+    A trusted BLOCK that cannot be bound (other `reviewer:`, short/missing SHA)
+    and is newer than the counted verdict also blocks (SEC-9, #382).
     `reviewed-sha:` must be the full 40-char HEAD SHA.
   * A `reviewer:` line that is present but differs from the dispatched value
     (`--expect-reviewer`) is not counted (#216).
@@ -51,12 +55,18 @@ KINDS = ("sec", "rev")
 # markdown emphasis (`**Verdict: PASS**`, `Verdict: **PASS**`). Prose that
 # merely mentions a verdict mid-line, blockquotes, fenced code and HTML
 # comments never count (SEC-1, #382).
-_VERDICT_RE = re.compile(r"(?im)^[ \t]*[*_]{0,3}[ \t]*verdict[ \t]*[*_]{0,3}[ \t]*:[ \t]*[*_`]{0,3}[ \t]*"
-                         r"(PASS|ADVISE|BLOCK)\b")
+# The value must END the line (emphasis, a period, and one trailing parenthetical
+# aside are allowed): `Verdict: PASS would need X` and `PASS/ADVISE/BLOCK`
+# (a template listing every value) are no verdict. An optional heading (`###`)
+# or list (`-`) prefix is accepted: reviewers post that form (REV-8, SEC-11, #382).
+_VERDICT_RE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+)?[*_]{0,3}[ \t]*verdict[ \t]*[*_]{0,3}[ \t]*:"
+                         r"[ \t]*[*_`]{0,3}[ \t]*(PASS|ADVISE|BLOCK)[*_`]{0,3}\.?[*_`]{0,3}[ \t]*"
+                         r"(?:\([^\n]*\))?[ \t]*$")
 _SHA_RE = re.compile(r"(?im)^[ \t]*reviewed-sha[ \t]*:[ \t]*`?([0-9a-f]{40})\b")
 _REVIEWER_RE = re.compile(r"(?im)^[ \t]*reviewer[ \t]*:[ \t]*`?([^`\s]+)")
 _FENCE_RE = re.compile(r"(?ms)^[ \t]*(```|~~~).*?(^[ \t]*\1[^\n]*$|\Z)")
 _HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?(-->|\Z)")
+_CLOSED_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
 MAX_THREAD_PAGES = 20
 
 THREADS_QUERY = (
@@ -70,6 +80,12 @@ THREADS_QUERY = (
 def strip_non_prose(body: str) -> str:
     """Drop fenced code blocks and HTML comments (an unclosed one runs to the end)."""
     return _FENCE_RE.sub("", _HTML_COMMENT_RE.sub("", body))
+
+
+def _has_unclosed_comment(body: str) -> bool:
+    """An `<!--` outside fenced code with no `-->` would hide everything after it
+    from the parser while the rendered comment shows it: fail closed (SEC-7, #382)."""
+    return "<!--" in _CLOSED_COMMENT_RE.sub("", _FENCE_RE.sub("", body))
 
 Runner = Callable[[list], str]
 
@@ -100,7 +116,13 @@ AMBIGUOUS = "AMBIGUOUS"
 def parse_verdict(body: str) -> Optional[str]:
     """The single `verdict:` field value; AMBIGUOUS (fail closed) when the
     body carries more than one distinct value."""
-    found = {v.upper() for v in _VERDICT_RE.findall(strip_non_prose(body))}
+    if _has_unclosed_comment(body):
+        return AMBIGUOUS
+    # Two strip orders: a fence opener inside a comment (or the reverse) must not
+    # hide a verdict from one view; any disagreement is ambiguous (fail closed).
+    views = (strip_non_prose(body),
+             _HTML_COMMENT_RE.sub("", _FENCE_RE.sub("", body)))
+    found = {v.upper() for view in views for v in _VERDICT_RE.findall(view)}
     if not found:
         return None
     return found.pop() if len(found) == 1 else AMBIGUOUS
@@ -117,6 +139,7 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
     blockers: list[str] = []
     verdicts: dict = {}
     ignored: list[dict] = []
+    suspect: dict = {}  # kind -> skipped trusted BLOCK-ish markers newer than the counted verdict
 
     for c in pr.get("comments") or []:
         body = c.get("body") or ""
@@ -134,17 +157,34 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
         if info["association"] not in TRUSTED:
             ignored.append({**info, "reason": "untrusted author association"})
             continue
-        if not sha_matches(info["reviewed_sha"], head):
-            ignored.append({**info, "reason": "reviewed-sha is not the current HEAD"})
-            continue
+        # Only PASS/ADVISE need the reviewer+SHA binding to count. A trusted BLOCK
+        # (or conflicting verdicts) that cannot be bound (missing/short/bolded SHA,
+        # other reviewer) is skipped for selection but never silently: it blocks
+        # until a later bound verdict supersedes it (SEC-9, #382). A full 40-char
+        # SHA that is not HEAD is a plain older round.
+        risky = info["verdict"] in ("BLOCK", AMBIGUOUS)
+        sha_ok = sha_matches(info["reviewed_sha"], head)
         want = expect_reviewer.get(kind)
-        if want and info["reviewer"] and info["reviewer"] != want:
+        mismatch = bool(want and info["reviewer"] and info["reviewer"] != want)
+        if not sha_ok:
+            ignored.append({**info, "reason": "reviewed-sha is not the current HEAD"})
+            if risky and info["reviewed_sha"] is None:
+                suspect.setdefault(kind, []).append(info)
+            continue
+        if mismatch:
             ignored.append({**info, "reason": f"reviewer {info['reviewer']!r} != dispatched {want!r}"})
+            if risky:
+                suspect.setdefault(kind, []).append(info)
             continue
         verdicts[kind] = info  # comments are chronological; the latest wins
+        suspect.pop(kind, None)
 
     for k in KINDS:
         v = verdicts.get(k)
+        for sus in suspect.get(k, []):
+            blockers.append(f"trusted @{k} {sus['verdict']} not bound to this HEAD/reviewer (reviewer "
+                            f"{sus['reviewer']!r}, reviewed-sha {sus['reviewed_sha']!r}): fail closed, "
+                            f"re-review or resolve it: {sus['url']}")
         if v is None:
             blockers.append(f"no trusted `## @{k} review` at HEAD {head[:12]} (re-review at HEAD)")
         elif v["verdict"] is None:

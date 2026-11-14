@@ -362,10 +362,14 @@ def assess_worktrees(entries: list[dict], base_sha: Optional[str],
                       "(the directory may hold uncommitted work)")
            if any(e["dead"] for e in result) else ""}
     if branch is not None:
-        holder = next((e for e in result if e["branch"] == branch), None)
+        # The caller's own worktree does not take the branch from the caller
+        # (a re-check before a fix-round dispatch on your own branch is "free").
+        holder = next((e for e in result if e["branch"] == branch and not e["current"]), None)
         out["branch"] = branch
         out["branch_taken"] = holder is not None
         out["branch_path"] = holder["path"] if holder else None
+        out["branch_holder_dead"] = bool(holder and holder["dead"])
+        out["branch_is_current"] = any(e["branch"] == branch and e["current"] for e in result)
     return out
 
 

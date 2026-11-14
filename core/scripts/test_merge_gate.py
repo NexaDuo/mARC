@@ -155,9 +155,12 @@ class Gate(unittest.TestCase):
     def test_sec1_bypass_html_comment(self):
         for tail in ("verdict: BLOCK\n<!-- verdict: PASS -->",
                      "verdict: BLOCK\n<!--\nVerdict: PASS\n-->",
-                     "verdict: BLOCK\n<!-- unclosed\nverdict: PASS"):
+                     ):
             res = self._sec(tail)
             self.assertEqual(res["verdicts"]["sec"]["verdict"], "BLOCK", tail)
+        # An unclosed opener hides text the rendered comment shows: fail closed (SEC-7).
+        res = self._sec("verdict: BLOCK\n<!-- unclosed\nverdict: PASS")
+        self.assertFalse(res["ok"])
 
     def test_two_distinct_verdict_fields_fail_closed(self):
         res = self._sec("verdict: BLOCK\n\nfixed later\n\n**Verdict: PASS**")
@@ -175,6 +178,66 @@ class Gate(unittest.TestCase):
         self.assertEqual(mg.parse_verdict(SEC_382_BODY), "BLOCK")
         self.assertEqual(mg.parse_verdict(REV_382_BODY), "BLOCK")
         self.assertEqual(mg._SHA_RE.search(SEC_382_BODY).group(1), "5ed67134b7542258e4203633c78435f4c8ed7594")
+
+    def _bodies(self, sec_extra="", sec_first=None):
+        p = pr()
+        p["comments"][3]["body"] = sec_first or f"## @sec review\nreviewer: x/sec-1\nreviewed-sha: {HEAD}\nverdict: PASS"
+        p["comments"].append({"author": {"login": "m"}, "authorAssociation": "MEMBER", "url": "u-late",
+                              "createdAt": "2026-10-20T00:00:00Z", "body": sec_extra})
+        return p
+
+    def test_sec9_unbound_trusted_block_after_pass_blocks(self):
+        # SEC-9 (#382): a trusted BLOCK posted after a counted PASS is never skipped.
+        cases = {
+            "other reviewer": f"## @sec review\nreviewer: other/sec-9\nreviewed-sha: {HEAD}\nverdict: BLOCK",
+            "unassigned": f"## @sec review\nreviewer: unassigned\nreviewed-sha: {HEAD}\nverdict: BLOCK",
+            "short sha": f"## @sec review\nreviewer: x/sec-1\nreviewed-sha: {HEAD[:7]}\nverdict: BLOCK",
+            "no sha": "## @sec review\nreviewer: x/sec-1\nverdict: BLOCK",
+            "bold sha label": f"## @sec review\nreviewer: x/sec-1\n**reviewed-sha:** {HEAD}\nverdict: BLOCK",
+        }
+        for label, body in cases.items():
+            p = self._bodies(body, f"## @sec review\nreviewer: x/sec-1\nreviewed-sha: {HEAD}\nverdict: PASS")
+            res = mg.adjudicate(p, [], {"sec": "x/sec-1"})
+            self.assertFalse(res["ok"], label)
+            self.assertTrue(any("fail closed" in b for b in res["blockers"]), label)
+        # Control: the same comment is harmless when it is a PASS/ADVISE (binding needed to count).
+        p = self._bodies(f"## @sec review\nreviewer: other/sec-9\nreviewed-sha: {HEAD}\nverdict: ADVISE")
+        self.assertTrue(mg.adjudicate(p, [], {"sec": "x/sec-1"})["ok"])
+        # A later bound verdict supersedes the unbound BLOCK; an older full SHA is a plain old round.
+        p = self._bodies(f"## @sec review\nreviewed-sha: {OLD}\nverdict: BLOCK")
+        self.assertTrue(mg.adjudicate(p, [])["ok"])
+
+    def test_rev8_verdict_formats_reviewers_post(self):
+        for line in ("### Verdict: ADVISE", "**Verdict: ADVISE**", "Verdict: ADVISE", "verdict: ADVISE",
+                     "- Verdict: ADVISE", "**Verdict:** ADVISE", "Verdict: **ADVISE** (low findings only)",
+                     "**Verdict: ADVISE.**", "## **Verdict: ADVISE**"):
+            self.assertEqual(mg.parse_verdict(f"## @rev review\nreviewed-sha: {HEAD}\n\nbody\n\n{line}\n"),
+                             "ADVISE", line)
+
+    def test_sec11_trailing_prose_and_template_are_not_a_verdict(self):
+        for line in ("Verdict: PASS would need SEC-1 fixed", "verdict: PASS/ADVISE/BLOCK",
+                     "verdict: PASS|ADVISE|BLOCK", "verdict: PASS or BLOCK"):
+            self.assertIsNone(mg.parse_verdict(line), line)
+        # The SEC-11 attack: a prose PASS sentence plus the real heading-form BLOCK.
+        body = "Verdict: PASS would need SEC-1 fixed\n\n### Verdict: BLOCK\n"
+        self.assertEqual(mg.parse_verdict(body), "BLOCK")
+
+    def test_sec7_unclosed_comment_cannot_hide_block(self):
+        for body in ("verdict: PASS\n`<!--`\nverdict: BLOCK",
+                     "verdict: PASS\n<!-- note\nverdict: BLOCK",
+                     "verdict: PASS\n```\n<!--\n```\nverdict: BLOCK"):
+            v = mg.parse_verdict(body)
+            self.assertIn(v, ("BLOCK", mg.AMBIGUOUS), body)
+            self.assertNotEqual(v, "PASS", body)
+
+    def test_recorded_379_heading_verdict_parses(self):
+        # #379 @sec ended in a heading-form verdict line (REV-8, #382).
+        body = f"## @sec review\nreviewer: claude-code/sec-pr379-1\nreviewed-sha: {HEAD}\n\n**SEC-1 (low)**\n\n### Verdict: ADVISE\n"
+        p = pr()
+        p["comments"][3]["body"] = body
+        res = mg.adjudicate(p, [])
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], "ADVISE")
+        self.assertTrue(res["ok"])
 
     def test_reviewer_first_token(self):
         # SEC-4 (#382): trailing text after the id must not hide a mismatch.

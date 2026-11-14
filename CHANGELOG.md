@@ -19,7 +19,7 @@ date whose `YY.M.D` is already taken.
 - The `@techlead` claim protocol and the pre-merge gate now run as bundled
   scripts instead of prose (#378). `board.py` gains `claim`, `withdraw` and
   `worktrees`, and the new `merge_gate.py` checks reviewer markers, trusted
-  authors, `reviewed-sha` at HEAD, unresolved threads and CI in one call.
+  authors, `reviewed-sha` at HEAD, unresolved threads in one call (CI is checked separately).
   `concurrent-operators.md` and `review-release.md` shrink accordingly, with
   every governed rule keeping its origin tag.
 

@@ -15,8 +15,10 @@ forged marker or a dead worktree, with the remedy printed. Add `--json` for
 the full resolution (live/retired claims, suspected forgeries, reasons).
 <!-- rules:origin-required -->
 - **Claim with a `## @techlead claim` comment marker, never the assignee field.**
-  The marker carries `operator:`, `issue: #<N>` and `claimed-at:`; an issue
-  with no valid marker is not claimed, whoever is assigned. (origin: #213 · 2026-08-25)
+  The marker is the exact first line of the comment (nothing else on it, no
+  leading blank line) and carries `operator:`, `issue: #<N>` and `claimed-at:`;
+  an issue with no valid marker is not claimed, whoever is assigned.
+  (origin: #213 · 2026-08-25)
 - **A marker counts only from an `OWNER`/`MEMBER`/`COLLABORATOR` author**
   (public repo: anyone can comment). The script reads `authorAssociation` from
   `gh issue view --json comments` and `author_association` from REST, and fails

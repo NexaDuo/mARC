@@ -166,6 +166,10 @@ a **verdict**:
 - **ADVISE** — only medium/low findings; merge may proceed with them noted.
 - **PASS** — nothing found.
 
+The merge gate reads exactly one line shaped `verdict: PASS|ADVISE|BLOCK` (one
+value, alone on its line) plus the `reviewer:` line and a `reviewed-sha:` line
+holding the full 40-char HEAD SHA; write each as a plain `field: value` line.
+
 Unless the dispatch prompt forbade posting, comment the marked findings + verdict
 on the PR. Report the verdict (and findings, if in report-only mode) back to
 @techlead / dispatcher so the merge gate can be honored.
