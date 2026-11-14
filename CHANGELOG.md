@@ -16,6 +16,12 @@ date whose `YY.M.D` is already taken.
   and the pipeline runs the suite outside the sandbox and sends failures back
   as a fix round, as before. The new optional `[task] task_check_hint` names
   that check.
+- The `@techlead` claim protocol and the pre-merge gate now run as bundled
+  scripts instead of prose (#378). `board.py` gains `claim`, `withdraw` and
+  `worktrees`, and the new `merge_gate.py` checks reviewer markers, trusted
+  authors, `reviewed-sha` at HEAD, unresolved threads and CI in one call.
+  `concurrent-operators.md` and `review-release.md` shrink accordingly, with
+  every governed rule keeping its origin tag.
 
 ### Deprecated
 
