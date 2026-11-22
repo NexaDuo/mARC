@@ -207,13 +207,18 @@ cheapest lever on token budget:
   (origin: #385 · 2026-11-10)
 - **A Codex `@dev` run gets 1800 s, not 300 s; a timeout keeps its worktree.**
   `dispatch_agent.py` defaults a Codex writer to 1800 s (team.toml
-  `[orchestration] codex_timeout_sec`, or `--timeout`). When a run times out,
-  read `partial_work` in the result (worktree path, `git status`, diff stat)
-  and decide whether to finish or adopt it; never re-dispatch the same task
-  blind. The sandbox cannot write toolchain caches outside the worktree unless
-  the consumer lists them in `codex_writable_dirs` (and, deliberately,
-  `codex_network_access`); both are off by default and reported in the result.
-  If the suite still cannot run in the sandbox, the operator runs it, as before.
+  `[orchestration] codex_timeout_sec`, at most 7200, or `--timeout`). When a
+  run times out, read `partial_work` in the result: one attributed worktree
+  (path, `git status`, diff stat) can be finished or adopted; unattributed
+  `candidates` are for you to inspect, never to remove on the script's say-so.
+  Never re-dispatch the same task blind. The sandbox cannot write toolchain
+  caches outside the worktree unless the operator lists them in their own
+  `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml` (`codex_writable_dirs`, and,
+  deliberately, `codex_network_access`, per `[repos."<abs path>"]`). The
+  checkout's team.toml cannot set these (ignored with a warning: a PR must not
+  widen its own sandbox); both are off by default and reported in the result
+  with their source. The `task` pipeline does not use this resolution. If the
+  suite still cannot run in the sandbox, the operator runs it, as before.
   (origin: #401 · 2026-11-22)
 - **Escalate to `@arch` on explicit triggers, never on a feeling of being out
   of depth.** The operator MUST dispatch `@arch` (read-only, `claude-code`

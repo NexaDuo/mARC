@@ -217,26 +217,34 @@ research = "claude-code"
 
 # Codex writer runs on real apps (optional, origin: #401). Plain dispatch and
 # `start` give a Codex writer 1800 s by default (300 s for every other
-# harness and for Codex reviewers); `--timeout` beats everything below. On a
-# timeout the managed worktree is kept and the result JSON carries
-# `partial_work` (worktree path, `git status`, `git diff --stat`) so you can
-# finish, adopt or discard it. All keys are read only from the dispatching
-# checkout's team.toml, a malformed value stops the dispatch (exit 2), and the
-# result JSON reports the widening that was applied.
+# harness and for Codex reviewers); `--timeout` beats everything below and is
+# not capped. On a timeout the sync path kills the Codex process group, the
+# managed worktree is kept, and the result JSON carries `partial_work` for the
+# one worktree it can attribute to the run (else unattributed `candidates`).
+# The `task` pipeline does not use this timeout or sandbox resolution.
 #
-# Sandbox widening is OFF by default. Each entry widens what code Codex writes
-# can touch, so list specific toolchain caches, never your home or a root:
-#   - codex_writable_dirs: absolute directories (a leading `~` is fine), passed
-#     as `codex exec --add-dir <dir>`. Meant for caches a build or test run
-#     writes outside the worktree (a package cache, an SDK cache, a cargo home).
-#   - codex_network_access: true passes `-c sandbox_workspace_write.network_access=true`
-#     so the sandbox can reach the network (package downloads). Everything the
-#     run reads, including secrets in your environment, can then leave the machine.
-# These are not proven to make a given toolchain's test run pass; try one task.
+# codex_timeout_sec lives here (read from the dispatching checkout's team.toml,
+# at most 7200, a malformed value stops the dispatch with exit 2; needs
+# Python 3.11+):
 # [orchestration]
 # codex_timeout_sec = 2400
-# codex_writable_dirs = ["~/.pub-cache", "~/.cargo"]
-# codex_network_access = false
+#
+# Sandbox widening is OFF by default and is NOT read from this file: a PR could
+# otherwise widen its own sandbox. Keys set here are ignored with a warning.
+# The operator sets them in a user-level file the checkout cannot write,
+# ${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml (refused if it resolves inside
+# the checkout; needs Python 3.11+), one section per repo keyed by the absolute
+# realpath of the repo top-level:
+#   [repos."/abs/path/to/repo"]
+#   codex_writable_dirs = ["~/.cache/toolchain"]   # passed as `--add-dir`
+#   codex_network_access = false                    # true: `-c sandbox_workspace_write.network_access=true`
+# codex_writable_dirs entries must be existing directories meant for caches a
+# build or test run writes outside the worktree. Refused: `/`, your home or its
+# ancestors, the checkout or its ancestors, system trees (/etc, /usr, /var, ...),
+# credential and agent dirs under home (~/.ssh, ~/.aws, ~/.codex, ~/.claude, ...)
+# and the repo's git dir. Symlinks are resolved first. Network access lets
+# everything the run reads, including secrets in your environment, leave the
+# machine. Neither is proven to make a given toolchain's test run pass.
 
 # --- Task pipeline (optional, OFF unless you uncomment it, origin: #361) ---
 # `dispatch_agent.py task` runs one task end to end: Codex implements, the

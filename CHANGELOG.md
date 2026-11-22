@@ -19,10 +19,16 @@ date whose `YY.M.D` is already taken.
   dev/sre/design) default to a 1800 s timeout instead of 300 s (#401), because
   real app tasks stopped at 300 s with half-written files. Other harnesses and
   Codex reviewers keep 300 s. Set `[orchestration] codex_timeout_sec` in
-  team.toml, or pass `--timeout`, to change it.
+  team.toml (at most 7200 s, needs Python 3.11+), or pass `--timeout` (not
+  capped), to change it. The `task` pipeline does not use this resolution.
 - A timed-out Codex writer run now keeps its managed worktree and the result
-  JSON gains `partial_work` (worktree path, `git status`, `git diff --stat`)
-  for the dispatcher to decide (#401). Results also report `timeout_sec`.
+  JSON gains `partial_work` for the dispatcher to decide (#401). It reports
+  path, `git status` and `git diff --stat` only for the one new worktree under
+  Codex's managed root (`.agents/codex/worktrees/`) that appeared during the
+  run; several are listed as unattributed `candidates` (path only, no removal
+  advice), and a worktree another operator adds meanwhile is never reported.
+  The sync path also kills the Codex process group on timeout. Results report
+  `timeout_sec`.
 - `dispatch_agent.py task`: the sandboxed Codex implement and fix steps no
   longer run tests (#349). Some sandboxes refuse test temp dirs even inside
   the workspace, so Codex now stops at a cheap compile/syntax/import check,
@@ -50,12 +56,21 @@ date whose `YY.M.D` is already taken.
 
 ### Added
 
-- Opt-in Codex sandbox widening in team.toml `[orchestration]` (#401), both
-  off by default: `codex_writable_dirs` (passed as `codex exec --add-dir`, for
-  toolchain caches outside the worktree) and `codex_network_access` (passed as
-  `-c sandbox_workspace_write.network_access=true`). Malformed values stop the
-  dispatch; the applied widening is reported in the result JSON and on stderr.
-  Not verified against a real `flutter test` run.
+- Opt-in Codex sandbox widening (#401), both off by default and set only in
+  an operator-side file, `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml`, one
+  `[repos."<abs repo top-level>"]` section per repo: `codex_writable_dirs`
+  (passed as `codex exec --add-dir`, for toolchain caches outside the
+  worktree) and `codex_network_access` (`-c
+  sandbox_workspace_write.network_access=true`). They are deliberately not read
+  from the checkout's team.toml, since a PR could otherwise widen its own
+  sandbox: a team.toml that sets them is ignored with a stderr warning, and a
+  user-level file that resolves inside the checkout is refused. Each directory
+  must exist and is checked after resolving symlinks; `/`, your home or its
+  ancestors, the checkout or its ancestors, system trees, credential and agent
+  directories under home, and the repo's git dir are refused (exit 2).
+  Read-only Codex roles never get the widening. The applied values and their
+  source file are reported in the result JSON and on stderr. Not verified
+  against a real toolchain test run that writes to caches outside the worktree.
 
 ### Deprecated
 

@@ -82,13 +82,18 @@ Routing resolution:
       slug). A malformed pin or profile fails closed; an unknown agy slug makes agy exit
       non-zero, and that exit is reported as is.
     - Codex writer runs on real apps (origin: #401 · 2026-11-22). Default timeout is 1800 s
-      (300 s for everything else); team.toml [orchestration] codex_timeout_sec changes it
-      and `--timeout` beats both. Opt-in sandbox widening, both off by default and read only
-      from the checkout's team.toml: codex_writable_dirs (absolute directories, passed as
-      `--add-dir`, for toolchain caches outside the worktree) and codex_network_access
-      (`-c sandbox_workspace_write.network_access=true`). The result JSON reports both.
-      On a timeout the Codex worktree is kept and the result carries `partial_work`
-      (worktree path, `git status`, `git diff --stat`) so the dispatcher can decide.
+      (300 s for everything else); team.toml [orchestration] codex_timeout_sec (at most
+      7200) changes it and `--timeout` beats both. Opt-in sandbox widening, both off by
+      default, is NOT read from the checkout (a PR could widen its own sandbox): only from
+      the operator's `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml`, per repo under
+      `[repos."<abs repo top-level>"]`: codex_writable_dirs (existing directories, passed
+      as `--add-dir`; home, roots, system trees, credential dirs and the git dir are
+      refused) and codex_network_access (`-c sandbox_workspace_write.network_access=true`).
+      A team.toml that sets them is ignored with a warning. The result JSON reports both
+      and their source. On a timeout the sync path kills the Codex process group and the
+      Codex worktree is kept; the result carries `partial_work` for the one attributable
+      Codex-managed worktree created during the run (else unattributed `candidates`).
+      The `task` pipeline does not use this resolution.
 """
 from __future__ import annotations
 
@@ -104,6 +109,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -596,6 +602,29 @@ def load_model_override(harness: str, role: str, cwd: Optional[str] = None) -> O
     return _check_agy_model(val, f"{path} [orchestration.antigravity_models]")
 
 
+CODEX_MAX_TIMEOUT_SEC = 7200.0
+_CODEX_SANDBOX_KEYS = ("codex_writable_dirs", "codex_network_access")
+_CODEX_REPO_KEYS = ("codex_timeout_sec",) + _CODEX_SANDBOX_KEYS
+# System trees a writable dir may not be, or be inside (realpath-compared).
+_SYSTEM_TREES = ("/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/usr", "/bin", "/sbin",
+                 "/lib", "/lib32", "/lib64", "/libx32", "/var", "/run")
+# Credential and agent-state locations under $HOME a writable dir may not be, or be inside.
+_HOME_DENY = (".ssh", ".gnupg", ".aws", ".kube", ".docker", ".azure", ".codex", ".claude",
+              ".agents", ".config/gh", ".config/gcloud")
+
+
+def _is_within(child: str, parent: str) -> bool:
+    return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def codex_user_config_path() -> Path:
+    """Operator-side Codex sandbox config, `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml` (#401 SEC-1)."""
+    base = os.environ.get("XDG_CONFIG_HOME", "")
+    if not base or not os.path.isabs(base):
+        base = os.path.join(os.path.expanduser("~"), ".config")
+    return Path(base) / "marc" / "codex.toml"
+
+
 def _orchestration_table(cwd: Optional[str]) -> Tuple[Dict[str, Any], Optional[Path]]:
     """[orchestration] of the team.toml discovered from `cwd` (same trust anchor as the pins)."""
     start = Path(cwd) if cwd else Path.cwd()
@@ -607,55 +636,165 @@ def _orchestration_table(cwd: Optional[str]) -> Tuple[Dict[str, Any], Optional[P
     return (orch if isinstance(orch, dict) else {}), path
 
 
-def _check_writable_dir(raw: Any, path: Optional[Path]) -> str:
-    where = f"[orchestration] codex_writable_dirs in {path} (#401)"
+def _checkout_facts(cwd: Optional[str]) -> Tuple[str, Optional[str]]:
+    """(realpath of the checkout top-level, realpath of its git common dir or None)."""
+    start = Path(cwd) if cwd else Path.cwd()
+    top_out = _git_safe(["rev-parse", "--show-toplevel"], cwd=str(start))
+    top = os.path.realpath(top_out.strip() if top_out and top_out.strip() else str(find_repo_root(start)))
+    common_out = _git_safe(["rev-parse", "--git-common-dir"], cwd=str(start))
+    common = (os.path.realpath(os.path.join(str(start), common_out.strip()))
+              if common_out and common_out.strip() else None)
+    return top, common
+
+
+def _check_writable_dir(raw: Any, where: str, top: str, common: Optional[str], cfg: Path) -> str:
+    """Validate one codex_writable_dirs entry; returns its realpath. Fails closed (#401 SEC-2)."""
     if not isinstance(raw, str) or not raw.strip() or "\0" in raw:
         raise ModelPinError(f"{where}: every entry must be a non-empty string")
-    expanded = os.path.normpath(os.path.expanduser(raw.strip()))
-    if expanded.startswith("-") or not os.path.isabs(expanded):
+    text = os.path.expanduser(raw.strip())
+    if text.startswith("-") or not os.path.isabs(text):
         raise ModelPinError(f"{where}: {raw!r} must be an absolute path (a leading '~' is fine)")
-    home = os.path.normpath(os.path.expanduser("~"))
-    if expanded == os.path.dirname(expanded) or expanded == home:
+    real = os.path.realpath(text)
+    if not os.path.isdir(real):
+        raise ModelPinError(f"{where}: {raw!r} (resolves to {real}) is not an existing directory")
+    home_lex = os.path.normpath(os.path.expanduser("~"))
+    home = os.path.realpath(home_lex)
+    anchors = [top]
+    if common and os.path.basename(common) == ".git":
+        anchors.append(os.path.dirname(common))
+    cfg_dirs = [os.path.realpath(str(cfg)), os.path.realpath(str(cfg.parent))]
+    why = None
+    if real == os.path.dirname(real):
+        why = "is the filesystem root"
+    elif _is_within(home, real):
+        why = "is your home directory or one of its ancestors"
+    elif any(_is_within(anchor, real) for anchor in anchors):
+        why = "is the checkout (or its main checkout) or one of their ancestors"
+    elif common and _is_within(real, common):
+        why = "is inside the repository's git directory"
+    elif any(_is_within(c, real) for c in cfg_dirs) or _is_within(real, cfg_dirs[1]):
+        why = "contains or is this sandbox config file's directory"
+    else:
+        for tree in _SYSTEM_TREES:
+            if _is_within(real, os.path.realpath(tree)):
+                why = f"is a system tree ({tree})"
+                break
+        else:
+            for base in {home_lex, home}:
+                for rel in _HOME_DENY + (".config",):
+                    deny = os.path.realpath(os.path.join(base, rel))
+                    if real == deny or (rel != ".config" and _is_within(real, deny)):
+                        why = f"is a credential or agent directory (~/{rel})"
+                        break
+                if why:
+                    break
+    if why:
         raise ModelPinError(
-            f"{where}: {raw!r} is a filesystem root or your whole home directory; "
-            f"name the specific cache directory instead")
-    return expanded
+            f"{where}: {raw!r} (resolves to {real}) {why}; name a specific toolchain cache "
+            f"directory instead")
+    return real
+
+
+def _load_user_codex_sandbox(cwd: Optional[str]) -> Dict[str, Any]:
+    """Sandbox widening for this checkout from the operator's user-level file (#401 SEC-1).
+
+    Never read from the checkout. The file lives outside the repo and is keyed by the
+    realpath of the repo top-level: `[repos."/abs/path"]` with `codex_writable_dirs`
+    and `codex_network_access`. Needs tomllib (Python 3.11+); a linked worktree also
+    matches its main checkout's section.
+    """
+    out: Dict[str, Any] = {"writable_dirs": [], "network_access": False, "source": None}
+    cfg = codex_user_config_path()
+    if not cfg.is_file():
+        return out
+    top, common = _checkout_facts(cwd)
+    real_cfg = os.path.realpath(str(cfg))
+    if _is_within(real_cfg, top) or (common and _is_within(real_cfg, common)):
+        raise ModelPinError(
+            f"codex sandbox config {cfg} resolves inside the checkout ({real_cfg}); the checkout "
+            f"must not be able to widen its own sandbox. Move it outside the repo (#401)")
+    if hasattr(os, "getuid") and os.stat(real_cfg).st_uid != os.getuid():
+        raise ModelPinError(f"codex sandbox config {cfg} is not owned by you; refusing (#401)")
+    try:
+        import tomllib
+    except ImportError:
+        raise ModelPinError(
+            f"{cfg} requires Python 3.11+ (tomllib) to be read; upgrade Python or remove the "
+            f"file (#401)") from None
+    try:
+        with open(real_cfg, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, ValueError) as e:
+        raise ModelPinError(f"cannot parse {cfg}: {e} (#401)") from None
+    repos = data.get("repos", {})
+    if not isinstance(repos, dict):
+        raise ModelPinError(f"[repos] in {cfg} must be a table of per-repo sections (#401)")
+    wanted = [top]
+    if common and os.path.basename(common) == ".git":
+        wanted.append(os.path.dirname(common))
+    section: Optional[Dict[str, Any]] = None
+    for target in wanted:
+        for key, sec in repos.items():
+            if isinstance(sec, dict) and os.path.realpath(key) == target:
+                section = sec
+                break
+        if section is not None:
+            break
+    if section is None:
+        return out
+    where = f"[repos.\"{top}\"] codex_writable_dirs in {cfg} (#401)"
+    dirs = section.get("codex_writable_dirs", [])
+    if not isinstance(dirs, list):
+        raise ModelPinError(f"{where}: must be a TOML array of paths")
+    for raw in dirs:
+        d = _check_writable_dir(raw, where, top, common, cfg)
+        if d not in out["writable_dirs"]:
+            out["writable_dirs"].append(d)
+    net = section.get("codex_network_access", False)
+    if not isinstance(net, bool):
+        raise ModelPinError(f"[repos.\"{top}\"] codex_network_access in {cfg} must be true or false (#401)")
+    out["network_access"] = net
+    out["source"] = str(cfg)
+    return out
 
 
 def load_codex_writer_settings(cwd: Optional[str] = None) -> Dict[str, Any]:
-    """Opt-in Codex writer sandbox and timeout settings from team.toml [orchestration] (#401).
+    """Codex writer timeout (team.toml) and sandbox widening (user-level file only) (#401).
 
-    Keys (all optional, absent = shipped behavior): `codex_timeout_sec` (positive number),
-    `codex_writable_dirs` (array of absolute directories, `~` allowed) and
-    `codex_network_access` (boolean). Read only from the team.toml discovered from `cwd`;
-    a malformed value fails closed with ModelPinError rather than being ignored.
+    `codex_timeout_sec` (positive number, at most CODEX_MAX_TIMEOUT_SEC) is read from the
+    team.toml discovered from `cwd`. `codex_writable_dirs` / `codex_network_access` are
+    NOT read from the checkout, because a PR could widen its own sandbox: a team.toml that
+    sets them is ignored (reported in `ignored_repo_keys`) and the operator's
+    `codex_user_config_path()` file is the only source. A malformed value fails closed.
     """
     orch, path = _orchestration_table(cwd)
-    out: Dict[str, Any] = {"timeout": None, "writable_dirs": [], "network_access": False}
+    out: Dict[str, Any] = {
+        "timeout": None, "timeout_source": None, "writable_dirs": [], "network_access": False,
+        "sandbox_source": None, "ignored_repo_keys": [], "repo_toml": str(path) if path else None,
+    }
     if "codex_timeout_sec" in orch:
+        try:
+            import tomllib  # noqa: F401
+        except ImportError:
+            raise ModelPinError(
+                f"[orchestration] codex_timeout_sec in {path} requires Python 3.11+ (tomllib) "
+                f"to be read; upgrade Python or remove the key (#401)") from None
         val = orch["codex_timeout_sec"]
-        if isinstance(val, bool) or not isinstance(val, (int, float)) or not 0 < val < 7 * 86400:
+        if isinstance(val, bool) or not isinstance(val, (int, float)) or val <= 0:
             raise ModelPinError(
                 f"[orchestration] codex_timeout_sec in {path} must be a positive number of "
-                f"seconds (under 7 days) (#401)")
+                f"seconds (#401)")
+        if val > CODEX_MAX_TIMEOUT_SEC:
+            raise ModelPinError(
+                f"[orchestration] codex_timeout_sec = {val} in {path} exceeds the cap of "
+                f"{int(CODEX_MAX_TIMEOUT_SEC)} s; use --timeout for a one-off longer run (#401)")
         out["timeout"] = float(val)
-    if "codex_writable_dirs" in orch:
-        dirs = orch["codex_writable_dirs"]
-        if not isinstance(dirs, list):
-            raise ModelPinError(
-                f"[orchestration] codex_writable_dirs in {path} must be a TOML array of paths (#401)")
-        seen: List[str] = []
-        for raw in dirs:
-            d = _check_writable_dir(raw, path)
-            if d not in seen:
-                seen.append(d)
-        out["writable_dirs"] = seen
-    if "codex_network_access" in orch:
-        val = orch["codex_network_access"]
-        if not isinstance(val, bool):
-            raise ModelPinError(
-                f"[orchestration] codex_network_access in {path} must be true or false (#401)")
-        out["network_access"] = val
+        out["timeout_source"] = str(path)
+    out["ignored_repo_keys"] = [k for k in _CODEX_SANDBOX_KEYS if k in orch]
+    user = _load_user_codex_sandbox(cwd)
+    out["writable_dirs"] = user["writable_dirs"]
+    out["network_access"] = user["network_access"]
+    out["sandbox_source"] = user["source"]
     return out
 
 
@@ -756,7 +895,8 @@ def build_harness_command(
             pin_args = (["-m", pins["model"]] if "model" in pins else []) + (
                 ["-c", f'model_reasoning_effort="{pins["model_reasoning_effort"]}"']
                 if "model_reasoning_effort" in pins else [])
-        # Opt-in sandbox widening (#401), empty by default: extra writable dirs for
+        # Opt-in sandbox widening (#401), empty by default and supplied only by the
+        # operator's user-level file (never the checkout): extra writable dirs for
         # toolchain caches outside the worktree, and network inside the sandbox.
         widen = load_codex_writer_settings(cwd)
         widen_args: List[str] = []
@@ -1093,7 +1233,8 @@ def prepare_dispatch(
         default_timeout = resolve_default_timeout(resolved_harness, role, str(cwd) if cwd else None)
         codex_writer = resolved_harness == "codex" and CANONICAL_ROLES[role] not in READ_ONLY_ROLES
         widen = (load_codex_writer_settings(str(cwd) if cwd else None) if codex_writer
-                 else {"writable_dirs": [], "network_access": False})
+                 else {"writable_dirs": [], "network_access": False, "sandbox_source": None,
+                       "timeout_source": None, "ignored_repo_keys": [], "repo_toml": None})
     except (ReadOnlyRoutingError, ModelPinError) as e:
         # e.g. an opted-in Codex reviewer whose persona file is missing (#351),
         # or a malformed model pin / profile (#385).
@@ -1131,10 +1272,28 @@ def prepare_dispatch(
         # Make any sandbox widening visible to the dispatcher (#401); never silent.
         result["codex_writable_dirs"] = widen["writable_dirs"]
         result["codex_network_access"] = widen["network_access"]
+        result["codex_sandbox_source"] = widen["sandbox_source"]
+        result["codex_timeout_source"] = widen["timeout_source"]
         if widen["writable_dirs"] or widen["network_access"]:
             sys.stderr.write(
-                f"[mARC dispatch] Notice: codex sandbox widened by team.toml: writable dirs "
-                f"{widen['writable_dirs']}, network_access={widen['network_access']} (#401)\n")
+                f"[mARC dispatch] Notice: codex sandbox widened by {widen['sandbox_source']}: "
+                f"writable dirs {widen['writable_dirs']}, "
+                f"network_access={widen['network_access']} (#401)\n")
+        if widen["ignored_repo_keys"]:
+            sys.stderr.write(
+                f"[mARC dispatch] Warning: ignoring {', '.join(widen['ignored_repo_keys'])} in "
+                f"{widen['repo_toml']}: the checkout cannot widen its own Codex sandbox. Set them "
+                f"per repo in {codex_user_config_path()} under [repos.\"<repo top-level>\"] "
+                f"instead (#401)\n")
+        discovered = widen["repo_toml"]
+        if team_toml and toml_path and (
+                not discovered or os.path.realpath(str(toml_path)) != os.path.realpath(discovered)):
+            other = parse_toml(toml_path).get("orchestration", {})
+            if isinstance(other, dict) and any(k in other for k in _CODEX_REPO_KEYS):
+                sys.stderr.write(
+                    f"[mARC dispatch] Warning: --team-toml {toml_path}: its codex_* keys are "
+                    f"ignored; Codex timeout comes from the checkout's team.toml and sandbox "
+                    f"widening only from {codex_user_config_path()} (#401)\n")
 
     if dry_run:
         result.update({
@@ -1173,27 +1332,94 @@ def _clip(text: str) -> Tuple[str, bool]:
     return (text[:_PARTIAL_MAX_CHARS], True) if len(text) > _PARTIAL_MAX_CHARS else (text, False)
 
 
-def _collect_partial_work(before: Optional[set]) -> Dict[str, Any]:
-    """After a Codex timeout: the worktree(s) it left behind, with status and diff stat (#401).
+_CODEX_WORKTREE_MARK = os.sep + os.path.join(".agents", "codex", "worktrees") + os.sep
 
-    The worktree is never cleaned up or reset here; the dispatcher decides whether to
-    keep, finish or discard it. Read-only git only.
+
+def _collect_partial_work(before: Optional[set]) -> Dict[str, Any]:
+    """After a Codex timeout: the Codex-managed worktree it left behind, if attributable (#401).
+
+    Only worktrees that appeared during the run AND sit under a Codex managed worktree
+    root (`.../.agents/codex/worktrees/<id>/...`) are considered, so a worktree another
+    operator added meanwhile is never reported. Exactly one such worktree is reported as
+    attributed (with status and diff stat); several are listed as unattributed
+    `candidates`, path only. Nothing is cleaned up or reset; read-only git only.
     """
     after = _git_worktree_paths()
     if before is None or after is None:
-        return {"worktrees": [], "note": "could not list git worktrees (not a git checkout?); "
-                                         "look for the Codex managed worktree manually"}
-    new = sorted(after - before)
-    entries = []
-    for path in new:
-        status, st_cut = _clip(_git_safe(["status", "--short", "--untracked-files=all"], cwd=path) or "")
-        stat_out, ds_cut = _clip(_git_safe(["diff", "--stat", "HEAD"], cwd=path) or "")
-        entries.append({"path": path, "git_status": status, "diff_stat": stat_out,
-                        "has_changes": bool(status.strip()), "truncated": st_cut or ds_cut})
-    note = ("worktree kept as is; inspect it, then finish, adopt or remove it "
-            "(git worktree remove <path>)") if entries else \
-        "no new worktree found; Codex may have timed out before creating it"
-    return {"worktrees": entries, "note": note}
+        return {"worktrees": [], "candidates": [],
+                "note": "could not list git worktrees (not a git checkout?); "
+                        "look for the Codex managed worktree manually"}
+    new = sorted(p for p in after - before
+                 if _CODEX_WORKTREE_MARK in os.path.realpath(p) + os.sep)
+    if not new:
+        return {"worktrees": [], "candidates": [],
+                "note": "no new Codex-managed worktree found; Codex may have timed out before "
+                        "creating it"}
+    if len(new) > 1:
+        return {"worktrees": [],
+                "candidates": [{"path": p, "attributed": False} for p in new],
+                "note": "several new Codex-managed worktrees appeared during the run, so none can "
+                        "be attributed to this dispatch; inspect them yourself before touching any"}
+    path = new[0]
+    status, st_cut = _clip(_git_safe(["status", "--short", "--untracked-files=all"], cwd=path) or "")
+    stat_out, ds_cut = _clip(_git_safe(["diff", "--stat", "HEAD"], cwd=path) or "")
+    entry = {"path": path, "attributed": True, "git_status": status, "diff_stat": stat_out,
+             "has_changes": bool(status.strip()), "truncated": st_cut or ds_cut}
+    return {"worktrees": [entry], "candidates": [],
+            "note": "the only new Codex-managed worktree during the run; kept as is. Inspect it, "
+                    "then finish, adopt or remove it"}
+
+
+def _killpg_quiet(pgid: int, sig: int) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except OSError:
+        pass
+
+
+def _run_sync_in_group(cmd: List[str], capture_output: bool = True, text: bool = True,
+                       timeout: Optional[float] = None) -> "subprocess.CompletedProcess[str]":
+    """subprocess.run()-compatible runner for sync Codex writers (#401 SEC-4).
+
+    Like the detached runner: the harness gets its own process group, which is killed on
+    timeout, on interrupt, on SIGTERM/SIGHUP to this process, and (Linux) if this process
+    dies by SIGKILL. stdin is /dev/null, as in the runner.
+    """
+    global _PRCTL
+    if _PRCTL is None and sys.platform.startswith("linux"):
+        try:
+            import ctypes
+            _PRCTL = ctypes.CDLL(None, use_errno=True).prctl
+        except Exception:
+            _PRCTL = None
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, start_new_session=True,
+                            preexec_fn=_set_pdeathsig if _PRCTL is not None else None)
+
+    def _on_term(signum: int, _frame: Any) -> None:
+        _killpg_quiet(proc.pid, signal.SIGKILL)
+        raise SystemExit(128 + signum)
+
+    saved: Dict[int, Any] = {}
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            saved[sig] = signal.signal(sig, _on_term)
+    try:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _killpg_quiet(proc.pid, signal.SIGKILL)
+            out, err = proc.communicate()
+            raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+        except BaseException:
+            _killpg_quiet(proc.pid, signal.SIGKILL)
+            proc.wait()
+            raise
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    finally:
+        _killpg_quiet(proc.pid, signal.SIGTERM)
+        for sig, old in saved.items():
+            signal.signal(sig, old)
 
 
 def execute_prepared(
@@ -1213,6 +1439,8 @@ def execute_prepared(
                     and not result.get("codex_readonly_opt_in")
                     and CANONICAL_ROLES.get(str(result.get("role")), "") not in READ_ONLY_ROLES)
     worktrees_before = _git_worktree_paths() if codex_writer else None
+    if codex_writer and runner_fn is subprocess.run:
+        runner_fn = _run_sync_in_group
     start_time = time.time()
     try:
         proc = runner_fn(
