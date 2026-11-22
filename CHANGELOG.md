@@ -10,6 +10,29 @@ date whose `YY.M.D` is already taken.
 
 ### Changed
 
+- `@sec`, `@rev` and `@arch` default to `model: opus` instead of `fable`
+  (#401), on the owner's decision to avoid Fable by default. `@dev`, `@sre`,
+  `@design` and `@research` stay on `sonnet`; a dispatcher can still pass an
+  explicit model per dispatch. The token-guard keeps recognising Fable model
+  ids (a user may still run one); only the shipped defaults changed.
+- `dispatch_agent.py`: Codex writer runs (`--harness codex`, roles
+  dev/sre/design) default to a 1800 s timeout instead of 300 s (#401), because
+  real app tasks stopped at 300 s with half-written files. Other harnesses and
+  Codex reviewers keep 300 s. Set `[orchestration] codex_timeout_sec` in
+  team.toml (finite, at most 7200 s, needs Python 3.11+), or pass `--timeout` (not
+  capped), to change it. The `task` pipeline does not use this resolution.
+- A timed-out Codex writer run now keeps its managed worktree and the result
+  JSON gains `partial_work` for the dispatcher to decide (#401). It reports
+  path, `git status` and `git diff --stat` for the one new worktree under
+  Codex's managed root (`realpath(${CODEX_HOME:-~/.codex})/worktrees`, compared
+  by path prefix) created during the run, marked `attributed: "likely"` since
+  a concurrent Codex operator could own it. Every other new worktree is a
+  path-only `candidates` entry (no removal advice), never dropped; a failing
+  git call gives `has_changes: null` plus an `error`, and a failed snapshot
+  still yields an explained `partial_work`. The sync path also kills the Codex
+  process group on timeout (POSIX; elsewhere plain `subprocess.run`) and
+  returns promptly even if a `setsid` descendant holds the output pipe. Results report
+  `timeout_sec`.
 - `dispatch_agent.py task`: the sandboxed Codex implement and fix steps no
   longer run tests (#349). Some sandboxes refuse test temp dirs even inside
   the workspace, so Codex now stops at a cheap compile/syntax/import check,
@@ -34,6 +57,28 @@ date whose `YY.M.D` is already taken.
   exact-prefix detection of @arch rule 2; the strict grammar still decides what
   counts. `dispatch_agent.py task` posts review comments in the strict header
   shape, so pipeline reviews satisfy the gate (REV-17).
+
+### Added
+
+- Opt-in Codex sandbox widening (#401), both off by default and set only in
+  an operator-side file, `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml`, one
+  `[repos."<abs repo top-level>"]` section per repo: `codex_writable_dirs`
+  (passed as `codex exec --add-dir`, for toolchain caches outside the
+  worktree) and `codex_network_access` (`-c
+  sandbox_workspace_write.network_access=true`). They are deliberately not read
+  from the checkout's team.toml, since a PR could otherwise widen its own
+  sandbox: a team.toml that sets them is ignored with a stderr warning, and a
+  user-level file that resolves inside the checkout is refused. Each directory
+  must exist and is checked after resolving symlinks; `/`, your home or its
+  ancestors, the checkout or its ancestors, system trees (including /opt, /mnt,
+  /media, /srv), credential, agent and code-execution persistence directories
+  under home, and the repo's git dir are refused (exit 2), as is a path through
+  a symlink another user owns or that sits in a world-writable directory. The
+  config file itself is refused if group- or world-writable (`chmod go-w`) or
+  inside the checkout or its main checkout; relative `[repos]` keys are skipped.
+  Read-only Codex roles never get the widening. The applied values and their
+  source file are reported in the result JSON and on stderr. Not verified
+  against a real toolchain test run that writes to caches outside the worktree.
 
 ### Deprecated
 

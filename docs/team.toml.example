@@ -215,6 +215,44 @@ research = "claude-code"
 #     medium to fix), which overrides the profile's effort in `task` runs.
 #   - With both set, each governs only its own path; neither affects reviewers.
 
+# Codex writer runs on real apps (optional, origin: #401). Plain dispatch and
+# `start` give a Codex writer 1800 s by default (300 s for every other
+# harness and for Codex reviewers); `--timeout` beats everything below and is
+# not capped. On a timeout the sync path kills the Codex process group, the
+# managed worktree is kept, and the result JSON carries `partial_work` for the
+# one new managed worktree that is likely the run's (`attributed: "likely"`),
+# plus path-only `candidates` for any other new worktree.
+# The `task` pipeline does not use this timeout or sandbox resolution.
+#
+# codex_timeout_sec lives here (read from the dispatching checkout's team.toml,
+# finite number, > 0 and at most 7200; anything else stops the dispatch with exit 2; needs
+# Python 3.11+):
+# [orchestration]
+# codex_timeout_sec = 2400
+#
+# Sandbox widening is OFF by default and is NOT read from this file: a PR could
+# otherwise widen its own sandbox. Keys set here are ignored with a warning.
+# The operator sets them in a user-level file the checkout cannot write,
+# ${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml (refused if it resolves inside
+# the checkout or the main checkout of a linked worktree, or if it is group- or
+# world-writable: `chmod go-w`; needs Python 3.11+), one section per repo keyed by the absolute
+# realpath of the repo top-level (relative or empty keys are skipped with a warning):
+#   [repos."/abs/path/to/repo"]
+#   codex_writable_dirs = ["~/.cache/toolchain"]   # passed as `--add-dir`
+#   codex_network_access = false                    # true: `-c sandbox_workspace_write.network_access=true`
+# codex_writable_dirs entries must be existing directories meant for caches a
+# build or test run writes outside the worktree. Refused: `/`, your home or its
+# ancestors, the checkout or its ancestors, system trees (/etc, /usr, /var, ...),
+# /opt, /mnt, /media, /srv, credential and agent dirs under home (~/.ssh, ~/.aws,
+# ~/.codex, ~/.claude, ...), code-execution persistence dirs (~/.local/bin, systemd
+# and autostart dirs, shell rc dirs) and the repo's git dir. Symlinks are resolved
+# first, and an entry whose path crosses a symlink owned by another user or sitting
+# in a world-writable directory (e.g. under /tmp) is refused. Toolchain caches such
+# as ~/.cargo stay allowed. Residual: a directory swapped after validation but
+# before Codex starts is not re-checked. Network access lets
+# everything the run reads, including secrets in your environment, leave the
+# machine. Neither is proven to make a given toolchain's test run pass.
+
 # --- Task pipeline (optional, OFF unless you uncomment it, origin: #361) ---
 # `dispatch_agent.py task` runs one task end to end: Codex implements, the
 # suite runs, @rev/@sec review headless, Codex fixes. It reads this section

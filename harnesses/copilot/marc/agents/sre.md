@@ -11,7 +11,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, TodoWrite
 # last). Independent Vals.ai evidence: Sonnet 5.5 scores 70.85% Vals Index
 # (#2/36) and 64.14% Terminal-Bench 4.0 at $16.18/test, at parity with
 # Opus 5.5 (70.14%, 65.15%, $24.77/test) for ~35% less. The operator can
-# still escalate a specific bounded dispatch to fable/opus, or downgrade it
+# still escalate a specific bounded dispatch to opus, or downgrade it
 # to haiku, as a cost/quality lever.
 model: sonnet
 ---

@@ -6,10 +6,10 @@ description: >-
   single, page-sized hard decision to under explicit triggers. Advises in
   writing; the operator keeps decision authority.
 tools: Read, Grep, Glob, Bash
-# Pinned to fable (origin #388, 2026-11-11): the operator may run on a cheaper
-# tier (sonnet), so the rare hard call goes to the top tier on demand. Same
-# alias note as @sec: Fable 5.2 needs Claude Code >= 2.1.321.
-model: fable
+# Pinned to opus (origin #401, 2026-11-22; supersedes #388's fable pin).
+# Owner decision: avoid Fable by default. The rare hard call goes to a
+# premium tier on demand; the dispatcher may pass an explicit override.
+model: opus
 ---
 
 # @arch — Architect (advisor)

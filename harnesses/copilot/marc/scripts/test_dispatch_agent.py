@@ -42,6 +42,7 @@ from dispatch_agent import (  # noqa: E402
     ModelPinError,
     ReadOnlyRoutingError,
     UnknownRoleError,
+    _check_writable_dir,
     _validate_spec,
     load_agy_model,
     load_codex_pins,
@@ -51,6 +52,7 @@ from dispatch_agent import (  # noqa: E402
     is_forbidden_readonly_route,
     load_codex_persona,
     prepare_dispatch,
+    resolve_default_timeout,
     resolve_route_detailed,
     detect_native_harness,
     dispatch,
@@ -1642,7 +1644,541 @@ def test_arch_role_388() -> None:
         check([t.strip() for t in tools[len("tools:"):].split(",")]
               == ["Read", "Grep", "Glob", "Bash"],
               f"architect tools are exactly Read, Grep, Glob, Bash ({tools})")
-    check("model: fable" in text, "architect persona is pinned to fable")
+    check("model: opus" in text and "model: fable" not in text,
+          "architect persona is pinned to opus (no fable default)")
+
+
+class _IsoEnv:
+    """Point HOME and XDG_CONFIG_HOME at a temp dir so the operator's real files never leak in."""
+
+    def __init__(self, home: Path, xdg: Optional[Path] = None, codex_home: Optional[Path] = None) -> None:
+        self.new = {"HOME": str(home), "XDG_CONFIG_HOME": str(xdg or home / ".config"),
+                    "CODEX_HOME": str(codex_home or home / ".codex")}
+
+    def __enter__(self) -> "_IsoEnv":
+        self.old = {k: os.environ.get(k) for k in self.new}
+        os.environ.update(self.new)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        for k, v in self.old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _git_env_run(*a: str, cwd: Any) -> None:
+    genv = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                GIT_COMMITTER_EMAIL="t@t")
+    subprocess.run(["git", *a], cwd=cwd, env=genv, check=True, capture_output=True)
+
+
+def _init_repo(repo: Path) -> None:
+    repo.mkdir(parents=True)
+    _git_env_run("init", "-q", cwd=repo)
+    (repo / "a.txt").write_text("one\n", encoding="utf-8")
+    _git_env_run("add", "a.txt", cwd=repo)
+    _git_env_run("commit", "-q", "-m", "init", cwd=repo)
+
+
+def test_codex_writer_timeout_sandbox_partial_401() -> None:
+    old_umask = os.umask(0o077)  # config files must not be group/world-writable (SEC-8)
+    try:
+        _test_codex_writer_401()
+    finally:
+        os.umask(old_umask)
+
+
+def _test_codex_writer_401() -> None:
+    print("\n--- Test: codex writer timeout, user-level sandbox widening, partial work (#401) ---")
+    prompt = "Do the task"
+    which = lambda b: f"/usr/bin/{b}"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(os.path.realpath(tmp))
+        home = root / "home"
+        (home / ".config" / "marc").mkdir(parents=True)
+        for sub in (".ssh", ".codex", "toolchain"):
+            (home / sub).mkdir()
+        (root / "cache" / "ok").mkdir(parents=True)
+        repo = root / "work" / "repo"
+        _init_repo(repo)
+        cfg = home / ".config" / "marc" / "codex.toml"
+        team = repo / ".agents"
+        team.mkdir()
+        top = str(repo)
+
+        def prep(**kw: Any):
+            return _capture_stderr(prepare_dispatch, "dev", prompt, harness="codex", dry_run=True,
+                                   which_fn=which, cwd=repo, **kw)
+
+        with _IsoEnv(home):
+            # 1. Defaults: argv unchanged, 1800 s for writers, 300 s for everything else.
+            cmd = build_harness_command("codex", "dev", prompt, cwd=str(repo))
+            check("--add-dir" not in cmd and not any("network_access" in c for c in cmd),
+                  f"no config: codex writer argv is not widened: {cmd[:8]}")
+            check(resolve_default_timeout("codex", "dev", str(repo)) == 1800.0, "codex writer default timeout is 1800 s")
+            check(resolve_default_timeout("claude-code", "dev", str(repo)) == 300.0, "claude-code default stays 300 s")
+            check(resolve_default_timeout("antigravity", "sre", str(repo)) == 300.0, "antigravity default stays 300 s")
+            check(resolve_default_timeout("codex", "rev", str(repo)) == 300.0, "codex read-only reviewer keeps 300 s")
+            res, err, _ = prep()
+            check(res["default_timeout"] == 1800.0 and res["codex_writable_dirs"] == []
+                  and res["codex_network_access"] is False and res["codex_sandbox_source"] is None
+                  and "ignoring" not in err, "dry-run reports the 1800 s default and an unwidened sandbox")
+
+            # 2. SEC-1: a checkout team.toml cannot widen the sandbox; timeout still works.
+            (team / "team.toml").write_text(
+                '[orchestration]\ncodex_timeout_sec = 2400\n'
+                f'codex_writable_dirs = ["{root}/cache/ok"]\ncodex_network_access = true\n', encoding="utf-8")
+            check(resolve_default_timeout("codex", "dev", str(repo)) == 2400.0, "team.toml codex_timeout_sec applies")
+            cmd = build_harness_command("codex", "dev", prompt, cwd=str(repo))
+            check("--add-dir" not in cmd and not any("network_access" in c for c in cmd),
+                  "repo team.toml codex_writable_dirs / codex_network_access never reach argv")
+            res, err, _ = prep()
+            check(res["exit_code"] == 0 and res["codex_writable_dirs"] == [] and res["codex_network_access"] is False
+                  and res["codex_timeout_source"].endswith("team.toml") and res["default_timeout"] == 2400.0,
+                  "repo-supplied widening is ignored (dispatch proceeds), timeout source reported")
+            check("ignoring codex_writable_dirs, codex_network_access" in err and "codex.toml" in err,
+                  f"stderr warns and points to the user-level file: {err!r}")
+
+            # 3. User-level file keyed by repo realpath: applied, reported, validated per entry.
+            cfg.write_text(
+                f'[repos."{top}"]\ncodex_writable_dirs = ["{root}/cache/ok", "{root}/cache/ok/", "~/toolchain"]\n'
+                f'codex_network_access = true\n'
+                f'[repos."{root}/work/other"]\ncodex_writable_dirs = ["/nonexistent-other"]\n', encoding="utf-8")
+            cmd = build_harness_command("codex", "dev", prompt, cwd=str(repo))
+            i = cmd.index("--sandbox")
+            check(cmd[i:i + 9] == ["--sandbox", "workspace-write", "--add-dir", f"{root}/cache/ok",
+                                    "--add-dir", f"{home}/toolchain",
+                                    "-c", "sandbox_workspace_write.network_access=true", "-m"],
+                  f"user-level dirs (realpath, de-duplicated) and network reach codex exec: {cmd[:14]}")
+            check(cmd[-1] == f"Act as the mARC engineer specialist. {prompt}", "prompt stays the last argv element")
+            rcmd = build_harness_command("codex", "rev", prompt, codex_opt_in=True, cwd=str(repo))
+            check("--add-dir" not in rcmd and not any("network_access" in c for c in rcmd),
+                  "codex read-only reviewer argv never gets the writer widening")
+            res, err, _ = prep()
+            check(res["codex_writable_dirs"] == [f"{root}/cache/ok", f"{home}/toolchain"]
+                  and res["codex_network_access"] is True and res["codex_sandbox_source"] == str(cfg)
+                  and "widened by" in err and str(cfg) in err, "result JSON and stderr report widening and its source")
+            check(_validate_spec({"prompt": prompt, "cwd": str(repo), "prepared": res}) is res,
+                  "detached runner re-derives the same widened argv")
+            # A linked worktree of the repo matches the main checkout's section.
+            wt = root / "work" / "linked"
+            _git_env_run("worktree", "add", "-q", "--detach", str(wt), cwd=repo)
+            check("--add-dir" in build_harness_command("codex", "dev", prompt, cwd=str(wt)),
+                  "a linked worktree uses its main checkout's section")
+            # Another repo's section is not applied here.
+            other = root / "work" / "unlisted"
+            _init_repo(other)
+            check("--add-dir" not in build_harness_command("codex", "dev", prompt, cwd=str(other)),
+                  "a repo without a section gets no widening")
+
+            # 4. SEC-2: every bad directory class fails closed (exit 2) with a specific message.
+            (root / "cache" / "sshlink").symlink_to(home / ".ssh")
+            bad_dirs = {
+                "/": "filesystem root", str(home): "home directory", f"{home}/../": "ancestors",
+                str(root): "ancestors", f"{root}/work/../home": "home directory",
+                str(repo): "checkout", str(root / "work"): "checkout", str(repo / ".git"): "git directory",
+                str(repo / ".git" / "hooks"): "git directory", "/etc": "system tree", "/usr": "system tree",
+                "/proc": "system tree", str(home / ".ssh"): "credential", str(home / ".codex"): "credential",
+                str(root / "cache" / "sshlink"): "credential", str(home / ".config"): "sandbox config",
+                str(home / ".config" / "marc"): "sandbox config", f"{root}/cache/missing": "not an existing directory",
+                "relative/dir": "absolute", "-rf": "absolute",
+            }
+            for d, why in bad_dirs.items():
+                if d.startswith("/") and not os.path.exists(d) and why != "not an existing directory":
+                    continue
+                cfg.write_text(f'[repos."{top}"]\ncodex_writable_dirs = ["{d}"]\n', encoding="utf-8")
+                res, err, _ = prep()
+                check(res["exit_code"] == 2 and not res["command"] and why in res["error"],
+                      f"bad writable dir {d!r} fails closed ({why}): {res.get('error')}")
+            # Linked worktree: the main checkout is still denied; a symlinked config keeps its dir denied.
+            cfg.write_text(f'[repos."{top}"]\ncodex_writable_dirs = ["{repo}"]\n', encoding="utf-8")
+            res, _e, _ = _capture_stderr(prepare_dispatch, "dev", prompt, harness="codex", dry_run=True,
+                                         which_fn=which, cwd=wt)
+            check(res["exit_code"] == 2 and "checkout" in res["error"],
+                  f"main checkout is denied from a linked worktree: {res.get('error')}")
+            real_cfg = root / "realcfg" / "codex.toml"
+            real_cfg.parent.mkdir()
+            real_cfg.write_text(f'[repos."{top}"]\ncodex_writable_dirs = ["{home}/.config/marc"]\n', encoding="utf-8")
+            cfg.unlink()
+            cfg.symlink_to(real_cfg)
+            res, _e, _ = prep()
+            check(res["exit_code"] == 2 and "sandbox config" in res["error"],
+                  f"the config symlink's own directory is denied: {res.get('error')}")
+            cfg.unlink()
+            for line in ('codex_writable_dirs = "/opt/x"', 'codex_writable_dirs = [3]',
+                         'codex_network_access = "yes"'):
+                cfg.write_text(f'[repos."{top}"]\n{line}\n', encoding="utf-8")
+                res, err, _ = prep()
+                check(res["exit_code"] == 2 and not res["command"], f"malformed user setting fails closed: {line}")
+            # A bad entry never blocks another harness.
+            res = prepare_dispatch("dev", prompt, harness="claude-code", dry_run=True, which_fn=which, cwd=repo)
+            check(res["exit_code"] == 0, "bad codex sandbox entry does not block a claude-code dispatch")
+
+            # SEC-9: symlinks planted where others could write are refused; own links stay fine.
+            open_dir = root / "open"
+            open_dir.mkdir()
+            open_dir.chmod(0o777)
+            (open_dir / "lnk").symlink_to(root / "cache" / "ok")
+            (root / "cache" / "oklink").symlink_to(root / "cache" / "ok")
+            for d, ok in ((f"{open_dir}/lnk", False), (f"{root}/cache/oklink", True)):
+                cfg.write_text(f'[repos."{top}"]\ncodex_writable_dirs = ["{d}"]\n', encoding="utf-8")
+                res, err, _ = prep()
+                check((res["exit_code"] == 0) == ok and (ok or "world-writable directory" in res["error"]),
+                      f"symlink dir {d!r} {'accepted' if ok else 'refused'}: {res.get('error')}")
+            # SEC-2 residual: persistence dirs denied, toolchain caches allowed.
+            for rel in (".local/bin", ".config/systemd/user", ".config/autostart", ".bashrc.d"):
+                (home / rel).mkdir(parents=True, exist_ok=True)
+                cfg.write_text(f'[repos."{top}"]\ncodex_writable_dirs = ["{home}/{rel}"]\n', encoding="utf-8")
+                res, err, _ = prep()
+                check(res["exit_code"] == 2 and "credential or agent" in res["error"], f"~/{rel} denied")
+            for sysdir in ("/opt", "/mnt", "/media", "/srv"):
+                if os.path.isdir(sysdir):
+                    cfg.write_text(f'[repos."{top}"]\ncodex_writable_dirs = ["{sysdir}"]\n', encoding="utf-8")
+                    res, err, _ = prep()
+                    check(res["exit_code"] == 2 and "system tree" in res["error"], f"{sysdir} denied")
+            (home / ".cargo" / "registry").mkdir(parents=True)
+            cfg.write_text(f'[repos."{top}"]\ncodex_writable_dirs = ["{home}/.cargo"]\n', encoding="utf-8")
+            check(prep()[0]["exit_code"] == 0, "~/.cargo (toolchain cache) stays allowed")
+            # SEC-6: relative or empty [repos] keys are skipped with a warning.
+            cfg.write_text(f'[repos.""]\ncodex_network_access = true\n[repos."work/repo"]\n'
+                           f'codex_network_access = true\n[repos."{top}"]\ncodex_writable_dirs = []\n',
+                           encoding="utf-8")
+            res, err, _ = prep()
+            check(res["exit_code"] == 0 and res["codex_network_access"] is False and err.count("must be an absolute path") >= 2,
+                  f"relative/empty [repos] keys skipped with warning: {err!r}")
+            # SEC-8: group/world-writable config refused; chmod go-w fixes it.
+            cfg.write_text(f'[repos."{top}"]\ncodex_network_access = true\n', encoding="utf-8")
+            cfg.chmod(0o664)
+            res, err, _ = prep()
+            check(res["exit_code"] == 2 and "chmod go-w" in res["error"], f"group-writable config refused: {res.get('error')}")
+            cfg.chmod(0o600)
+            check(prep()[0]["codex_network_access"] is True, "0600 config accepted")
+            # SEC-7: from a linked worktree, a config inside the MAIN checkout is refused too.
+            main_xdg = repo / "cfg2"
+            (main_xdg / "marc").mkdir(parents=True)
+            (main_xdg / "marc" / "codex.toml").write_text(cfg.read_text(), encoding="utf-8")
+            with _IsoEnv(home, xdg=main_xdg):
+                res, _e, _ = _capture_stderr(prepare_dispatch, "dev", prompt, harness="codex", dry_run=True,
+                                             which_fn=which, cwd=wt)
+                check(res["exit_code"] == 2 and "inside the checkout" in res["error"],
+                      f"config inside the main checkout refused from a linked worktree: {res.get('error')}")
+
+            # 5. The user-level file may not live inside the checkout (directly or via symlink).
+            cfg.write_text(f'[repos."{top}"]\ncodex_writable_dirs = ["{root}/cache/ok"]\n', encoding="utf-8")
+            inside = repo / "cfg"
+            (inside / "marc").mkdir(parents=True)
+            (inside / "marc" / "codex.toml").write_text(cfg.read_text(), encoding="utf-8")
+            with _IsoEnv(home, xdg=inside):
+                res, err, _ = prep()
+                check(res["exit_code"] == 2 and "inside the checkout" in res["error"],
+                      "user-level file inside the checkout is refused")
+            sym = root / "xdg2"
+            (sym / "marc").mkdir(parents=True)
+            (sym / "marc" / "codex.toml").symlink_to(inside / "marc" / "codex.toml")
+            with _IsoEnv(home, xdg=sym):
+                res, err, _ = prep()
+                check(res["exit_code"] == 2 and "inside the checkout" in res["error"],
+                      "a symlink into the checkout is refused too")
+
+            # 6. SEC-4: timeout cap; CLI --timeout stays uncapped.
+            cfg.unlink()
+            for val, ok in ((7200, True), (7200.5, False), (7201, False), (0, False), ("900", False),
+                            ("nan", False), ("inf", False), ("-inf", False), ("true", False)):
+                raw = f'"{val}"' if val == "900" else val
+                (team / "team.toml").write_text(f"[orchestration]\ncodex_timeout_sec = {raw}\n", encoding="utf-8")
+                res, err, _ = prep()
+                check((res["exit_code"] == 0) == ok, f"codex_timeout_sec = {val!r} {'accepted' if ok else 'refused'}")
+            (team / "team.toml").write_text("[orchestration]\ncodex_timeout_sec = 2400\n", encoding="utf-8")
+
+            # 7. REV-2: no tomllib (Python < 3.11): explicit message, never a misleading error.
+            saved = sys.modules.get("tomllib", "absent")
+            sys.modules["tomllib"] = None  # type: ignore[assignment]
+            try:
+                res, err, _ = prep()
+                check(res["exit_code"] == 2 and "requires Python 3.11+ (tomllib)" in res["error"],
+                      f"codex_timeout_sec without tomllib: explicit message: {res.get('error')}")
+                (team / "team.toml").write_text("[orchestration]\n", encoding="utf-8")
+                check(prep()[0]["exit_code"] == 0, "no codex keys, no user file: works without tomllib")
+                cfg.write_text(f'[repos."{top}"]\ncodex_network_access = true\n', encoding="utf-8")
+                res, err, _ = prep()
+                check(res["exit_code"] == 2 and "requires Python 3.11+ (tomllib)" in res["error"],
+                      "user-level file without tomllib: explicit message")
+                cfg.unlink()
+            finally:
+                if saved == "absent":
+                    sys.modules.pop("tomllib", None)
+                else:
+                    sys.modules["tomllib"] = saved
+
+            # 8. REV-4: --team-toml elsewhere: its codex_* keys are ignored, with a warning.
+            elsewhere = root / "elsewhere.toml"
+            elsewhere.write_text("[orchestration]\ncodex_timeout_sec = 5000\ncodex_network_access = true\n",
+                                 encoding="utf-8")
+            (team / "team.toml").write_text("[orchestration]\ncodex_timeout_sec = 2400\n", encoding="utf-8")
+            res, err, _ = prep(team_toml=str(elsewhere))
+            check(res["default_timeout"] == 2400.0 and res["codex_network_access"] is False
+                  and res["codex_timeout_source"] == str(team / "team.toml")
+                  and "--team-toml" in err and "ignored" in err,
+                  f"--team-toml codex_* keys ignored, source is the checkout's team.toml: {err!r}")
+            (team / "team.toml").write_text("[orchestration]\ncodex_timeout_sec = 2400\ncodex_network_access = true\n",
+                                            encoding="utf-8")
+            res, err, _ = prep(team_toml=str(team / "team.toml"))
+            check("--team-toml" not in err and "ignoring codex_network_access" in err,
+                  f"--team-toml naming the discovered file: only the repo-key warning: {err!r}")
+            (team / "team.toml").write_text("[orchestration]\ncodex_timeout_sec = 2400\n", encoding="utf-8")
+
+        # 9. dispatch(): the resolved default reaches the runner; --timeout beats it, uncapped.
+        with _IsoEnv(home):
+            seen: List[float] = []
+
+            def ok_runner(cmd, **kw):
+                seen.append(kw["timeout"])
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            old = os.getcwd()
+            try:
+                os.chdir(repo)
+                dispatch("dev", prompt, harness="codex", which_fn=which, runner_fn=ok_runner)
+                dispatch("dev", prompt, harness="codex", timeout=99999.0, which_fn=which, runner_fn=ok_runner)
+                dispatch("dev", prompt, harness="claude-code", which_fn=which, runner_fn=ok_runner,
+                         env={"CLAUDE_PLUGIN_ROOT": "/plugin"})
+            finally:
+                os.chdir(old)
+            check(seen == [2400.0, 99999.0, 300.0],
+                  f"codex writer uses team.toml timeout, --timeout wins uncapped, others 300 s: {seen}")
+
+    # The literal traversal from the review, against the real HOME (only meaningful under /home).
+    if os.path.realpath(os.path.expanduser("~")).startswith("/home/"):
+        try:
+            _check_writable_dir("/tmp/../home", "w", "/tmp/x", None, Path("/tmp/x/codex.toml"))
+            check(False, "/tmp/../home is refused")
+        except ModelPinError:
+            check(True, "/tmp/../home is refused")
+
+    # 10. `start` and the detached `_run`: default timeout resolution end to end.
+    started: List[int] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(os.path.realpath(tmp))
+        _init_repo(t / "repo")
+        (t / "home").mkdir()
+        bin_dir = t / "bin"
+        _make_stub_bin(bin_dir, ["codex"])
+        env = _job_env(bin_dir)
+        env.update(HOME=str(t / "home"), XDG_CONFIG_HOME=str(t / "home" / ".config"))
+        try:
+            def run_start(*extra: str) -> Dict[str, Any]:
+                r = _cli(["start", "--role", "dev", "--harness", "codex", *extra, "--prompt", "exit=0"],
+                         t / "repo", env)
+                out = _lines(r.stdout)
+                check(r.returncode == 0 and len(out) == 1, f"start codex writer exits 0 ({r.returncode}, {r.stderr!r})")
+                started.append(out[0]["pid"])
+                w = _cli(["wait", out[0]["job_id"], "--timeout", "60"], t / "repo", env)
+                res = json.loads(Path(out[0]["result_path"]).read_text(encoding="utf-8"))
+                check(w.returncode == 0, f"codex stub job finishes ({w.returncode}, {w.stdout!r})")
+                return res
+            check(run_start()["timeout_sec"] == 1800.0, "start/_run: codex writer defaults to 1800 s")
+            (t / "repo" / ".agents").mkdir()
+            (t / "repo" / ".agents" / "team.toml").write_text("[orchestration]\ncodex_timeout_sec = 2400\n",
+                                                               encoding="utf-8")
+            check(run_start()["timeout_sec"] == 2400.0, "start/_run: team.toml codex_timeout_sec applies")
+            check(run_start("--timeout", "42")["timeout_sec"] == 42.0, "start/_run: --timeout beats the config")
+        finally:
+            for pid in started:
+                _kill_group(pid)
+
+    # 11. Timeout: killpg in the sync path (SEC-4), and attributable partial work (REV-1).
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(os.path.realpath(tmp))
+        (d / "home").mkdir()
+        bin_dir = d / "bin"
+        _make_stub_bin(bin_dir, ["codex"])
+        pidfile = d / "child.pid"
+        # Stub forks a grandchild that outlives a plain kill of the direct child.
+        (bin_dir / "codex").write_text(
+            f"#!{sys.executable}\nimport os,sys,time\n"
+            f"pid=os.fork()\n"
+            f"if pid==0:\n    open({str(pidfile)!r},'w').write(str(os.getpid())); time.sleep(60); sys.exit(0)\n"
+            f"time.sleep(60)\n", encoding="utf-8")
+        (bin_dir / "codex").chmod(0o755)
+        from dispatch_agent import _run_sync_in_group
+        import time as _t
+        try:
+            _run_sync_in_group([str(bin_dir / "codex")], timeout=1.5)
+            check(False, "sync group runner raises on timeout")
+        except subprocess.TimeoutExpired:
+            check(True, "sync group runner raises TimeoutExpired")
+        gp = int(pidfile.read_text()) if pidfile.exists() else 0
+        check(gp > 0 and _pid_gone(gp, 5), "sync Codex timeout kills the whole process group (grandchild gone)")
+        if gp:
+            _kill_group(gp)
+
+        # SIGTERM to the dispatching process must not orphan Codex.
+        pidfile.unlink()
+        driver = (f"import sys; sys.path.insert(0, {HERE!r}); import dispatch_agent as d; "
+                  f"d._run_sync_in_group([{str(bin_dir / 'codex')!r}], timeout=60)")
+        par = subprocess.Popen([sys.executable, "-c", driver])
+        for _ in range(100):
+            if pidfile.exists() and pidfile.read_text():
+                break
+            _t.sleep(0.1)
+        gp = int(pidfile.read_text()) if pidfile.exists() and pidfile.read_text() else 0
+        par.terminate()
+        par.wait(timeout=10)
+        check(gp > 0 and _pid_gone(gp, 5), "SIGTERM to the sync dispatcher kills Codex's process group")
+        if gp:
+            _kill_group(gp)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(os.path.realpath(tmp))
+        (d / "home").mkdir()
+        repo = d / "repo"
+        _init_repo(repo)
+        managed = d / "home" / ".codex" / "worktrees"  # CODEX_HOME comes from _IsoEnv, not this machine
+        wt = managed / "ab12" / "repo"
+        wt2 = managed / "cd34" / "repo"
+        foreign = d / "other-operator-wt"
+        which = lambda b: f"/usr/bin/{b}"
+
+        def run(runner):
+            old = os.getcwd()
+            try:
+                os.chdir(repo)
+                with _IsoEnv(d / "home"):
+                    return dispatch("dev", prompt, harness="codex", timeout=5.0, which_fn=which, runner_fn=runner)
+            finally:
+                os.chdir(old)
+
+        def add(path: Path) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _git_env_run("worktree", "add", "-q", "--detach", str(path), cwd=repo)
+
+        def one(cmd, **kw):
+            add(wt)
+            add(foreign)  # a concurrent operator's non-Codex worktree must not be reported
+            (wt / "a.txt").write_text("one\ntwo\n", encoding="utf-8")
+            (wt / "half.txt").write_text("partial", encoding="utf-8")
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"], output=b"partial out")
+        res = run(one)
+        pw = res.get("partial_work") or {}
+        wts = pw.get("worktrees") or []
+        check(res["exit_code"] == 124 and res.get("timed_out") is True, "codex timeout still reports 124/timed_out")
+        check(len(wts) == 1 and os.path.realpath(wts[0]["path"]) == str(wt),
+              f"partial_work names the one new Codex-managed worktree: {wts}")
+        if wts:
+            check(" M a.txt" in wts[0]["git_status"] and "?? half.txt" in wts[0]["git_status"]
+                  and wts[0]["has_changes"] is True, f"git status lists modified and untracked: {wts[0]['git_status']!r}")
+            check("a.txt" in wts[0]["diff_stat"], f"diff stat reported: {wts[0]['diff_stat']!r}")
+        check(pw.get("candidates") == [{"path": str(foreign), "attributed": False}],
+              f"a worktree outside the managed root is a path-only candidate, not dropped: {pw.get('candidates')}")
+        check(wts and wts[0]["attributed"] == "likely", "a lone managed worktree is 'likely', never certain")
+        check(wt.is_dir() and (wt / "half.txt").exists(), "the timed-out worktree is preserved, not cleaned up")
+
+        # Two new Codex-managed worktrees: nothing attributed, no remove suggestion.
+        def two(cmd, **kw):
+            add(wt2)
+            add(managed / "ef56" / "repo")
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        res = run(two)
+        pw = res["partial_work"]
+        check(not pw["worktrees"] and len(pw["candidates"]) == 2, f"two new Codex worktrees: candidates only: {pw}")
+        check(all(c["attributed"] is False for c in pw["candidates"]) and "git worktree remove" not in json.dumps(pw),
+              f"ambiguous worktrees are unattributed candidates, no removal advice: {pw}")
+
+        # Only a foreign worktree appears: none found.
+        foreign2 = d / "foreign2"
+
+        def only_foreign(cmd, **kw):
+            add(foreign2)
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        res = run(only_foreign)
+        check(res["partial_work"]["worktrees"] == []
+              and res["partial_work"]["candidates"] == [{"path": str(foreign2), "attributed": False}],
+              f"only a non-managed worktree appeared: a candidate, nothing attributed: {res['partial_work']}")
+
+        # REV-8: the managed root is realpath(CODEX_HOME)/worktrees; a symlinked CODEX_HOME works,
+        # and a look-alike `.agents/codex/worktrees` path elsewhere is NOT treated as managed.
+        real_ch = d / "realcodex"
+        (real_ch / "worktrees").mkdir(parents=True)
+        link_ch = d / "linkcodex"
+        link_ch.symlink_to(real_ch)
+        lookalike = d / "x" / ".agents" / "codex" / "worktrees" / "zz" / "repo"
+        lookalike.parent.mkdir(parents=True)
+
+        def via_symlink(cmd, **kw):
+            _git_env_run("worktree", "add", "-q", "--detach", str(real_ch / "worktrees" / "q1"), cwd=repo)
+            _git_env_run("worktree", "add", "-q", "--detach", str(lookalike), cwd=repo)
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        old = os.getcwd()
+        try:
+            os.chdir(repo)
+            with _IsoEnv(d / "home", codex_home=link_ch):
+                res = dispatch("dev", prompt, harness="codex", timeout=5.0, which_fn=which, runner_fn=via_symlink)
+        finally:
+            os.chdir(old)
+        pw = res["partial_work"]
+        check(len(pw["worktrees"]) == 1 and pw["worktrees"][0]["path"].endswith("worktrees/q1")
+              and pw["candidates"] == [{"path": str(lookalike), "attributed": False}],
+              f"symlinked CODEX_HOME matched by realpath prefix; look-alike path only a candidate: {pw}")
+
+        # REV-6a: a failing git status is has_changes null with an explicit error, never false.
+        import dispatch_agent as _da
+        real_git = _da._git_safe
+        _da._git_safe = lambda args, cwd=None, timeout=20.0: (None if args[0] == "status" else real_git(args, cwd, timeout))
+        try:
+            def one_more(cmd, **kw):
+                _git_env_run("worktree", "add", "-q", "--detach", str(managed / "st" / "repo"), cwd=repo)
+                raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+            res = run(one_more)
+        finally:
+            _da._git_safe = real_git
+        e0 = (res["partial_work"]["worktrees"] or [{}])[0]
+        check(e0.get("has_changes") is None and "failed" in e0.get("error", ""),
+              f"git failure: has_changes null plus explicit error: {e0}")
+
+        # REV-6b: no git checkout (snapshot fails): a timed-out Codex writer still gets partial_work.
+        nogit = d / "nogit"
+        nogit.mkdir()
+
+        def plain(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        old = os.getcwd()
+        try:
+            os.chdir(nogit)
+            with _IsoEnv(d / "home"):
+                res = dispatch("dev", prompt, harness="codex", timeout=5.0, which_fn=which, runner_fn=plain)
+        finally:
+            os.chdir(old)
+        check(res.get("timed_out") is True and "could not snapshot" in (res.get("partial_work") or {}).get("note", ""),
+              f"snapshot failure still yields an explained partial_work: {res.get('partial_work')}")
+
+        # REV-7: a setsid descendant holding the pipe must not stall the timeout return.
+        sd = d / "setsid-bin"
+        _make_stub_bin(sd, ["codex"])
+        (sd / "codex").write_text(
+            f"#!{sys.executable}\nimport os,time\n"
+            f"if os.fork()==0:\n    os.setsid(); time.sleep(8); os._exit(0)\n"
+            f"time.sleep(60)\n", encoding="utf-8")
+        (sd / "codex").chmod(0o755)
+        t0 = _t.time()
+        try:
+            _run_sync_in_group([str(sd / "codex")], timeout=1.0)
+            check(False, "setsid case raises TimeoutExpired")
+        except subprocess.TimeoutExpired:
+            took = _t.time() - t0
+            check(took < 5.0, f"timeout returns promptly despite a setsid pipe-holder ({took:.1f}s)")
+
+        def plain_timeout(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        old = os.getcwd()
+        try:
+            os.chdir(repo)
+            res2 = dispatch("dev", prompt, harness="claude-code", timeout=5.0, which_fn=which,
+                            runner_fn=plain_timeout, env={"CLAUDE_PLUGIN_ROOT": "/plugin"})
+        finally:
+            os.chdir(old)
+        check(res2.get("timed_out") is True and "partial_work" not in res2, "non-codex timeout has no partial_work")
 
 
 def main() -> int:
@@ -1660,6 +2196,7 @@ def main() -> int:
     test_model_matrix_385()
     test_start_wait_jobs()
     test_arch_role_388()
+    test_codex_writer_timeout_sandbox_partial_401()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")

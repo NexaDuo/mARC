@@ -153,26 +153,32 @@ cheapest lever on token budget:
   missing, read-only roles fall back to `claude-code` only; other roles fall back to
   the native host, then any available harness, with a diagnostic warning.
   (origin: #323 · 2026-09-23)
-- **`sonnet` is the specialist default; `fable` for the `@sec`/`@rev` gates;
-  `haiku` is for mechanical/bulk work.** (origin: #69 · 2026-07-10,
+- **`sonnet` is the implementer default; `opus` for the `@sec`/`@rev`/`@arch`
+  gates; `haiku` is for mechanical/bulk work; `fable` is never a default.**
+  (origin: #69 · 2026-07-10,
   superseded: `sonnet` by default was the original rule; origin: #331 ·
   2026-09-22, superseded: pinned only `@sec` to `opus` as a per-role
   exception on top of the `sonnet` default; origin: #335 · 2026-09-22,
   superseded: "`opus` is the specialist default; `haiku` is for
-  mechanical/bulk work", on Vals.ai evidence of Opus 5.5 clearing Sonnet 5)
-  `@dev`/`@sre`/`@design`/`@research` run on `sonnet`; `@sec`/`@rev` run on
-  `fable`; `bulk-reader` stays on `haiku`. New independent Vals.ai evidence
+  mechanical/bulk work", on Vals.ai evidence of Opus 5.5 clearing Sonnet 5;
+  origin: #383 · 2026-11-10, superseded: `fable` for `@sec`/`@rev`/`@arch`,
+  on Vals.ai evidence of Fable 5.2 ranking #1/36)
+  `@dev`/`@sre`/`@design`/`@research` run on `sonnet`; `@sec`/`@rev`/`@arch`
+  run on `opus`; `bulk-reader` stays on `haiku`. The owner decided to avoid Fable by default
+  (2026-11-22); the evidence below is kept as history. New independent Vals.ai evidence
   (2026-11-10) dominates Opus 5.5: Sonnet 5.5 matches it (Vals Index 70.85%
   vs 70.14%, Terminal-Bench 4.0 64.14% vs 65.15%) at ~35% lower cost/test
   ($16.18 vs $24.77), and Fable 5.2 beats it (71.31%, #1/36; 65.15%) at a
-  lower cost/test ($17.94), so the pre-merge gates get the strongest tier
-  and implementers the parity-cheaper one. Haiku 5.5 (58.73%, $3.18/test)
+  lower cost/test ($17.94), so implementers got the parity-cheaper one, and the gates went to Fable
+  until the owner's cost decision moved them to Opus. Haiku 5.5 (58.73%, $3.18/test)
   keeps the one-shot, tool-minimal summarization role. The aliases resolve
   to these generations only on Claude Code >= 2.1.321; older CLIs fall back
   to the previous generation. Escalating a specific bounded dispatch to
-  `fable`/`opus`, or downgrading it to `haiku`, remains the operator's
-  lever, never a silent blanket default flip without new evidence.
+  `opus`, or downgrading it to `sonnet`/`haiku`, remains the operator's
+  lever, never a silent blanket default flip without new evidence; `fable`
+  is not a default for any role.
   (origin: #383 · 2026-11-10)
+  (origin: #401 · 2026-11-22)
 - **Codex and Antigravity runs carry the shipped model matrix; don't
   hand-pick models per dispatch.** `dispatch_agent.py` passes the per-role
   pins from `agent-configs/codex/*.toml` (`-m` + effort, writers and opt-in
@@ -184,9 +190,26 @@ cheapest lever on token budget:
   shallow, the next release step is `max` effort on the same model, before a
   pricier model.
   (origin: #385 · 2026-11-10)
+- **A Codex `@dev` run gets 1800 s, not 300 s; a timeout keeps its worktree.**
+  `dispatch_agent.py` defaults a Codex writer to 1800 s (team.toml
+  `[orchestration] codex_timeout_sec`, at most 7200, or `--timeout`). When a
+  run times out, read `partial_work` in the result: one `likely` worktree
+  (under `${CODEX_HOME:-~/.codex}/worktrees`; path, `git status`, diff stat; a
+  concurrent Codex operator could own it) can be finished or adopted; path-only
+  `candidates` (any other new worktree) are for you to inspect, never to remove
+  on the script's say-so.
+  Never re-dispatch the same task blind. The sandbox cannot write toolchain
+  caches outside the worktree unless the operator lists them in their own
+  `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml` (`codex_writable_dirs`, and,
+  deliberately, `codex_network_access`, per `[repos."<abs path>"]`). The
+  checkout's team.toml cannot set these (ignored with a warning: a PR must not
+  widen its own sandbox); both are off by default and reported in the result
+  with their source. The `task` pipeline does not use this resolution. If the
+  suite still cannot run in the sandbox, the operator runs it, as before.
+  (origin: #401 · 2026-11-22)
 - **Escalate to `@arch` on explicit triggers, never on a feeling of being out
   of depth.** The operator MUST dispatch `@arch` (read-only, `claude-code`
-  only, `fable`) when any holds: (1) `@sec` and `@rev` verdicts conflict, or a
+  only, `opus`) when any holds: (1) `@sec` and `@rev` verdicts conflict, or a
   BLOCK needs technical adjudication you cannot resolve from the diff alone;
   (2) the issue being specified touches a security surface, more than one
   harness, or changes architecture (`docs/ARCHITECTURE.md` would need an
