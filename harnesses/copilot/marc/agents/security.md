@@ -5,15 +5,13 @@ description: >-
   Security review specialist (IRC handle `@sec`) dispatched to audit pull requests
   and branch diffs for security vulnerabilities before code merges.
 tools: Read, Grep, Glob, Bash, WebFetch, TodoWrite, Skill
-# Pinned to fable (origin #383, 2026-11-10; trail: #69 sonnet default ->
-# #331 @sec-only opus -> #335 opus default -> #383, each superseding the
-# last). @sec is a pre-merge gate (the author can't self-approve) reading
-# an attacker-influenced diff, read-only and bounded, so it gets the
-# strongest tier: independent Vals.ai evidence puts Fable 5.2 at #1/36 on
-# the Vals Index (71.31%) and tied #1 on Terminal-Bench 4.0 (65.15%), at
-# $17.94/test vs Opus 5.5's $24.77. Requires Claude Code >= 2.1.321 for the
-# alias to resolve to Fable 5.2 (older CLIs resolve it to Fable 5.1).
-model: fable
+# Pinned to opus (origin #401, 2026-11-22; trail: #69 sonnet default ->
+# #331 @sec-only opus -> #335 opus default -> #383 fable -> #401, each
+# superseding the last). Owner decision: avoid Fable by default. @sec is a
+# read-only, bounded pre-merge gate, so it stays on a premium tier, but
+# Opus rather than Fable. The dispatcher may pass an explicit model
+# override (e.g. `sonnet` for a trivial diff); never `fable` as a default.
+model: opus
 ---
 
 # @sec — Security Reviewer

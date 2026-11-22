@@ -10,6 +10,19 @@ date whose `YY.M.D` is already taken.
 
 ### Changed
 
+- `@sec`, `@rev` and `@arch` default to `model: opus` instead of `fable`
+  (#401), on the owner's decision to avoid Fable by default. `@dev`, `@sre`,
+  `@design` and `@research` stay on `sonnet`; a dispatcher can still pass an
+  explicit model per dispatch. The token-guard keeps recognising Fable model
+  ids (a user may still run one); only the shipped defaults changed.
+- `dispatch_agent.py`: Codex writer runs (`--harness codex`, roles
+  dev/sre/design) default to a 1800 s timeout instead of 300 s (#401), because
+  real app tasks stopped at 300 s with half-written files. Other harnesses and
+  Codex reviewers keep 300 s. Set `[orchestration] codex_timeout_sec` in
+  team.toml, or pass `--timeout`, to change it.
+- A timed-out Codex writer run now keeps its managed worktree and the result
+  JSON gains `partial_work` (worktree path, `git status`, `git diff --stat`)
+  for the dispatcher to decide (#401). Results also report `timeout_sec`.
 - `dispatch_agent.py task`: the sandboxed Codex implement and fix steps no
   longer run tests (#349). Some sandboxes refuse test temp dirs even inside
   the workspace, so Codex now stops at a cheap compile/syntax/import check,
@@ -34,6 +47,15 @@ date whose `YY.M.D` is already taken.
   exact-prefix detection of @arch rule 2; the strict grammar still decides what
   counts. `dispatch_agent.py task` posts review comments in the strict header
   shape, so pipeline reviews satisfy the gate (REV-17).
+
+### Added
+
+- Opt-in Codex sandbox widening in team.toml `[orchestration]` (#401), both
+  off by default: `codex_writable_dirs` (passed as `codex exec --add-dir`, for
+  toolchain caches outside the worktree) and `codex_network_access` (passed as
+  `-c sandbox_workspace_write.network_access=true`). Malformed values stop the
+  dispatch; the applied widening is reported in the result JSON and on stderr.
+  Not verified against a real `flutter test` run.
 
 ### Deprecated
 

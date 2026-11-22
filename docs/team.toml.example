@@ -215,6 +215,29 @@ research = "claude-code"
 #     medium to fix), which overrides the profile's effort in `task` runs.
 #   - With both set, each governs only its own path; neither affects reviewers.
 
+# Codex writer runs on real apps (optional, origin: #401). Plain dispatch and
+# `start` give a Codex writer 1800 s by default (300 s for every other
+# harness and for Codex reviewers); `--timeout` beats everything below. On a
+# timeout the managed worktree is kept and the result JSON carries
+# `partial_work` (worktree path, `git status`, `git diff --stat`) so you can
+# finish, adopt or discard it. All keys are read only from the dispatching
+# checkout's team.toml, a malformed value stops the dispatch (exit 2), and the
+# result JSON reports the widening that was applied.
+#
+# Sandbox widening is OFF by default. Each entry widens what code Codex writes
+# can touch, so list specific toolchain caches, never your home or a root:
+#   - codex_writable_dirs: absolute directories (a leading `~` is fine), passed
+#     as `codex exec --add-dir <dir>`. Meant for caches a build or test run
+#     writes outside the worktree (a package cache, an SDK cache, a cargo home).
+#   - codex_network_access: true passes `-c sandbox_workspace_write.network_access=true`
+#     so the sandbox can reach the network (package downloads). Everything the
+#     run reads, including secrets in your environment, can then leave the machine.
+# These are not proven to make a given toolchain's test run pass; try one task.
+# [orchestration]
+# codex_timeout_sec = 2400
+# codex_writable_dirs = ["~/.pub-cache", "~/.cargo"]
+# codex_network_access = false
+
 # --- Task pipeline (optional, OFF unless you uncomment it, origin: #361) ---
 # `dispatch_agent.py task` runs one task end to end: Codex implements, the
 # suite runs, @rev/@sec review headless, Codex fixes. It reads this section

@@ -9,7 +9,8 @@ CLI Options:
     --role <role>         Specialist role (dev, sre, design, sec, rev, research, arch, engineer, security, review, architect).
     --prompt <prompt>     Task prompt with context, acceptance criteria, and constraints.
     --harness <harness>   Target harness (auto, native, claude-code, antigravity, copilot, codex). Default: auto.
-    --timeout <seconds>   Subprocess execution timeout in seconds. Default: 300.
+    --timeout <seconds>   Subprocess execution timeout in seconds. Default: 300; 1800 for Codex
+                          writer runs (override: team.toml [orchestration] codex_timeout_sec).
     --json                Output result as JSON payload.
     --dry-run             Resolve command and print without executing.
     --team-toml <path>    Optional path to team.toml (default: discovered from repo root).
@@ -80,6 +81,14 @@ Routing resolution:
       effort win; writer roles only) and [orchestration.antigravity_models] (role ->
       slug). A malformed pin or profile fails closed; an unknown agy slug makes agy exit
       non-zero, and that exit is reported as is.
+    - Codex writer runs on real apps (origin: #401 · 2026-11-22). Default timeout is 1800 s
+      (300 s for everything else); team.toml [orchestration] codex_timeout_sec changes it
+      and `--timeout` beats both. Opt-in sandbox widening, both off by default and read only
+      from the checkout's team.toml: codex_writable_dirs (absolute directories, passed as
+      `--add-dir`, for toolchain caches outside the worktree) and codex_network_access
+      (`-c sandbox_workspace_write.network_access=true`). The result JSON reports both.
+      On a timeout the Codex worktree is kept and the result carries `partial_work`
+      (worktree path, `git status`, `git diff --stat`) so the dispatcher can decide.
 """
 from __future__ import annotations
 
@@ -540,6 +549,11 @@ def _check_agy_model(slug: str, source: str) -> str:
     return slug
 
 
+DEFAULT_TIMEOUT = 300.0
+# Real app tasks (build + test suite) outlast 300 s: field runs stopped at 300 s with
+# half-written files and at 1500 s with no diff (#401). Writers only; reviewers keep 300.
+CODEX_WRITER_DEFAULT_TIMEOUT = 1800.0
+
 _OVERRIDE_TABLES: Dict[str, str] = {"codex": "codex_profiles", "antigravity": "antigravity_models"}
 
 
@@ -580,6 +594,77 @@ def load_model_override(harness: str, role: str, cwd: Optional[str] = None) -> O
                 f"name (letters, digits, '_', '.', '-'; not starting with '-') (#385)")
         return val
     return _check_agy_model(val, f"{path} [orchestration.antigravity_models]")
+
+
+def _orchestration_table(cwd: Optional[str]) -> Tuple[Dict[str, Any], Optional[Path]]:
+    """[orchestration] of the team.toml discovered from `cwd` (same trust anchor as the pins)."""
+    start = Path(cwd) if cwd else Path.cwd()
+    if not start.is_dir():
+        return {}, None
+    path = find_team_toml(None, start_dir=start)
+    config = parse_toml(path)
+    orch = config.get("orchestration", {}) if isinstance(config, dict) else {}
+    return (orch if isinstance(orch, dict) else {}), path
+
+
+def _check_writable_dir(raw: Any, path: Optional[Path]) -> str:
+    where = f"[orchestration] codex_writable_dirs in {path} (#401)"
+    if not isinstance(raw, str) or not raw.strip() or "\0" in raw:
+        raise ModelPinError(f"{where}: every entry must be a non-empty string")
+    expanded = os.path.normpath(os.path.expanduser(raw.strip()))
+    if expanded.startswith("-") or not os.path.isabs(expanded):
+        raise ModelPinError(f"{where}: {raw!r} must be an absolute path (a leading '~' is fine)")
+    home = os.path.normpath(os.path.expanduser("~"))
+    if expanded == os.path.dirname(expanded) or expanded == home:
+        raise ModelPinError(
+            f"{where}: {raw!r} is a filesystem root or your whole home directory; "
+            f"name the specific cache directory instead")
+    return expanded
+
+
+def load_codex_writer_settings(cwd: Optional[str] = None) -> Dict[str, Any]:
+    """Opt-in Codex writer sandbox and timeout settings from team.toml [orchestration] (#401).
+
+    Keys (all optional, absent = shipped behavior): `codex_timeout_sec` (positive number),
+    `codex_writable_dirs` (array of absolute directories, `~` allowed) and
+    `codex_network_access` (boolean). Read only from the team.toml discovered from `cwd`;
+    a malformed value fails closed with ModelPinError rather than being ignored.
+    """
+    orch, path = _orchestration_table(cwd)
+    out: Dict[str, Any] = {"timeout": None, "writable_dirs": [], "network_access": False}
+    if "codex_timeout_sec" in orch:
+        val = orch["codex_timeout_sec"]
+        if isinstance(val, bool) or not isinstance(val, (int, float)) or not 0 < val < 7 * 86400:
+            raise ModelPinError(
+                f"[orchestration] codex_timeout_sec in {path} must be a positive number of "
+                f"seconds (under 7 days) (#401)")
+        out["timeout"] = float(val)
+    if "codex_writable_dirs" in orch:
+        dirs = orch["codex_writable_dirs"]
+        if not isinstance(dirs, list):
+            raise ModelPinError(
+                f"[orchestration] codex_writable_dirs in {path} must be a TOML array of paths (#401)")
+        seen: List[str] = []
+        for raw in dirs:
+            d = _check_writable_dir(raw, path)
+            if d not in seen:
+                seen.append(d)
+        out["writable_dirs"] = seen
+    if "codex_network_access" in orch:
+        val = orch["codex_network_access"]
+        if not isinstance(val, bool):
+            raise ModelPinError(
+                f"[orchestration] codex_network_access in {path} must be true or false (#401)")
+        out["network_access"] = val
+    return out
+
+
+def resolve_default_timeout(harness: Optional[str], role: str, cwd: Optional[str] = None) -> float:
+    """Timeout when `--timeout` is not given: 300 s, but 1800 s (or team.toml) for Codex writers (#401)."""
+    if harness == "codex" and CANONICAL_ROLES[normalize_role(role)] not in READ_ONLY_ROLES:
+        configured = load_codex_writer_settings(cwd)["timeout"]
+        return configured if configured is not None else CODEX_WRITER_DEFAULT_TIMEOUT
+    return DEFAULT_TIMEOUT
 
 
 def build_codex_readonly_prompt(role: str, mapped_agent: str, body: str, prompt: str) -> str:
@@ -671,8 +756,16 @@ def build_harness_command(
             pin_args = (["-m", pins["model"]] if "model" in pins else []) + (
                 ["-c", f'model_reasoning_effort="{pins["model_reasoning_effort"]}"']
                 if "model_reasoning_effort" in pins else [])
-        return ["codex", "exec", "--worktree", "--sandbox", "workspace-write", *pin_args,
-                f"Act as the mARC {mapped_agent} specialist. {prompt}"]
+        # Opt-in sandbox widening (#401), empty by default: extra writable dirs for
+        # toolchain caches outside the worktree, and network inside the sandbox.
+        widen = load_codex_writer_settings(cwd)
+        widen_args: List[str] = []
+        for d in widen["writable_dirs"]:
+            widen_args += ["--add-dir", d]
+        if widen["network_access"]:
+            widen_args += ["-c", "sandbox_workspace_write.network_access=true"]
+        return ["codex", "exec", "--worktree", "--sandbox", "workspace-write", *widen_args,
+                *pin_args, f"Act as the mARC {mapped_agent} specialist. {prompt}"]
     else:
         raise ValueError(f"Unsupported harness: {harness!r}")
 
@@ -912,7 +1005,7 @@ def dispatch(
     role: str,
     prompt: str,
     harness: str = "auto",
-    timeout: float = 300.0,
+    timeout: Optional[float] = None,
     dry_run: bool = False,
     team_toml: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
@@ -927,6 +1020,8 @@ def dispatch(
     if "exit_code" in result:
         # Fail-closed refusal (#323) or dry run: nothing to execute.
         return result
+    if timeout is None:
+        timeout = result["default_timeout"]
     return execute_prepared(result, timeout=timeout, runner_fn=runner_fn)
 
 
@@ -995,6 +1090,10 @@ def prepare_dispatch(
                 f"discovered from the checkout; refusing (#351)")
         cmd = build_harness_command(resolved_harness, role, prompt,
                                     codex_opt_in=opt_in, cwd=str(cwd) if cwd else None)
+        default_timeout = resolve_default_timeout(resolved_harness, role, str(cwd) if cwd else None)
+        codex_writer = resolved_harness == "codex" and CANONICAL_ROLES[role] not in READ_ONLY_ROLES
+        widen = (load_codex_writer_settings(str(cwd) if cwd else None) if codex_writer
+                 else {"writable_dirs": [], "network_access": False})
     except (ReadOnlyRoutingError, ModelPinError) as e:
         # e.g. an opted-in Codex reviewer whose persona file is missing (#351),
         # or a malformed model pin / profile (#385).
@@ -1025,8 +1124,17 @@ def prepare_dispatch(
         "policy_reason": route["policy_reason"],
         "codex_readonly_opt_in": opt_in,
         "team_toml": str(toml_path.resolve()) if toml_path else None,
+        "default_timeout": default_timeout,
         "dry_run": dry_run,
     }
+    if codex_writer:
+        # Make any sandbox widening visible to the dispatcher (#401); never silent.
+        result["codex_writable_dirs"] = widen["writable_dirs"]
+        result["codex_network_access"] = widen["network_access"]
+        if widen["writable_dirs"] or widen["network_access"]:
+            sys.stderr.write(
+                f"[mARC dispatch] Notice: codex sandbox widened by team.toml: writable dirs "
+                f"{widen['writable_dirs']}, network_access={widen['network_access']} (#401)\n")
 
     if dry_run:
         result.update({
@@ -1039,14 +1147,72 @@ def prepare_dispatch(
     return result
 
 
+_PARTIAL_MAX_CHARS = 6000
+
+
+def _git_safe(args: List[str], cwd: Optional[str] = None, timeout: float = 20.0) -> Optional[str]:
+    """Read-only git call that cannot run hooks or write the index; None on any failure."""
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+    try:
+        r = subprocess.run(
+            ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", *args],
+            cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _git_worktree_paths() -> Optional[set]:
+    out = _git_safe(["worktree", "list", "--porcelain"])
+    if out is None:
+        return None
+    return {line[len("worktree "):].strip() for line in out.splitlines() if line.startswith("worktree ")}
+
+
+def _clip(text: str) -> Tuple[str, bool]:
+    return (text[:_PARTIAL_MAX_CHARS], True) if len(text) > _PARTIAL_MAX_CHARS else (text, False)
+
+
+def _collect_partial_work(before: Optional[set]) -> Dict[str, Any]:
+    """After a Codex timeout: the worktree(s) it left behind, with status and diff stat (#401).
+
+    The worktree is never cleaned up or reset here; the dispatcher decides whether to
+    keep, finish or discard it. Read-only git only.
+    """
+    after = _git_worktree_paths()
+    if before is None or after is None:
+        return {"worktrees": [], "note": "could not list git worktrees (not a git checkout?); "
+                                         "look for the Codex managed worktree manually"}
+    new = sorted(after - before)
+    entries = []
+    for path in new:
+        status, st_cut = _clip(_git_safe(["status", "--short", "--untracked-files=all"], cwd=path) or "")
+        stat_out, ds_cut = _clip(_git_safe(["diff", "--stat", "HEAD"], cwd=path) or "")
+        entries.append({"path": path, "git_status": status, "diff_stat": stat_out,
+                        "has_changes": bool(status.strip()), "truncated": st_cut or ds_cut})
+    note = ("worktree kept as is; inspect it, then finish, adopt or remove it "
+            "(git worktree remove <path>)") if entries else \
+        "no new worktree found; Codex may have timed out before creating it"
+    return {"worktrees": entries, "note": note}
+
+
 def execute_prepared(
     result: Dict[str, Any],
-    timeout: float = 300.0,
+    timeout: Optional[float] = None,
     runner_fn: Callable[..., Any] = subprocess.run,
 ) -> Dict[str, Any]:
     """Run a command prepared by prepare_dispatch() and record its outcome."""
     result = dict(result)
     cmd = result["command"]
+    if timeout is None:
+        timeout = float(result.get("default_timeout", DEFAULT_TIMEOUT))
+    result["timeout_sec"] = timeout
+    # Codex writer runs work in a managed worktree; remember which ones exist so a
+    # timeout can point at the new one and its partial diff (#401).
+    codex_writer = (result.get("harness") == "codex"
+                    and not result.get("codex_readonly_opt_in")
+                    and CANONICAL_ROLES.get(str(result.get("role")), "") not in READ_ONLY_ROLES)
+    worktrees_before = _git_worktree_paths() if codex_writer else None
     start_time = time.time()
     try:
         proc = runner_fn(
@@ -1078,6 +1244,8 @@ def execute_prepared(
             "timed_out": True,
             "duration_sec": round(duration, 3),
         })
+        if worktrees_before is not None:
+            result["partial_work"] = _collect_partial_work(worktrees_before)
     except Exception as e:
         duration = time.time() - start_time
         err_msg = f"[mARC dispatch] Error executing command: {e}"
@@ -1233,7 +1401,7 @@ def start_job(
     role: str,
     prompt: str,
     harness: str = "auto",
-    timeout: float = 300.0,
+    timeout: Optional[float] = None,
     team_toml: Optional[str] = None,
     cwd: Optional[Path] = None,
 ) -> Tuple[int, Dict[str, Any]]:
@@ -1258,6 +1426,8 @@ def start_job(
         sys.stderr.write(f"[mARC dispatch] Error: {e}\n")
         return EXIT_USAGE, {"error": str(e), "exit_code": EXIT_USAGE}
 
+    if timeout is None:
+        timeout = prepared["default_timeout"]
     root = jobs_root(workdir)
     job_id = _new_job_id()
     job_dir = root / job_id
@@ -1588,8 +1758,9 @@ def _main_start(argv: List[str]) -> int:
     group.add_argument("--prompt-file", help="Read the prompt from a file (keeps it out of the process list)")
     parser.add_argument("--harness", default="auto",
                         choices=["auto", "native", "claude-code", "antigravity", "copilot", "codex"])
-    parser.add_argument("--timeout", type=float, default=300.0,
-                        help="Harness execution timeout in seconds. Default: 300")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help="Harness execution timeout in seconds. Default: 300; 1800 for Codex "
+                             "writers (team.toml [orchestration] codex_timeout_sec)")
     parser.add_argument("--team-toml", default=None)
     args = parser.parse_args(argv)
     if args.prompt_file is not None:
@@ -1663,8 +1834,9 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=300.0,
-        help="Execution timeout in seconds. Default: 300",
+        default=None,
+        help="Execution timeout in seconds. Default: 300; 1800 for Codex writers "
+             "(team.toml [orchestration] codex_timeout_sec)",
     )
     parser.add_argument(
         "--json",
