@@ -100,6 +100,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -607,10 +608,14 @@ _CODEX_SANDBOX_KEYS = ("codex_writable_dirs", "codex_network_access")
 _CODEX_REPO_KEYS = ("codex_timeout_sec",) + _CODEX_SANDBOX_KEYS
 # System trees a writable dir may not be, or be inside (realpath-compared).
 _SYSTEM_TREES = ("/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/usr", "/bin", "/sbin",
-                 "/lib", "/lib32", "/lib64", "/libx32", "/var", "/run")
+                 "/lib", "/lib32", "/lib64", "/libx32", "/var", "/run", "/opt", "/mnt", "/media",
+                 "/srv")
 # Credential and agent-state locations under $HOME a writable dir may not be, or be inside.
 _HOME_DENY = (".ssh", ".gnupg", ".aws", ".kube", ".docker", ".azure", ".codex", ".claude",
-              ".agents", ".config/gh", ".config/gcloud")
+              ".agents", ".config/gh", ".config/gcloud",
+              # Code-execution persistence: PATH dirs, user services, autostart, shell/env hooks.
+              ".local/bin", ".local/share/systemd", ".config/systemd", ".config/autostart",
+              ".config/environment.d", ".config/fish", ".bashrc.d", ".zshrc.d", ".profile.d")
 
 
 def _is_within(child: str, parent: str) -> bool:
@@ -647,6 +652,33 @@ def _checkout_facts(cwd: Optional[str]) -> Tuple[str, Optional[str]]:
     return top, common
 
 
+def _symlink_hazard(text: str) -> Optional[str]:
+    """Why a symlink in the lexical path of `text` could have been planted by someone else (#401 SEC-9).
+
+    A link is suspect when it is owned by neither you nor root, or when its parent
+    directory is world-writable (anyone could have swapped it, e.g. under /tmp).
+    A `..` after a symlink is also refused: lexical and resolved paths would differ.
+    """
+    if ".." in text.split(os.sep) and os.path.realpath(text) != os.path.realpath(os.path.normpath(text)):
+        return "contains '..' after a symlink, so its meaning is ambiguous"
+    me = os.getuid() if hasattr(os, "getuid") else None
+    cur = os.sep
+    for part in [p for p in os.path.normpath(text).split(os.sep) if p]:
+        cur = os.path.join(cur, part)
+        if not os.path.islink(cur):
+            continue
+        try:
+            owner = os.lstat(cur).st_uid
+            parent_mode = os.stat(os.path.dirname(cur)).st_mode
+        except OSError:
+            return f"has an unreadable symlink component ({cur})"
+        if me is not None and owner not in (0, me):
+            return f"has a symlink component owned by another user ({cur})"
+        if parent_mode & 0o002:
+            return f"has a symlink component in a world-writable directory ({cur})"
+    return None
+
+
 def _check_writable_dir(raw: Any, where: str, top: str, common: Optional[str], cfg: Path) -> str:
     """Validate one codex_writable_dirs entry; returns its realpath. Fails closed (#401 SEC-2)."""
     if not isinstance(raw, str) or not raw.strip() or "\0" in raw:
@@ -654,6 +686,9 @@ def _check_writable_dir(raw: Any, where: str, top: str, common: Optional[str], c
     text = os.path.expanduser(raw.strip())
     if text.startswith("-") or not os.path.isabs(text):
         raise ModelPinError(f"{where}: {raw!r} must be an absolute path (a leading '~' is fine)")
+    hazard = _symlink_hazard(text)
+    if hazard:
+        raise ModelPinError(f"{where}: {raw!r} {hazard}; use the real path of the directory")
     real = os.path.realpath(text)
     if not os.path.isdir(real):
         raise ModelPinError(f"{where}: {raw!r} (resolves to {real}) is not an existing directory")
@@ -709,12 +744,18 @@ def _load_user_codex_sandbox(cwd: Optional[str]) -> Dict[str, Any]:
         return out
     top, common = _checkout_facts(cwd)
     real_cfg = os.path.realpath(str(cfg))
-    if _is_within(real_cfg, top) or (common and _is_within(real_cfg, common)):
+    main_checkout = os.path.dirname(common) if common and os.path.basename(common) == ".git" else None
+    if (_is_within(real_cfg, top) or (common and _is_within(real_cfg, common))
+            or (main_checkout and _is_within(real_cfg, main_checkout))):
         raise ModelPinError(
             f"codex sandbox config {cfg} resolves inside the checkout ({real_cfg}); the checkout "
             f"must not be able to widen its own sandbox. Move it outside the repo (#401)")
     if hasattr(os, "getuid") and os.stat(real_cfg).st_uid != os.getuid():
         raise ModelPinError(f"codex sandbox config {cfg} is not owned by you; refusing (#401)")
+    if os.stat(real_cfg).st_mode & 0o022:
+        raise ModelPinError(
+            f"codex sandbox config {cfg} is group- or world-writable; refusing so no other user "
+            f"can widen your sandbox. Fix with: chmod go-w {shlex.quote(real_cfg)} (#401)")
     try:
         import tomllib
     except ImportError:
@@ -733,9 +774,17 @@ def _load_user_codex_sandbox(cwd: Optional[str]) -> Dict[str, Any]:
     if common and os.path.basename(common) == ".git":
         wanted.append(os.path.dirname(common))
     section: Optional[Dict[str, Any]] = None
+    valid: List[Tuple[str, Dict[str, Any]]] = []
+    for key, sec in repos.items():
+        if not key.strip() or not os.path.isabs(key) or "\0" in key:
+            sys.stderr.write(f"[mARC dispatch] warning: skipping [repos.{key!r}] in {cfg}: the key "
+                             f"must be an absolute path (#401)\n")
+            continue
+        if isinstance(sec, dict):
+            valid.append((os.path.realpath(key), sec))
     for target in wanted:
-        for key, sec in repos.items():
-            if isinstance(sec, dict) and os.path.realpath(key) == target:
+        for real_key, sec in valid:
+            if real_key == target:
                 section = sec
                 break
         if section is not None:
@@ -780,7 +829,8 @@ def load_codex_writer_settings(cwd: Optional[str] = None) -> Dict[str, Any]:
                 f"[orchestration] codex_timeout_sec in {path} requires Python 3.11+ (tomllib) "
                 f"to be read; upgrade Python or remove the key (#401)") from None
         val = orch["codex_timeout_sec"]
-        if isinstance(val, bool) or not isinstance(val, (int, float)) or val <= 0:
+        if (isinstance(val, bool) or not isinstance(val, (int, float))
+                or (isinstance(val, float) and not math.isfinite(val)) or val <= 0):
             raise ModelPinError(
                 f"[orchestration] codex_timeout_sec in {path} must be a positive number of "
                 f"seconds (#401)")
@@ -1332,42 +1382,93 @@ def _clip(text: str) -> Tuple[str, bool]:
     return (text[:_PARTIAL_MAX_CHARS], True) if len(text) > _PARTIAL_MAX_CHARS else (text, False)
 
 
-_CODEX_WORKTREE_MARK = os.sep + os.path.join(".agents", "codex", "worktrees") + os.sep
+def _codex_managed_root() -> str:
+    """Realpath of Codex's managed worktree root, `${CODEX_HOME:-~/.codex}/worktrees` (#401 REV-8)."""
+    home = os.environ.get("CODEX_HOME") or os.path.join("~", ".codex")
+    return os.path.realpath(os.path.join(os.path.expanduser(home), "worktrees"))
 
 
-def _collect_partial_work(before: Optional[set]) -> Dict[str, Any]:
-    """After a Codex timeout: the Codex-managed worktree it left behind, if attributable (#401).
+def _collect_partial_work(before: Optional[set], started_at: Optional[float] = None) -> Dict[str, Any]:
+    """After a Codex timeout: worktrees that appeared during the run, never silently dropped (#401).
 
-    Only worktrees that appeared during the run AND sit under a Codex managed worktree
-    root (`.../.agents/codex/worktrees/<id>/...`) are considered, so a worktree another
-    operator added meanwhile is never reported. Exactly one such worktree is reported as
-    attributed (with status and diff stat); several are listed as unattributed
-    `candidates`, path only. Nothing is cleaned up or reset; read-only git only.
+    A new worktree whose realpath is under the managed root (`realpath(${CODEX_HOME:-~/.codex})
+    /worktrees`, compared by path prefix) AND whose directory was created after the run
+    started is the likely one; exactly one such worktree is reported with `attributed:
+    "likely"` plus status and diff stat (a concurrent Codex operator could have created it,
+    so it is never certain). Every other new worktree is listed in `candidates` (path only,
+    `attributed: false`). Nothing is cleaned up or reset; read-only git only.
     """
     after = _git_worktree_paths()
-    if before is None or after is None:
+    if after is None or before is None:
         return {"worktrees": [], "candidates": [],
-                "note": "could not list git worktrees (not a git checkout?); "
-                        "look for the Codex managed worktree manually"}
-    new = sorted(p for p in after - before
-                 if _CODEX_WORKTREE_MARK in os.path.realpath(p) + os.sep)
-    if not new:
+                "note": "could not snapshot git worktrees (before or after the run), so nothing "
+                        "can be attributed; look for the Codex managed worktree under "
+                        f"{_codex_managed_root()} manually"}
+    root = _codex_managed_root()
+    managed: List[str] = []
+    others: List[str] = []
+    for p in sorted(after - before):
+        real = os.path.realpath(p)
+        fresh = True
+        if started_at is not None:
+            try:
+                fresh = os.stat(real).st_ctime >= started_at - 2.0
+            except OSError:
+                fresh = False
+        (managed if (_is_within(real, root) and real != root and fresh) else others).append(p)
+    candidates = [{"path": p, "attributed": False} for p in others]
+    if not managed and not candidates:
         return {"worktrees": [], "candidates": [],
-                "note": "no new Codex-managed worktree found; Codex may have timed out before "
-                        "creating it"}
-    if len(new) > 1:
-        return {"worktrees": [],
-                "candidates": [{"path": p, "attributed": False} for p in new],
-                "note": "several new Codex-managed worktrees appeared during the run, so none can "
-                        "be attributed to this dispatch; inspect them yourself before touching any"}
-    path = new[0]
-    status, st_cut = _clip(_git_safe(["status", "--short", "--untracked-files=all"], cwd=path) or "")
-    stat_out, ds_cut = _clip(_git_safe(["diff", "--stat", "HEAD"], cwd=path) or "")
-    entry = {"path": path, "attributed": True, "git_status": status, "diff_stat": stat_out,
-             "has_changes": bool(status.strip()), "truncated": st_cut or ds_cut}
-    return {"worktrees": [entry], "candidates": [],
-            "note": "the only new Codex-managed worktree during the run; kept as is. Inspect it, "
-                    "then finish, adopt or remove it"}
+                "note": "no new git worktree appeared during the run; Codex may have timed out "
+                        "before creating it"}
+    if len(managed) != 1:
+        candidates = [{"path": p, "attributed": False} for p in managed + others]
+        return {"worktrees": [], "candidates": candidates,
+                "note": "no single new Codex-managed worktree can be attributed to this dispatch "
+                        "(none, or several, appeared during the run; another operator may have "
+                        "created some); inspect them yourself before touching any"}
+    path = managed[0]
+    entry: Dict[str, Any] = {"path": path, "attributed": "likely"}
+    status = _git_safe(["status", "--short", "--untracked-files=all"], cwd=path)
+    stat_out = _git_safe(["diff", "--stat", "HEAD"], cwd=path)
+    if status is None or stat_out is None:
+        entry.update({"git_status": "", "diff_stat": "", "has_changes": None, "truncated": False,
+                      "error": "git status/diff failed in this worktree; its state is unknown"})
+    else:
+        status, st_cut = _clip(status)
+        stat_out, ds_cut = _clip(stat_out)
+        entry.update({"git_status": status, "diff_stat": stat_out,
+                      "has_changes": bool(status.strip()), "truncated": st_cut or ds_cut})
+    return {"worktrees": [entry], "candidates": candidates,
+            "note": "the only new Codex-managed worktree during the run, so probably this "
+                    "dispatch's (a concurrent Codex operator could own it); kept as is. Inspect "
+                    "it, then finish, adopt or remove it yourself"}
+
+
+def _reap_after_kill(proc: "subprocess.Popen[str]", cmd: List[str], timeout: Optional[float],
+                     grace: float = 2.0) -> "subprocess.TimeoutExpired":
+    """Collect output after the group was killed, bounded (#401 REV-7).
+
+    A descendant that left the group (setsid) may still hold the pipes, which would make an
+    unbounded communicate() hang; after `grace` seconds the pipes are closed instead.
+    """
+    out: Any = ""
+    err: Any = ""
+    try:
+        out, err = proc.communicate(timeout=grace)
+    except subprocess.TimeoutExpired as e:
+        out, err = e.stdout or "", e.stderr or ""
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                if pipe:
+                    pipe.close()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass
+    return subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
 
 
 def _killpg_quiet(pgid: int, sig: int) -> None:
@@ -1409,8 +1510,7 @@ def _run_sync_in_group(cmd: List[str], capture_output: bool = True, text: bool =
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _killpg_quiet(proc.pid, signal.SIGKILL)
-            out, err = proc.communicate()
-            raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+            raise _reap_after_kill(proc, cmd, timeout)
         except BaseException:
             _killpg_quiet(proc.pid, signal.SIGKILL)
             proc.wait()
@@ -1439,7 +1539,9 @@ def execute_prepared(
                     and not result.get("codex_readonly_opt_in")
                     and CANONICAL_ROLES.get(str(result.get("role")), "") not in READ_ONLY_ROLES)
     worktrees_before = _git_worktree_paths() if codex_writer else None
-    if codex_writer and runner_fn is subprocess.run:
+    # The group-killing runner needs POSIX process groups; elsewhere keep plain subprocess.run.
+    if (codex_writer and runner_fn is subprocess.run
+            and hasattr(os, "killpg") and hasattr(signal, "SIGHUP")):
         runner_fn = _run_sync_in_group
     start_time = time.time()
     try:
@@ -1472,8 +1574,8 @@ def execute_prepared(
             "timed_out": True,
             "duration_sec": round(duration, 3),
         })
-        if worktrees_before is not None:
-            result["partial_work"] = _collect_partial_work(worktrees_before)
+        if codex_writer:
+            result["partial_work"] = _collect_partial_work(worktrees_before, start_time)
     except Exception as e:
         duration = time.time() - start_time
         err_msg = f"[mARC dispatch] Error executing command: {e}"
@@ -1776,8 +1878,7 @@ def _run_in_own_group(cmd: List[str], capture_output: bool = True, text: bool = 
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_harness_group(signal.SIGKILL)
-            out, err = proc.communicate()
-            raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+            raise _reap_after_kill(proc, cmd, timeout)
         except BaseException:
             _kill_harness_group(signal.SIGKILL)
             proc.wait()

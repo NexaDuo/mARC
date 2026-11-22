@@ -19,15 +19,19 @@ date whose `YY.M.D` is already taken.
   dev/sre/design) default to a 1800 s timeout instead of 300 s (#401), because
   real app tasks stopped at 300 s with half-written files. Other harnesses and
   Codex reviewers keep 300 s. Set `[orchestration] codex_timeout_sec` in
-  team.toml (at most 7200 s, needs Python 3.11+), or pass `--timeout` (not
+  team.toml (finite, at most 7200 s, needs Python 3.11+), or pass `--timeout` (not
   capped), to change it. The `task` pipeline does not use this resolution.
 - A timed-out Codex writer run now keeps its managed worktree and the result
   JSON gains `partial_work` for the dispatcher to decide (#401). It reports
-  path, `git status` and `git diff --stat` only for the one new worktree under
-  Codex's managed root (`.agents/codex/worktrees/`) that appeared during the
-  run; several are listed as unattributed `candidates` (path only, no removal
-  advice), and a worktree another operator adds meanwhile is never reported.
-  The sync path also kills the Codex process group on timeout. Results report
+  path, `git status` and `git diff --stat` for the one new worktree under
+  Codex's managed root (`realpath(${CODEX_HOME:-~/.codex})/worktrees`, compared
+  by path prefix) created during the run, marked `attributed: "likely"` since
+  a concurrent Codex operator could own it. Every other new worktree is a
+  path-only `candidates` entry (no removal advice), never dropped; a failing
+  git call gives `has_changes: null` plus an `error`, and a failed snapshot
+  still yields an explained `partial_work`. The sync path also kills the Codex
+  process group on timeout (POSIX; elsewhere plain `subprocess.run`) and
+  returns promptly even if a `setsid` descendant holds the output pipe. Results report
   `timeout_sec`.
 - `dispatch_agent.py task`: the sandboxed Codex implement and fix steps no
   longer run tests (#349). Some sandboxes refuse test temp dirs even inside
@@ -66,8 +70,12 @@ date whose `YY.M.D` is already taken.
   sandbox: a team.toml that sets them is ignored with a stderr warning, and a
   user-level file that resolves inside the checkout is refused. Each directory
   must exist and is checked after resolving symlinks; `/`, your home or its
-  ancestors, the checkout or its ancestors, system trees, credential and agent
-  directories under home, and the repo's git dir are refused (exit 2).
+  ancestors, the checkout or its ancestors, system trees (including /opt, /mnt,
+  /media, /srv), credential, agent and code-execution persistence directories
+  under home, and the repo's git dir are refused (exit 2), as is a path through
+  a symlink another user owns or that sits in a world-writable directory. The
+  config file itself is refused if group- or world-writable (`chmod go-w`) or
+  inside the checkout or its main checkout; relative `[repos]` keys are skipped.
   Read-only Codex roles never get the widening. The applied values and their
   source file are reported in the result JSON and on stderr. Not verified
   against a real toolchain test run that writes to caches outside the worktree.

@@ -220,11 +220,12 @@ research = "claude-code"
 # harness and for Codex reviewers); `--timeout` beats everything below and is
 # not capped. On a timeout the sync path kills the Codex process group, the
 # managed worktree is kept, and the result JSON carries `partial_work` for the
-# one worktree it can attribute to the run (else unattributed `candidates`).
+# one new managed worktree that is likely the run's (`attributed: "likely"`),
+# plus path-only `candidates` for any other new worktree.
 # The `task` pipeline does not use this timeout or sandbox resolution.
 #
 # codex_timeout_sec lives here (read from the dispatching checkout's team.toml,
-# at most 7200, a malformed value stops the dispatch with exit 2; needs
+# finite number, > 0 and at most 7200; anything else stops the dispatch with exit 2; needs
 # Python 3.11+):
 # [orchestration]
 # codex_timeout_sec = 2400
@@ -233,16 +234,22 @@ research = "claude-code"
 # otherwise widen its own sandbox. Keys set here are ignored with a warning.
 # The operator sets them in a user-level file the checkout cannot write,
 # ${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml (refused if it resolves inside
-# the checkout; needs Python 3.11+), one section per repo keyed by the absolute
-# realpath of the repo top-level:
+# the checkout or the main checkout of a linked worktree, or if it is group- or
+# world-writable: `chmod go-w`; needs Python 3.11+), one section per repo keyed by the absolute
+# realpath of the repo top-level (relative or empty keys are skipped with a warning):
 #   [repos."/abs/path/to/repo"]
 #   codex_writable_dirs = ["~/.cache/toolchain"]   # passed as `--add-dir`
 #   codex_network_access = false                    # true: `-c sandbox_workspace_write.network_access=true`
 # codex_writable_dirs entries must be existing directories meant for caches a
 # build or test run writes outside the worktree. Refused: `/`, your home or its
 # ancestors, the checkout or its ancestors, system trees (/etc, /usr, /var, ...),
-# credential and agent dirs under home (~/.ssh, ~/.aws, ~/.codex, ~/.claude, ...)
-# and the repo's git dir. Symlinks are resolved first. Network access lets
+# /opt, /mnt, /media, /srv, credential and agent dirs under home (~/.ssh, ~/.aws,
+# ~/.codex, ~/.claude, ...), code-execution persistence dirs (~/.local/bin, systemd
+# and autostart dirs, shell rc dirs) and the repo's git dir. Symlinks are resolved
+# first, and an entry whose path crosses a symlink owned by another user or sitting
+# in a world-writable directory (e.g. under /tmp) is refused. Toolchain caches such
+# as ~/.cargo stay allowed. Residual: a directory swapped after validation but
+# before Codex starts is not re-checked. Network access lets
 # everything the run reads, including secrets in your environment, leave the
 # machine. Neither is proven to make a given toolchain's test run pass.
 

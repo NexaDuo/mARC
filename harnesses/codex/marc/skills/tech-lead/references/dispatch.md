@@ -193,9 +193,11 @@ cheapest lever on token budget:
 - **A Codex `@dev` run gets 1800 s, not 300 s; a timeout keeps its worktree.**
   `dispatch_agent.py` defaults a Codex writer to 1800 s (team.toml
   `[orchestration] codex_timeout_sec`, at most 7200, or `--timeout`). When a
-  run times out, read `partial_work` in the result: one attributed worktree
-  (path, `git status`, diff stat) can be finished or adopted; unattributed
-  `candidates` are for you to inspect, never to remove on the script's say-so.
+  run times out, read `partial_work` in the result: one `likely` worktree
+  (under `${CODEX_HOME:-~/.codex}/worktrees`; path, `git status`, diff stat; a
+  concurrent Codex operator could own it) can be finished or adopted; path-only
+  `candidates` (any other new worktree) are for you to inspect, never to remove
+  on the script's say-so.
   Never re-dispatch the same task blind. The sandbox cannot write toolchain
   caches outside the worktree unless the operator lists them in their own
   `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml` (`codex_writable_dirs`, and,
