@@ -167,7 +167,8 @@ cheapest lever on token budget:
   the native host, then any available harness, with a diagnostic warning.
   (origin: #323 · 2026-09-23)
 - **`sonnet` is the implementer default; `opus` for the `@sec`/`@rev`/`@arch`
-  gates; `haiku` is for mechanical/bulk work; `fable` is never a default.** (origin: #69 · 2026-07-10,
+  gates; `haiku` is for mechanical/bulk work; `fable` is never a default.**
+  (origin: #69 · 2026-07-10,
   superseded: `sonnet` by default was the original rule; origin: #331 ·
   2026-09-22, superseded: pinned only `@sec` to `opus` as a per-role
   exception on top of the `sonnet` default; origin: #335 · 2026-09-22,
@@ -189,7 +190,8 @@ cheapest lever on token budget:
   `opus`, or downgrading it to `sonnet`/`haiku`, remains the operator's
   lever, never a silent blanket default flip without new evidence; `fable`
   is not a default for any role.
-  (origin: #383 · 2026-11-10; #401 · 2026-11-22)
+  (origin: #383 · 2026-11-10)
+  (origin: #401 · 2026-11-22)
 - **Codex and Antigravity runs carry the shipped model matrix; don't
   hand-pick models per dispatch.** `dispatch_agent.py` passes the per-role
   pins from `agent-configs/codex/*.toml` (`-m` + effort, writers and opt-in
