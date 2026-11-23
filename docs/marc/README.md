@@ -51,7 +51,6 @@ practice).
 
 ## Artifacts
 
-- [2026-11-23-decision-team-coordination-contract.md](2026-11-23-decision-team-coordination-contract.md) — proposed contract for independent mARC teams and an optional director in a private workspace; no runtime implementation or adopted policy (#411).
 - [2026-07-06-brief-team-artifacts-file-write-policy.md](2026-07-06-brief-team-artifacts-file-write-policy.md) — the `@research` brief behind this folder's own PEF policy (#46).
 - [2026-07-06-decision-team-config-toml.md](2026-07-06-decision-team-config-toml.md) — decision record: per-repo team binding moves from `team.config` to `team.toml` (#51).
 - [2026-07-21-brief-agy-marketplace-clone-free-install.md](2026-07-21-brief-agy-marketplace-clone-free-install.md) — research brief: no clone-free `agy` (Antigravity) marketplace install exists (#151).
@@ -68,6 +67,8 @@ practice).
 - [2026-10-04-brief-hook-architecture.md](2026-10-04-brief-hook-architecture.md) — research brief: hook-resolution architectures in other CLI plugin systems (#343). Superseded by the decision record below.
 - [2026-10-08-decision-review-token-efficiency.md](2026-10-08-decision-review-token-efficiency.md) — decision record: review and dispatch token efficiency (conditional optional review passes, compact handoffs, git-computed re-review deltas).
 - [2026-10-18-decision-agy-hook-dispatcher.md](2026-10-18-decision-agy-hook-dispatcher.md) — decision record: Antigravity hooks run as `bash hooks/agy-hook.sh <id> <Event>`, a dispatcher that follows the host contract probed on agy 1.3.5/1.3.2: `cmd /c`/`sh -c`, cwd = plugin root, no `AGY_*` env, workspace in stdin, JSON on stdout (#343, PR #363).
+
+- [2026-11-23-decision-team-coordination-contract.md](2026-11-23-decision-team-coordination-contract.md) — proposed contract for independent mARC teams and an optional director in a private workspace; no runtime implementation or adopted policy (#411).
 
 ## Landing process (write policy)
 
