@@ -128,7 +128,9 @@ remote, confirm the exact branch/head and integration evidence, inspect tracked
 and untracked local changes, and check worktree registration, live jobs and other
 operators' use. Do not authorize deleting another operator's worktree or sweeping
 all merged branches. Dirty, locked, uncertain or shared targets remain intact
-pending the existing human-resolution rule. Never suggest force removal or
+pending the human-resolution rules in
+[the operating contract](operating-contract.md#team-registry-and-identity) and
+the resolved concurrent-operator protocol. Never suggest force removal or
 pruning as a routine completion step. Report requested cleanup as requested
 until the owning team confirms the inspected target and result.
 

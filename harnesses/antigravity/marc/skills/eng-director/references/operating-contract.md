@@ -3,6 +3,27 @@
 Use existing workspace records where possible. The following fields describe
 what must be known; they are not a new mandatory file format or service.
 
+## Adapting the coordination workspace
+
+Keep this skill independent of the consuming workspace's folder names and tools.
+Discover existing records and adapters first; keep their private paths, resource
+limits and team names in a local index linked from the workspace's instructions.
+Use that index as the binding, not a fork of this skill with embedded local facts.
+No particular index filename, directory layout or serialization format is required.
+
+If organization is needed, reuse the user's existing authorization or obtain
+opt-in for a concrete plan: old-to-new path map, consumers of each path, backups,
+validation and rollback. Creating an index is often sufficient. Reorganization
+must preserve unrelated personal material and existing permissions/visibility;
+it does not authorize moving secrets, publishing records or editing plugin caches.
+Before moving operational files, inspect scripts, schedules, session instructions
+and running processes that reference them. Keep live paths stable until a safe
+migration point. Update approved references together, verify read/send/resume
+paths and pending-event continuity, and retain the old path/backup until the new
+binding is validated. A file move alone is not a successful migration. Do not
+operate or restart live teams merely to validate a reorganization without that
+operational authority.
+
 ## Team registry and identity
 
 Each team has a stable logical name, repository identity, techlead contact,
