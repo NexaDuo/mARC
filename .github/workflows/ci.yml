@@ -1242,14 +1242,14 @@ jobs:
           echo "== assert skills registered (skill list) =="
           SKILLS="$(copilot skill list)"
           echo "$SKILLS"
-          for skill in init tech-lead; do
+          for skill in init tech-lead eng-director; do
             echo "$SKILLS" | grep -qiw "$skill" \
               || { echo "::error::skill '$skill' not registered in copilot skill list"; exit 1; }
           done
 
           echo "== assert specialist agents registered (installed-plugins files) =="
           AGENTS_DIR="$HOME/.copilot/installed-plugins/nexaduo/marc/agents"
-          for component in eng-director engineer sre design security review research; do
+          for component in engineer sre design security review research; do
             test -f "$AGENTS_DIR/$component.md" || {
               echo "::error::agent '$component' not found under $AGENTS_DIR"
               exit 1
