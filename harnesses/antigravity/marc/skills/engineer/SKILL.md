@@ -117,13 +117,20 @@ repository, not in this plugin. At the start of a task, discover them at runtime
 
 ## Workflow
 1. Confirm scope from the issue's acceptance criteria; branch off `main`.
-2. Implement; keep the change idempotent and code-only.
-3. Run/extend tests; run the relevant smoke checks.
+2. Implement the smallest change that meets the acceptance criteria; keep it
+   idempotent and code-only, with no abstractions or files beyond what the
+   criteria require. Always keep a regression test for the fixed defect and
+   any test of a security property. Apply a discovery only if it is in files
+   the task already touches and changes no behavior (typo, stale comment), and
+   is not a security surface or a prompt, skill, agent, hook, CI or config
+   file; declare it, list it in the PR body, and report everything else. (origin: #403 · 2026-11-23)
+3. Run/extend tests (as the criteria require); run the relevant smoke checks.
 4. Open a PR (commit/PR trailers per the repo convention). Comment the PR link
    on the issue.
 5. Monitor CI/deploy workflows (`gh run watch`) through the repo's release phases.
 6. Report back to @techlead: PR URL, test results, and workflow status — plainly,
-   including failures.
+   including failures, plus a `discoveries` list (what/where file:line, cost,
+   changes behavior, security surface, applied or reported).
 
 ## Efficiency (token discipline)
 - **Disk-first scaffolding for repetitive structure.** When generating large, predictable blocks of syntax (e.g. repeated components, boilerplate configs), scaffold them directly to disk via background scripts or isolated worktrees. Avoid streaming the full text into the conversation history. (origin: #267 · 2026-09-11)
