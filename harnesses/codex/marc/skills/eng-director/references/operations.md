@@ -1,0 +1,124 @@
+# Operations and recovery
+
+This is an operating procedure over verified local adapters, not a bundled
+cross-harness daemon. Invocation does not authorize restarting live services.
+Use the mandate and target mapping from the operating contract.
+
+## Establish state before recovery
+
+1. Read the checkpoint and recent escalation/owner replies, including events
+   during downtime. Check resource availability and required mounts/workspaces
+   before assuming missing files mean data loss.
+2. Verify session registry against actual sessions, process identity and screens
+   or native status. A blank screen or timeout is unknown, not proof of death.
+3. Inspect the configured resume/start adapter. Some recovery scripts kill or
+   replace an existing session: do not call them while its liveness is uncertain.
+4. For a confirmed stopped session, resume the saved conversation when supported
+   and authorized. Start a replacement only through the ownership rules. Restore
+   its workspace and resource settings from private configuration, not the plugin.
+5. Verify target identity, responsiveness, checkpoint and claim after recovery.
+   Deliver a bounded continuation, confirm acknowledgment, then record observed
+   session/process bindings. Never report success at process launch alone.
+
+No default command assumes a terminal multiplexer, operating system, local path,
+fixed pane number or CLI flag. If an adapter is absent, explain the missing
+capability and prepare its requirements; don't pretend a tracker comment wakes
+an idle session or silently install a service.
+
+## Delivery and idle sessions
+
+Resolve a logical recipient to a currently verified destination. Prefer a native
+message API when it actually reaches that session. A locally approved terminal
+adapter is permitted; check the target is the intended harness input, not a shell,
+permission dialog or another session. Send data via the adapter's safe input path,
+not executable shell interpolation. Unsupported/ambiguous target: do not send.
+
+Persist a message reference and intended recipient before sending when local
+policy supports it. Track sent, acknowledged and acted-on separately. Use bounded
+retry with the same reference; check screen/inbox/checkpoint before retrying so
+lost acknowledgments don't duplicate work. An idle reminder references eligible
+work or requests a blocker; it does not manufacture a new task. Escalate after
+the configured acknowledgment deadline, without repeatedly injecting text.
+
+## Watcher and coordinator health
+
+Only restore monitoring already requested by the user, or start it under a new
+explicit mandate. Verify singleton ownership and identity; PID existence alone
+is insufficient. Inspect state/cursor format and its relation to source history.
+Empty, malformed, truncated or stale cursor state is a recovery condition:
+reconcile a bounded recent window against handled references before choosing a
+new cursor. Do not blindly initialize to end-of-file and skip unseen decisions.
+
+Separate deterministic monitoring from director judgment. A watcher may detect
+idle sessions, new decisions, quota recovery and resource pressure, then notify
+the director or perform only preauthorized routine actions. Verify heartbeats,
+last successful observation and one actual notification; process existence alone
+does not show the watcher works. After a one-shot trigger, re-arm only if the
+monitoring mandate is still active. Record missing signals explicitly.
+
+Editing a script does not update its running process. If an authorized repair
+requires restart, inspect the restart scope, avoid duplicates, preserve pending
+events and verify the new instance. No unbounded retry or background loop is
+created by this skill; an approved long-lived watcher has a stop condition,
+health deadline, bounded failure retries and an owner-controlled lifecycle.
+
+## Context maintenance and efficiency
+
+Keep the harness's native compaction and mARC's measuring sentinel as defaults.
+A consumer may explicitly delegate a different measured context policy to this
+director; read its threshold, source and scope before acting. Do not infer
+context pressure from conversation length or copy a threshold from another repo.
+
+Under that opt-in policy, request a safe checkpoint, wait for the team's ready
+acknowledgment, ensure its atomic operation has reached a safe state, then use
+its supported compaction/resume adapter. Revalidate identity and checkpoint;
+compaction does not transfer ownership. Do one affected team at a time where
+availability matters. An expired ready request or stale recycling marker needs
+reconciliation, not forced compaction or automatic marker deletion.
+
+Restore periodic efficiency reviews only when previously authorized and still
+wanted. Check whether the schedule survived before creating another; don't
+invent a cron API in a harness that lacks one. Without scheduling support,
+report that gap and perform the currently requested review only. Compare fresh
+metrics with the prior record: quality/rework, throughput, tokens/cache, quota,
+CI waits and resource pressure. Apply only delegated adjustments; plan, cost or
+infrastructure authority outside that scope stays with the user.
+
+## Resource guardian
+
+First correlate the pressure to a verified process/job, start time, owning team
+and shared resource group. Notify the team and prefer reducing new admissions or
+a graceful stop. Terminate only within an explicit resource-guardian mandate and
+its threshold/action limits; recheck process identity immediately before acting.
+Never use broad name matching to kill processes. Do not bypass permission errors.
+
+Record measurements, reason, affected job, action, partial effects and recovery.
+Verify pressure actually drops and the team has a safe next step; a successful
+kill command is not recovery. Changing host-wide limits or shutting down shared
+infrastructure needs its own authority. Preserve review/production constraints
+even during pressure. Coordinate cache cleanup with active users and the owning
+cache tool; a large directory is not evidence it is safe to delete.
+
+## Pilot: prove reachability first
+
+Agree budgets and stop conditions before testing. A sample pilot uses two
+independent teams in the same repository and an explicitly opted-in watcher.
+These are acceptance targets to configure, not measured product guarantees:
+
+- Deliver a harmless identified message to an idle session and receive its
+  acknowledgment within 60 seconds; at most one retry, then explicit escalation.
+- Detect a stopped watcher within two configured poll intervals. Recover an
+  empty cursor in a sandbox without dropping an unhandled sample event.
+- Detect configured idle/resource pressure within two poll intervals; verify
+  only the authorized target is mitigated and all other work stays untouched.
+- Resume a stopped conversation with the same ownership checkpoint without
+  duplicate live instances; refuse replacement if continuity cannot be proved.
+- Two teams find each other by logical name, negotiate an overlapping file and
+  produce one reviewed integration with terminal evidence.
+- Produce a short user report that distinguishes collected inventory from
+  implemented, tested and released behavior.
+
+Run destructive recovery/resource scenarios only on explicitly disposable test
+sessions. Read-only evaluation can verify decisions but does not prove wakeup,
+restart, scheduling or process-control support. Record each scenario as passed,
+failed or untested with evidence, rather than claiming the whole pilot succeeded.

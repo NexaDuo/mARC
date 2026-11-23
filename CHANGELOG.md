@@ -8,6 +8,25 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.23.1] - 2026-11-23
+
+### Added
+
+- `eng-director` leadership skill for independent techlead sessions in one or
+  several repositories: private registry, minimal work records, delegated
+  authority, session recovery, authorized watchers, measured context maintenance,
+  shared-resource guardianship and evidence-based user reporting (#411).
+  It uses inspected local adapters; no broker, daemon or universal wakeup API is
+  installed. Live recovery and mitigation require consumer-specific validation.
+
+### Changed
+
+- Extend director governance for explicitly authorized operational monitoring
+  and measured context policies; unsolicited schedules and guessed context
+  warnings remain disallowed. Claims, independent reviews and no self-merge
+  remain in force (#411).
+
+
 ### Changed
 
 - Dispatch cost rules amended with the cache measurement from #402 (#403).

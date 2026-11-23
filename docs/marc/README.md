@@ -67,8 +67,7 @@ practice).
 - [2026-10-04-brief-hook-architecture.md](2026-10-04-brief-hook-architecture.md) — research brief: hook-resolution architectures in other CLI plugin systems (#343). Superseded by the decision record below.
 - [2026-10-08-decision-review-token-efficiency.md](2026-10-08-decision-review-token-efficiency.md) — decision record: review and dispatch token efficiency (conditional optional review passes, compact handoffs, git-computed re-review deltas).
 - [2026-10-18-decision-agy-hook-dispatcher.md](2026-10-18-decision-agy-hook-dispatcher.md) — decision record: Antigravity hooks run as `bash hooks/agy-hook.sh <id> <Event>`, a dispatcher that follows the host contract probed on agy 1.3.5/1.3.2: `cmd /c`/`sh -c`, cwd = plugin root, no `AGY_*` env, workspace in stdin, JSON on stdout (#343, PR #363).
-
-- [2026-11-23-decision-team-coordination-contract.md](2026-11-23-decision-team-coordination-contract.md) — proposed contract for independent mARC teams and an optional director in a private workspace; no runtime implementation or adopted policy (#411).
+- [2026-11-23-decision-team-coordination-contract.md](2026-11-23-decision-team-coordination-contract.md) — engineering-director proposal: operational recovery, delegated authority and minimal contracts; live adapter capabilities require validation (#411).
 
 ## Landing process (write policy)
 
