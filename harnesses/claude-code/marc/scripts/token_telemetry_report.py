@@ -67,7 +67,8 @@ def group_by_session(records: list[dict]) -> dict[str, list[dict]]:
 
 def session_totals(turns: list[dict]) -> dict:
     total = {"turns": len(turns), "input": 0, "output": 0, "cache_read": 0,
-             "cache_write": 0, "weighted": 0, "first_ts": None, "last_ts": None,
+             "cache_write": 0, "weighted": 0, "cache_write_weighted": 0,
+             "sc_cache_write": 0, "sc_cache_write_weighted": 0, "first_ts": None, "last_ts": None,
              "model": "-", "repo": "-"}
     for t in turns:
         total["input"] += int(t.get("input", 0) or 0)
@@ -75,6 +76,8 @@ def session_totals(turns: list[dict]) -> dict:
         total["cache_read"] += int(t.get("cache_read", 0) or 0)
         total["cache_write"] += int(t.get("cache_write", 0) or 0)
         total["weighted"] += int(t.get("weighted", 0) or 0)
+        for k in ("cache_write_weighted", "sc_cache_write", "sc_cache_write_weighted"):
+            total[k] += int(t.get(k, 0) or 0)
         ts = t.get("ts")
         if isinstance(ts, (int, float)):
             if total["first_ts"] is None or ts < total["first_ts"]:
@@ -97,6 +100,14 @@ def fmt_ts(ts) -> str:
         return "-"
 
 
+def cw_share(totals: dict) -> str:
+    """Cache-write (TTL-weighted) share of the weighted total, as a percent.
+    `sc_cw_wtd` is the sidechain (subagent) part of it (origin: #402)."""
+    if totals["weighted"] <= 0:
+        return "-"
+    return f"{totals['cache_write_weighted'] / totals['weighted'] * 100:.0f}%"
+
+
 def print_report(sessions: dict[str, list[dict]], *, limit: int) -> None:
     ordered = sorted(
         sessions.items(),
@@ -106,7 +117,7 @@ def print_report(sessions: dict[str, list[dict]], *, limit: int) -> None:
 
     print(f"{'session':<14} {'repo':<24} {'model':<26} {'turns':>6} "
           f"{'weighted':>12} {'input':>10} {'output':>10} {'cache_read':>12} "
-          f"{'cache_write':>12}  last")
+          f"{'cache_write':>12} {'cw_wtd':>10} {'cw%':>5} {'sc_cw_wtd':>10}  last")
     grand_weighted = 0
     grand_turns = 0
     for sid, turns in ordered:
@@ -116,7 +127,9 @@ def print_report(sessions: dict[str, list[dict]], *, limit: int) -> None:
         print(f"{sid[:12]:<14} {totals['repo'][:24]:<24} {totals['model'][:26]:<26} "
               f"{totals['turns']:>6} {totals['weighted']:>12} {totals['input']:>10} "
               f"{totals['output']:>10} {totals['cache_read']:>12} "
-              f"{totals['cache_write']:>12}  {fmt_ts(totals['last_ts'])}")
+              f"{totals['cache_write']:>12} {totals['cache_write_weighted']:>10} "
+              f"{cw_share(totals):>5} {totals['sc_cache_write_weighted']:>10}  "
+              f"{fmt_ts(totals['last_ts'])}")
 
     print(f"\n{len(ordered)} session(s) shown, {len(sessions)} total in file. "
           f"weighted tokens (shown sessions): {grand_weighted}   turns: {grand_turns}")

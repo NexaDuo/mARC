@@ -124,14 +124,18 @@ def main() -> int:
     # --- Unit-level: record schema whitelist --------------------------------
     turn = {"model": "claude-opus-4-8-20260101", "input_tokens": 100,
             "output_tokens": 50, "cache_read_tokens": 200, "cache_write_tokens": 10,
-            "tokens": 121, "last_ts": "2026-07-21T00:00:00.000Z",
+            "tokens": 121, "cache_write_weighted": 20, "sc_cache_write": 4,
+            "sc_cache_write_weighted": 8, "last_ts": "2026-07-21T00:00:00.000Z",
             "prompt": "this is message-body text that must NEVER leak"}
     record = tt.build_record(turn, session_id="sess-abc", turn_index=2, repo="myrepo")
     check("prompt" not in record, "build_record: never forwards the 'prompt' (message-body) field")
     expected_keys = {"ts", "session_id", "turn_index", "model", "input", "output",
-                     "cache_read", "cache_write", "weighted", "repo"}
+                     "cache_read", "cache_write", "weighted", "repo",
+                     "cache_write_weighted", "sc_cache_write", "sc_cache_write_weighted"}
     check(set(record.keys()) == expected_keys,
           f"build_record: schema is exactly {sorted(expected_keys)}, got {sorted(record.keys())}")
+    check(record["cache_write_weighted"] == 20 and record["sc_cache_write_weighted"] == 8
+          and record["sc_cache_write"] == 4, "build_record: carries the cache-write buckets (#402)")
     check(record["input"] == 100 and record["output"] == 50
           and record["cache_read"] == 200 and record["cache_write"] == 10
           and record["weighted"] == 121 and record["session_id"] == "sess-abc"

@@ -52,6 +52,18 @@ class TestTokenTelemetryReport(unittest.TestCase):
         self.assertIn("sess-2", out)
         self.assertIn("weighted tokens (shown sessions): 1500", out)
 
+    def test_cache_write_bucket(self):
+        path = os.path.join(self.tmpdir.name, "cw.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"session_id": "sess-cw", "weighted": 1000, "cache_write": 300,
+                                "cache_write_weighted": 250, "sc_cache_write": 100,
+                                "sc_cache_write_weighted": 125}) + "\n")
+        rc, out = self.run_main(["--path", path])
+        self.assertEqual(rc, 0)
+        self.assertIn("cw_wtd", out)
+        self.assertIn("25%", out)
+        self.assertIn("125", out)
+
     def test_report_empty(self):
         empty_path = os.path.join(self.tmpdir.name, "empty.jsonl")
         open(empty_path, "w").close()

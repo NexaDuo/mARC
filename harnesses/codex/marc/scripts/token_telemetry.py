@@ -36,7 +36,11 @@ outdated-check state file) — one line per turn, schema:
     cache_read    raw `cache_read_input_tokens` summed over the turn
     cache_write   raw `cache_creation_input_tokens` summed over the turn
     weighted      cost-weighted total (`token_sentinel.weighted_usage_tokens`,
-                  origin: #100 — fresh full-rate, cache-read discounted)
+                  origin: #100 — fresh full-rate, cache-read discounted,
+                  cache-write at 1.25x/2x per TTL, #402)
+    cache_write_weighted  `cache_write` weighted by TTL (additive, #402)
+    sc_cache_write, sc_cache_write_weighted  the sidechain (subagent) share
+                  of the two cache-write figures above (additive, #402)
     repo          basename of the session's cwd (coarse context only, never
                   a full path)
 
@@ -139,6 +143,9 @@ def build_record(turn: dict, *, session_id: str, turn_index: int, repo: str) -> 
         "cache_read": int(turn.get("cache_read_tokens", 0) or 0),
         "cache_write": int(turn.get("cache_write_tokens", 0) or 0),
         "weighted": int(turn.get("tokens", 0) or 0),
+        "cache_write_weighted": int(turn.get("cache_write_weighted", 0) or 0),
+        "sc_cache_write": int(turn.get("sc_cache_write", 0) or 0),
+        "sc_cache_write_weighted": int(turn.get("sc_cache_write_weighted", 0) or 0),
         "repo": repo,
     }
 

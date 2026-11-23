@@ -3,8 +3,9 @@
 
 Offline operator self-check: no network, zero token/dollar cost. Reads a Claude
 Code session `.jsonl` and reports, per user turn, the model used, the number of
-assistant tool calls, and the cost-weighted tokens processed (fresh input and
-cache-write tokens at full rate, cache-read tokens discounted, origin: #100),
+assistant tool calls, and the cost-weighted tokens processed (fresh input at
+full rate, cache-write tokens at 1.25x/2x per TTL, cache-read tokens
+discounted, origin: #100, #402),
 flagging turns that look runaway so the operator can tighten model tiering and
 dispatch bounds.
 
@@ -90,6 +91,14 @@ HOOK_THRESHOLD_ENV = "MARC_TOKEN_GUARD_THRESHOLD"
 # the full record. `CACHE_READ_WEIGHT` below is kept: it still feeds the
 # weighted-token measure used by cost accumulators / telemetry, which survive.
 CACHE_READ_WEIGHT = 0.1  # cache_read_input_tokens counted at ~1/10th rate; tune here only.
+# Cache WRITES bill above base input (origin: #402): 1.25x for the 5-minute TTL,
+# 2x for the 1-hour TTL. Claude Code transcripts expose the split as
+# usage.cache_creation.ephemeral_{5m,1h}_input_tokens. When only the aggregate
+# `cache_creation_input_tokens` exists, fall back to the 5m weight (the lower
+# bound: never overstates spend on an unknown TTL).
+CACHE_WRITE_WEIGHT_5M = 1.25
+CACHE_WRITE_WEIGHT_1H = 2.0
+CACHE_WRITE_WEIGHT_FALLBACK = CACHE_WRITE_WEIGHT_5M
 
 # The manual CLI's `--tokens` diagnostic default. Self-contained (no
 # context-window derivation, no env var) — it is an explicit, operator-invoked
@@ -161,8 +170,9 @@ def usage_tokens(usage: dict) -> int:
 def usage_components(usage: dict) -> tuple[int, int]:
     """Split one usage dict into (fresh, cache_read) token counts.
 
-    `fresh` = input_tokens + cache_creation_input_tokens: both bill at full
-    rate (a cache write is still a full-price write of the whole context).
+    `fresh` = input_tokens + cache_creation_input_tokens as RAW counts. Cache
+    writes do NOT bill at full rate: see `cache_write_weighted` for the
+    TTL-weighted figure (origin: #402).
     `cache_read` = cache_read_input_tokens: a discounted re-read of tokens
     already cached (origin: #100 — see CACHE_READ_WEIGHT above).
     """
@@ -174,13 +184,30 @@ def usage_components(usage: dict) -> tuple[int, int]:
     return fresh, cache_read
 
 
-def weighted_usage_tokens(fresh: int, cache_read: int) -> int:
+def cache_write_weighted(usage: dict) -> int:
+    """Cache-write tokens weighted by TTL (origin: #402): 5m x1.25, 1h x2.
+    Uses the `cache_creation` split when present; any aggregate remainder (or
+    an aggregate-only record) takes CACHE_WRITE_WEIGHT_FALLBACK."""
+    total = int(usage.get("cache_creation_input_tokens", 0) or 0)
+    cc = usage.get("cache_creation")
+    if not isinstance(cc, dict):
+        return round(total * CACHE_WRITE_WEIGHT_FALLBACK)
+    m5 = int(cc.get("ephemeral_5m_input_tokens", 0) or 0)
+    h1 = int(cc.get("ephemeral_1h_input_tokens", 0) or 0)
+    rest = max(total - m5 - h1, 0)
+    return round(m5 * CACHE_WRITE_WEIGHT_5M + h1 * CACHE_WRITE_WEIGHT_1H
+                 + rest * CACHE_WRITE_WEIGHT_FALLBACK)
+
+
+def weighted_usage_tokens(fresh: int, cache_read: int, cache_write_premium: int = 0) -> int:
     """Cost-weighted token measure: fresh tokens at full rate, cache-read
-    tokens discounted by CACHE_READ_WEIGHT (origin: #100). This is the measure
-    that feeds the context-size band, so a cache-read-dominated re-read of an
-    already-cached context no longer counts the same as a fresh generation.
+    tokens discounted by CACHE_READ_WEIGHT (origin: #100), plus
+    `cache_write_premium` = the extra cost of cache writes above full rate
+    (`cache_write_weighted(usage) - cache_creation_input_tokens`, origin: #402;
+    `fresh` already counts those tokens once at 1x). Feeds the manual CLI
+    `--tokens` diagnostic and telemetry, not the hook bands (calls only).
     """
-    return fresh + round(cache_read * CACHE_READ_WEIGHT)
+    return fresh + cache_write_premium + round(cache_read * CACHE_READ_WEIGHT)
 
 
 def dominant_token_type(fresh: int, cache_read: int) -> str:
@@ -235,6 +262,10 @@ def analyze(path: str):
                      guard band — this is a separate additive field, #149)
       cache_write_tokens  summed `cache_creation_input_tokens` only (same
                           split rationale as `input_tokens`, #149)
+      cache_write_weighted  cache_write_tokens weighted by TTL (1.25x/2x, #402)
+      sc_cache_write / sc_cache_write_weighted  the same two figures restricted
+                     to sidechain (subagent) messages, so dispatch spend shows
+                     as its own bucket (#402)
       last_ts        ISO timestamp of the last assistant message seen in the
                      turn ("" if none) — additive field, origin: #149
 
@@ -255,6 +286,7 @@ def analyze(path: str):
         t = {"prompt": prompt, "model": "-", "calls": 0, "requests": 0,
              "tokens": 0, "raw_tokens": 0, "fresh_tokens": 0, "cache_read_tokens": 0,
              "output_tokens": 0, "input_tokens": 0, "cache_write_tokens": 0, "last_ts": "",
+             "cache_write_weighted": 0, "sc_cache_write": 0, "sc_cache_write_weighted": 0,
              "main_model": "-", "cw": 0, "cr": 0,
              "_main_seen": False}
         turns.append(t)
@@ -292,7 +324,13 @@ def analyze(path: str):
                     fresh, cache_read = usage_components(usage)
                     current["fresh_tokens"] += fresh
                     current["cache_read_tokens"] += cache_read
-                    current["tokens"] += weighted_usage_tokens(fresh, cache_read)
+                    cw_raw = int(usage.get("cache_creation_input_tokens", 0) or 0)
+                    cw_w = cache_write_weighted(usage)
+                    current["tokens"] += weighted_usage_tokens(fresh, cache_read, cw_w - cw_raw)
+                    current["cache_write_weighted"] += cw_w
+                    if rec.get("isSidechain") is True:
+                        current["sc_cache_write"] += cw_raw
+                        current["sc_cache_write_weighted"] += cw_w
                     current["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
                     current["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
                     current["cache_write_tokens"] += int(usage.get("cache_creation_input_tokens", 0) or 0)

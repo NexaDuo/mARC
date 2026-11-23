@@ -384,6 +384,37 @@ def main() -> int:
                   "the advisory is the model-switch guard, not a stray "
                   "context-size one (which no longer exists)")
 
+    # --- #402: cache writes weighted per TTL (1.25x 5m, 2x 1h), sidechain bucket
+    sys.path.insert(0, HERE)
+    import token_sentinel as ts
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "cw.jsonl")
+        recs = [
+            {"type": "user", "message": {"role": "user", "content": "go"}},
+            {"type": "assistant", "message": {"model": OPUS, "content": [], "usage": {
+                "input_tokens": 10, "cache_read_input_tokens": 1000,
+                "cache_creation_input_tokens": 100_000,
+                "cache_creation": {"ephemeral_5m_input_tokens": 40_000,
+                                   "ephemeral_1h_input_tokens": 60_000}}}},
+            {"type": "assistant", "isSidechain": True, "message": {
+                "model": SONNET, "content": [], "usage": {
+                    "input_tokens": 0, "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 8_000}}},  # aggregate only
+        ]
+        with open(path, "w", encoding="utf-8") as fh:
+            for r in recs:
+                fh.write(json.dumps(r) + "\n")
+        t = ts.analyze(path)[0]
+        main_cw = 40_000 * 1.25 + 60_000 * 2.0   # 170_000
+        side_cw = 8_000 * 1.25                   # fallback 10_000
+        check(t["cache_write_weighted"] == main_cw + side_cw,
+              f"cache_write_weighted applies per-TTL + fallback ({t['cache_write_weighted']})")
+        check(t["sc_cache_write"] == 8_000 and t["sc_cache_write_weighted"] == side_cw,
+              "sidechain cache-write is its own bucket")
+        check(t["cache_write_tokens"] == 108_000, "raw cache_write_tokens unchanged")
+        check(t["tokens"] == 10 + 100_000 + 8_000 + 70_000 + 2_000 + 100,
+              f"weighted = fresh + cache-write premium + 0.1*cache_read ({t['tokens']})")
+
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
         for m in _failures:
