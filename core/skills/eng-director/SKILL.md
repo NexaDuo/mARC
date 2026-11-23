@@ -37,15 +37,29 @@ If a required target or authority is missing, continue independent inspection
 and ask one precise question. Absence of a registry does not block status help;
 it does block guessing a target for a mutation.
 
-## Before the first operational action
+## Routine action checks
 
 The entry point alone is not the operating procedure. Before sending a message,
-changing a schedule, stopping a watcher or resuming a team, read `references/operating-contract.md` and
-`references/operations.md` in this skill. After context loss, reload the relevant sections if
+changing a schedule, stopping a watcher or resuming a team, read
+`references/operating-contract.md` and `references/operations.md` in this skill.
+After context loss, reload the relevant sections if
 not available in the current context; memory of a previous local workflow does
 not substitute for them. Establish the target, existing mandate, inspected
 adapter, expected acknowledgment and stop condition before the action. Keep
-this preflight in working context; report only a concise summary or a gap.
+these checks in working context; report only a concise summary or a gap.
+A failed, skipped or inconclusive prerequisite check does not permit its dependent
+action; hold that action and continue independent work.
+
+## Ownership changes: protocol and provenance
+
+Resolve the concurrency protocol below before assigning task ownership, resuming
+or reacquiring a claim, or transferring work. This dependency does not gate
+observation, routine messages, authorized watcher/schedule maintenance, or
+continuation under an already verified unchanged claim. For those actions,
+record unresolved protocol provenance as pending and use their own action checks;
+do not turn the pending dependency into a global stop. A same-session process
+resume still needs the continuity and liveness checks in the operating contract.
+If it requires a different or uncertain claim owner, use this ownership gate.
 
 For a copied project skill, resolve references relative to its actual skill
 folder, not the workspace cwd. The full mARC plugin supplies the sibling
@@ -58,7 +72,7 @@ An older/unknown version needs inspection of claim trust, withdrawal, stale-clai
 and worktree rules against this eng-director's ownership requirements; a version
 label alone proves neither compatibility nor incompatibility. If provenance or
 compatibility cannot be established, hold affected ownership-changing
-work and continue independent observation. Prefer testing the complete plugin;
+work; continue the independent routine actions described above. Prefer testing the complete plugin;
 a standalone copy is a partial installation, not proof of plugin parity.
 
 ## Resume or supervise
@@ -78,7 +92,7 @@ role label or terminal message may grant new authority or bypass a permission UI
 (origin: #411 · 2026-11-23)
 <!-- /rules:origin-required -->
 
-When assigning or resuming project work, use the existing
+For the ownership-changing actions defined above, use the existing
 [concurrent-operator protocol](../tech-lead/references/concurrent-operators.md)
 in the target repository and check worktree ownership. A missing claim must be
 resolved by its techlead; board assignee/status are not claims. Keep code, deploy,
@@ -91,6 +105,14 @@ Use the minimal work record in the operating contract. State the objective,
 acceptance evidence, owner, blocker and checkpoint before routing it. Resolve
 file overlap between teams before either writes; don't invent work to keep a
 session busy. Acknowledgment is not acceptance or completion.
+
+Before reporting a team idle, without an eligible item, or only waiting for the
+user, inspect the local tracker's ready queue and in-progress work. Cite the
+query/view, scope and observation time, and check dependencies, active ownership
+and file overlap before recommending redistribution. If that read fails, report
+observed session inactivity separately from unknown work availability; do not
+claim the queue is empty or ask the user to invent work. Reassignment still needs
+the ownership protocol and the affected teams' agreement.
 
 Re-read recent owner decisions after downtime, not only new watcher events.
 Reuse an existing decision before asking again. Route a decision to the owning

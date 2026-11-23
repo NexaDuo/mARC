@@ -4,11 +4,37 @@ This is an operating procedure over verified local adapters, not a bundled
 cross-harness daemon. Invocation does not authorize restarting live services.
 Use the mandate and target mapping from the operating contract.
 
+## Resume checklist
+
+On each coordination resumption, reconcile these three sources before declaring
+operations restored. Missing evidence stays explicitly unknown; do not block
+independent checks because a source is unavailable.
+
+1. Recent owner decisions and comments, including replies during downtime, plus
+   the checkpoint and unhandled escalations. Distinguish a question from approval.
+2. The local tracker's ready queue and in-progress items, their owners and blockers.
+   Record the view/query and observation time; session silence is not an empty queue.
+3. Actual scheduled tasks and session watchers versus the user-approved local
+   policy. List their IDs, scope, owner and state; restore missing authorized
+   instances and remove only verified duplicates under the watcher rules below.
+   Verify the final inventory. If listing/reconciliation cannot run, report it
+   pending rather than blindly creating, deleting or claiming monitoring restored.
+   Cadence and thresholds come from local policy, never this skill.
+
+## Prerequisite failures
+
+A check must actually run successfully and return the evidence needed by its
+operation. Syntax or environment errors, timeouts, missing output and skipped
+probes leave that prerequisite unknown. Do not stop a watcher, send a message or
+change a schedule on that basis. Correct the check and retry within its budget;
+if it still fails, hold only the dependent action and report the precise gap.
+Inspect the verification command's actual result, not just a formatter's or the
+last pipeline command's success. Failure is never equivalent to a passed check.
+
 ## Establish state before recovery
 
-1. Read the checkpoint and recent escalation/owner replies, including events
-   during downtime. Check resource availability and required mounts/workspaces
-   before assuming missing files mean data loss.
+1. Complete the relevant resume-checklist reads. Check resource availability and
+   required mounts/workspaces before assuming missing files mean data loss.
 2. Verify session registry against actual sessions, process identity and screens
    or native status. A blank screen or timeout is unknown, not proof of death.
 3. Inspect the configured resume/start adapter. Some recovery scripts kill or

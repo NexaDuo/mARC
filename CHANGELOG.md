@@ -155,6 +155,10 @@ date whose `YY.M.D` is already taken.
 - Tighten the director's operational preflight and partial-install discovery,
   watcher/schedule deduplication and owner-scoped cleanup checks after live
   evaluation (#411).
+- Reconcile the ready queue, recent owner replies and actual schedules on
+  director resume; failed prerequisite checks block their dependent actions.
+  Scope protocol provenance to claim/ownership changes so routine authorized
+  coordination can continue with that dependency explicitly pending (#411).
 
 ## [26.11.14] - 2026-11-14
 
