@@ -139,6 +139,9 @@ date whose `YY.M.D` is already taken.
 
 ### Added
 
+- README and public site introduce the director, its invocation, private workspace
+  setup and the boundary between leadership procedures and local runtime adapters.
+
 - `eng-director` leadership skill for independent techlead sessions in one or
   several repositories: private registry, minimal work records, delegated
   authority, session recovery, authorized watchers, measured context maintenance,

@@ -91,12 +91,13 @@ writing telemetry. To intentionally process Claude data, pass
 `--harness claude-code`. Detailed tech-lead procedures load on demand from
 references to keep the initial skill prompt small.
 
-## The metaphor: one channel, one op, a bench of specialists
+## The team: leaders and a shared specialist bench
 
 Think of your project as an IRC channel. **`@techlead`** holds channel-operator status. It listens to the discussion, compiles it into well-specified, tracked work on your GitHub Project board, and then pings the right specialist to do it.
 
 | handle       | role                 | pings for                                            |
 |--------------|----------------------|------------------------------------------------------|
+| `@eng-director` | team coordination | dependencies, operational recovery, delegated resource limits |
 | `@techlead`  | channel operator     | convene, spec, record on the board, dispatch, track  |
 | `@dev`       | engineer             | app/service code, IaC, deploy scripts, schema, tests |
 | `@sre`       | reliability          | deploys, observability, incidents, backups/DR, cost  |
@@ -106,7 +107,43 @@ Think of your project as an IRC channel. **`@techlead`** holds channel-operator 
 | `@research`  | researcher (read-only) | external evidence (such as benchmarks or documentation) as a cited brief |
 | `@arch`      | architect (read-only) | one hard decision, escalated to on explicit triggers; advises in a `## @arch decision` comment |
 
-`@techlead` is a skill (`/marc:tech-lead`), while `@dev`, `@sre`, `@design`, `@sec`, `@rev`, `@research`, and `@arch` are subagents that it dispatches. `@techlead` is the first of several planned leader skills, including `founder` and `eng-director`, which will convene the same shared specialist bench.
+`@techlead` and `@eng-director` are leadership **skills** you invoke in a
+session. The specialists are subagents dispatched for individual tasks. Start
+with `/marc:tech-lead` for project delivery; add a director when several teams
+need coordination. Each techlead keeps ownership of its work and reviews.
+
+## Coordinate several teams
+
+Open a separate session in your coordination workspace and invoke:
+
+```
+/marc:eng-director
+```
+
+The workspace can be private and does not need to be a Git repository. Tell the
+director which teams and repositories it coordinates, where their queues and
+checkpoints live, and which routine operations you delegate. Several teams can
+work in the same repository or across repositories and harnesses.
+
+For example: “Coordinate the API and client teams. Read their queues and recent
+owner decisions, identify dependencies, and report verified progress. Ask before
+changing session or resource settings.”
+
+The director reads the work queue before declaring a team idle, routes decisions
+and dependencies, and checks evidence before reporting completion. With your
+existing local tooling and authorization, it can reconcile watchers and
+schedules, resume sessions from checkpoints, and manage shared resource limits.
+Machine paths, session mappings, schedules and quotas stay in your private
+workspace; the skill carries the reusable procedure.
+
+Invoking the skill starts a leadership conversation. Session wake-up, restart,
+context measurements and monitoring depend on the host tools and local adapters;
+installing mARC does not create a background supervisor. Delegated operations
+remain subject to their checks, permissions and the repository's review gates.
+
+See the [director skill](core/skills/eng-director/SKILL.md),
+[operating contract](core/skills/eng-director/references/operating-contract.md)
+and [recovery procedures](core/skills/eng-director/references/operations.md).
 
 ## Generic by design: repository configuration
 
@@ -225,6 +262,7 @@ harnesses/
   claude-code/
     marc/                        # compiled Claude Code plugin
       .claude-plugin/plugin.json # plugin manifest
+      skills/eng-director/       # multi-team coordination and operational recovery
       skills/tech-lead/          # `@techlead` leader skill (/marc:tech-lead)
       skills/init/               # `/marc:init`, opt-in per-repo onboarding
       agents/                    # `@dev`, `@sre`, `@design`, `@sec`, `@research` shared specialist bench
@@ -238,6 +276,7 @@ harnesses/
   copilot/
     marc/                        # compiled GitHub Copilot CLI plugin
       plugin.json                # Copilot plugin manifest
+      skills/eng-director/       # multi-team coordination and operational recovery
       skills/tech-lead/          # `@techlead` leader skill
       skills/init/               # `/marc:init`, Copilot config flow
       agents/                    # `@dev`, `@sre`, `@design`, `@sec`, `@research` bench
@@ -246,6 +285,7 @@ harnesses/
   codex/
     marc/                        # compiled OpenAI Codex plugin
       plugin.json                # Codex plugin manifest
+      skills/eng-director/       # multi-team coordination and operational recovery
       skills/tech-lead/          # `@techlead` leader skill
       agents/                    # Codex specialist agent definitions
       hooks/hooks.json           # Codex hooks configuration
@@ -256,7 +296,7 @@ docs/
 install.sh                       # installer for Claude Code
 ```
 
-The plugin is structured so that the core logic under `core/` compiles into platform-specific configurations in the `harnesses/` directory. This allows the project to grow sideways into new harnesses or upward into new leader skills like `founder` and `eng-director` without restructuring the repository. Detailed growth plans are documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The plugin is structured so that the core logic under `core/` compiles into platform-specific configurations in the `harnesses/` directory. This allows the project to grow sideways into new harnesses or upward into further leader skills like `founder` without restructuring the repository. Detailed growth plans are documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## License
 

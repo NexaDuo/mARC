@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
 <title>mARC :: Multi-Agent Relay Control</title>
-<meta name="description" content="mARC: Multi-Agent Relay Control. Install a cross-repo team of AI engineering agents for Claude Code, Google Antigravity, or GitHub Copilot CLI. @techlead ops the channel and convenes @dev, @sre, @design, @sec, @rev, and @research.">
+<meta name="description" content="mARC: AI engineering teams for your terminal. Run project delivery with @techlead and coordinate several teams with @eng-director, across repositories and harnesses.">
 <meta name="keywords" content="mARC, Multi-Agent Relay Control, Claude Code, Google Antigravity, GitHub Copilot CLI, AI agent team, autonomous engineering agents, AI pair programming, techlead, AI code review, devops AI">
 <meta name="author" content="NexaDuo">
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
@@ -17,7 +17,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://marc.nexaduo.com/">
 <meta property="og:title" content="mARC :: Multi-Agent Relay Control">
-<meta property="og:description" content="mARC: Multi-Agent Relay Control. Install a cross-repo team of AI engineering agents for Claude Code, Google Antigravity, or GitHub Copilot CLI. @techlead ops the channel and convenes @dev, @sre, @design, @sec, @rev, and @research.">
+<meta property="og:description" content="mARC: AI engineering teams for your terminal. Run project delivery with @techlead and coordinate several teams with @eng-director, across repositories and harnesses.">
 <meta property="og:image" content="https://marc.nexaduo.com/og-image.png">
 <meta property="og:image:secure_url" content="https://marc.nexaduo.com/og-image.png">
 <meta property="og:image:type" content="image/png">
@@ -29,7 +29,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:url" content="https://marc.nexaduo.com/">
 <meta name="twitter:title" content="mARC :: Multi-Agent Relay Control">
-<meta name="twitter:description" content="mARC: Multi-Agent Relay Control. Install a cross-repo team of AI engineering agents for Claude Code, Google Antigravity, or GitHub Copilot CLI. @techlead ops the channel and convenes @dev, @sre, @design, @sec, @rev, and @research.">
+<meta name="twitter:description" content="mARC: AI engineering teams for your terminal. Run project delivery with @techlead and coordinate several teams with @eng-director, across repositories and harnesses.">
 <meta name="twitter:image" content="https://marc.nexaduo.com/og-image.png">
 
 <!-- Favicon: the #marc channel sigil -->
@@ -48,7 +48,7 @@
       "alternateName": "Multi-Agent Relay Control",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Linux, macOS, Windows",
-      "description": "Multi-Agent Relay Control (mARC) packages a portable, cross-repo AI engineering team into Claude Code, Google Antigravity, and GitHub Copilot CLI.",
+      "description": "Multi-Agent Relay Control (mARC) packages a portable, cross-repo AI engineering team into Claude Code, OpenAI Codex, Google Antigravity, and GitHub Copilot CLI.",
       "url": "https://marc.nexaduo.com/",
       "image": "https://marc.nexaduo.com/og-image.png",
       "offers": {
@@ -71,7 +71,7 @@
           "name": "What is mARC?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "mARC (Multi-Agent Relay Control) is an open-source plugin that brings an autonomous team of AI engineering specialists (@techlead, @dev, @sre, @design, @sec, @rev, @research) into terminal harnesses like Claude Code, Google Antigravity, and GitHub Copilot CLI."
+            "text": "mARC (Multi-Agent Relay Control) is an open-source plugin that brings AI engineering teams led by @techlead, with optional @eng-director coordination across teams into terminal harnesses like Claude Code, OpenAI Codex, Google Antigravity, and GitHub Copilot CLI."
           }
         },
         {
@@ -87,7 +87,7 @@
           "name": "Which AI harnesses are supported by mARC?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "mARC currently supports Claude Code, Google Antigravity (agy), and GitHub Copilot CLI."
+            "text": "mARC currently supports Claude Code, OpenAI Codex, Google Antigravity (agy), and GitHub Copilot CLI. Host capabilities and validation limits are documented in the README."
           }
         },
         {
@@ -95,7 +95,7 @@
           "name": "How does mARC coordinate tasks across agents?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "mARC uses GitHub Projects and Issues as its central source of truth. The @techlead operator coordinates stateless specialist agents in background worktrees with mandatory pre-merge security and correctness gates."
+            "text": "mARC uses GitHub Projects and Issues as its central source of truth. The @techlead operator coordinates stateless specialists with independent security and correctness reviews. The optional @eng-director coordinates dependencies, owner decisions and authorized operations across techlead sessions; local tooling supplies session delivery and recovery."
           }
         }
       ]
@@ -387,8 +387,9 @@
         ╚═╝ ╚═╝ ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝  ╚═════╝
    ▄▖▄▖▄▖▄▖ multi · agent · relay · control ▄▖▄▖▄▖▄▖<span class="cursor" aria-hidden="true">_</span></h1>
 
-      <p class="pitch"><b>Multi-Agent Relay Control</b> is a plugin for Claude Code, Google Antigravity, or GitHub Copilot CLI that runs a complete team of AI engineering agents in your terminal.</p>
+      <p class="pitch"><b>Multi-Agent Relay Control</b> is a plugin for Claude Code, OpenAI Codex, Google Antigravity, or GitHub Copilot CLI that runs a complete team of AI engineering agents in your terminal.</p>
       <p class="sub">You can install the cross-repo team of agents as a user-level plugin. Once installed, running <code>/marc:tech-lead</code> brings in the coordinator, who automatically dispatches specialized agents like <b class="nick">@dev</b>, <b class="nick">@sre</b>, <b class="nick">@design</b>, <b class="nick">@sec</b>, <b class="nick">@rev</b>, and <b class="nick">@research</b> to handle coding, infrastructure setups, research briefs, and pre-merge audits.</p>
+      <p class="sub">Running several teams? Use <a href="#director"><code>/marc:eng-director</code></a> in a separate session to coordinate their work and authorized operations.</p>
       <div class="cta">
         <a class="btn primary" id="hero-cta-join" href="#install">▶ /join #marc</a>
         <a class="btn" id="hero-cta-github" href="https://github.com/NexaDuo/mARC" target="_blank" rel="noopener noreferrer">view source ↗</a>
@@ -401,16 +402,24 @@
   <section class="win roster" aria-labelledby="roster">
     <div class="titlebar">
       <span class="chan">NAMES</span>
-      <span class="topic">#marc · 7 users · 1 operator</span>
+      <span class="topic">#marc · 2 leader skills · 7 specialists</span>
     </div>
     <div class="body">
       <ul class="names">
         <li class="op">
           <span class="sigil" aria-hidden="true">@</span>
           <span>
+            <span class="nick">@eng-director</span><span class="tag">team coordination</span>
+            <span class="role">Several teams, one coordination session.</span>
+            <span class="desc">Routes dependencies and owner decisions, checks progress, and guides authorized recovery and shared resource use. Invoke <code>/marc:eng-director</code>.</span>
+          </span>
+        </li>
+        <li class="op">
+          <span class="sigil" aria-hidden="true">@</span>
+          <span>
             <span class="nick">@techlead</span><span class="tag">channel op</span>
             <span class="role">Leader &amp; router.</span>
-            <span class="desc">Reads the request, breaks it down, and convenes exactly the specialists the job needs. The only skill you invoke by hand: <code>/marc:tech-lead</code>.</span>
+            <span class="desc">Reads the request, breaks it down, and convenes exactly the specialists the job needs. Start project delivery with <code>/marc:tech-lead</code>.</span>
           </span>
         </li>
         <li class="voice">
@@ -470,6 +479,30 @@
           </span>
         </li>
       </ul>
+    </div>
+  </section>
+
+  <h2 class="section" id="director">coordinate several teams</h2>
+  <section class="win" aria-labelledby="director">
+    <div class="titlebar">
+      <span class="chan">@eng-director</span>
+      <span class="topic">coordination across channels</span>
+    </div>
+    <div class="body">
+      <p>Keep each techlead focused on project delivery. Open a separate session in a private coordination workspace and invoke the director:</p>
+      <div class="cmd">
+        <span class="prompt" aria-hidden="true">/</span>
+        <code id="cmd-director">/marc:eng-director</code>
+        <button class="copy" type="button" data-copy="cmd-director" aria-label="Copy: invoke the engineering director skill">copy</button>
+      </div>
+      <p>Identify the teams, their repositories, queues and checkpoints, and the routine actions you delegate. Teams can share a repository or run across repositories and harnesses. Each techlead retains its task ownership and review gates.</p>
+      <ul>
+        <li>Read ready and active work before reporting a team idle; route dependencies and owner decisions.</li>
+        <li>Use authorized local tools to recover sessions and reconcile watchers and schedules after an interruption.</li>
+        <li>Coordinate shared resource limits and report outcomes with evidence.</li>
+      </ul>
+      <p>Paths, session mappings, quotas and schedules stay in your private workspace. Session wake-up and recovery require local adapters; invoking the skill does not install a background supervisor.</p>
+      <p><a href="https://github.com/NexaDuo/mARC#coordinate-several-teams">Read the coordination guide ↗</a> · <a href="https://github.com/NexaDuo/mARC#openai-codex">Codex setup and compatibility ↗</a></p>
     </div>
   </section>
 
