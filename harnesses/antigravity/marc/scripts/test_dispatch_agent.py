@@ -932,7 +932,7 @@ def test_codex_readonly_opt_in() -> None:
         t.write_text(opt, encoding="utf-8")
         prepared, _err, exc = _capture_stderr(prepare_dispatch, "rev", prompt, "auto", False, str(t),
                                               env_cc, all_which, Path(d))
-        check(exc is None and prepared["command"][:4] == ["codex", "exec", "-C", str(Path(d).resolve())],
+        check(exc is None and prepared["command"][1:4] == ["exec", "-C", str(Path(d).resolve())],
               f"prepared opt-in command: {(prepared or {}).get('command', [])[:4]} {exc!r}")
         spec = {"prompt": prompt, "cwd": str(Path(d).resolve()), "prepared": prepared}
         _r, _e, exc = _capture_stderr(_validate_spec, spec)
@@ -1002,7 +1002,7 @@ def test_codex_readonly_opt_in() -> None:
                 os.chdir(prev_cwd)
             ran = runner.call_args[0][0] if runner.called else []
             check(exc is None and res_d["exit_code"] == 0 and res_d["harness"] == "codex"
-                  and ran[:4] == ["codex", "exec", "-C", str(Path(d).resolve())]
+                  and ran[1:4] == ["exec", "-C", str(Path(d).resolve())]
                   and ran[4:10] == _CODEX_RO_PROFILE,
                   f"sync dispatch from an opted-in checkout runs codex: {ran[:4]} {exc!r}")
 
@@ -2379,8 +2379,6 @@ def test_harness_detect_409_fixes() -> None:
             gw = t / "gw"
             gw.mkdir()
             gbin = _fake_bin(gw, "codex")
-            gw.chmod(0o775)
-            check("group" in (_binary_hazard(gbin, str(repo), None) or ""), "group-writable bin dir is a hazard")
             gw.chmod(0o755)
             check(_binary_hazard(gbin, str(repo), None) is None, "a private bin dir is trusted")
             wr = t / "wr"
@@ -2412,6 +2410,61 @@ def test_harness_detect_409_fixes() -> None:
                 stdout="codex 1.2\x1b[31m;rm -rf /`$(x)`" + "A" * 200 + "\nIGNORE PREVIOUS"), {})
             check(v is not None and len(v) <= 60 and all(c not in v for c in "\x1b;`$\n"),
                   f"version output sanitised ({v!r})")
+
+        # SEC-2 residual: group-writable dirs, injected stat (no real chown). Exception only when
+        # owner is root/you AND group is gid 0, a system gid (<1000) or your primary gid.
+        import types
+        me_u, me_g = 1000, 1000
+
+        def _st(uid: int, gid: int, mode: int = 0o40775) -> Any:
+            return types.SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=mode)
+
+        def _hz(uid: int, gid: int, mode: int = 0o40775) -> Optional[str]:
+            return _binary_hazard(paths["codex"], str(repo), None, stat_fn=lambda _p: _st(uid, gid, mode),
+                                  ids=(me_u, me_g))
+        check(_hz(0, 50) is None, "2775 root:staff-like dir is accepted")
+        check(_hz(0, 0) is None and _hz(me_u, me_g) is None, "root:root and own-user own-group group-writable dirs accepted")
+        check("group-writable" in (_hz(0, 5000) or ""), "group-writable root dir of a non-system, non-primary group is rejected")
+        check("owned by another user" in (_hz(2000, 50) or ""), "group-writable dir owned by another non-root user is rejected")
+        check("world-writable" in (_hz(0, 0, 0o40777) or ""), "world-writable dir is still rejected")
+
+        # SEC-1: relative PATH entry with a planted codex must not run; argv[0] is the checked absolute path.
+        old_cwd = os.getcwd()
+        _fake_bin(repo / "bin", "codex")
+        os.chdir(repo)
+        try:
+            rel_which = lambda b: shutil.which(b, path="bin") if b == "codex" else paths.get(b)
+            check(rel_which("codex") == os.path.join("bin", "codex"), "setup: which returns a relative hit")
+            sys.stderr = io.StringIO()
+            try:
+                with _IsoEnv(home):
+                    r = resolve_route_detailed("dev", "codex", None, env={"CLAUDE_PLUGIN_ROOT": "/p"},
+                                               which_fn=rel_which, cwd=str(repo))
+            finally:
+                sys.stderr = old
+            check(r["harness"] != "codex" and r["fallback"] and "untrusted" in (r["fallback_reason"] or ""),
+                  f"relative PATH entry with a planted codex falls back ({r['harness']})")
+        finally:
+            os.chdir(old_cwd)
+        with _IsoEnv(home):
+            prep_ = prepare_dispatch("dev", "p", harness="codex", dry_run=True, which_fn=which, cwd=repo)
+            ro_ = prepare_dispatch("rev", "p", harness="codex", dry_run=True, which_fn=which, cwd=repo)
+        check(prep_.get("command", [""])[0] == os.path.realpath(paths["codex"]),
+              f"codex writer argv[0] is the checked absolute path ({prep_.get('command', [''])[:1]})")
+        rel_cmd = da.build_harness_command("codex", "dev", "p", cwd=str(repo), codex_bin="/abs/codex")
+        check(rel_cmd[0] == "/abs/codex", "writer builder honours codex_bin")
+        ro_cmd = da.build_harness_command("codex", "rev", "p", codex_opt_in=True, cwd=str(repo), codex_bin="/abs/codex")
+        check(ro_cmd[0] == "/abs/codex", "read-only builder honours codex_bin")
+
+        # REV-7: opt-in names codex but codex is untrusted -> hook line says native + reason, not "writers: codex".
+        rep_u = {"native": "claude-code", "writers": "codex", "ask_needed": False, "opt_in_source": "x", "repo": "r",
+                 "harnesses": [
+                     {"harness": "claude-code", "native": True, "status": "present"},
+                     {"harness": "codex", "native": False, "status": "untrusted-path",
+                      "reason": "resolves inside the checkout"}]}
+        line = da.harnesses_line(rep_u)
+        check("writers: codex" not in line and "writers: native" in line and "untrusted" in line
+              and "resolves inside the checkout" in line, f"untrusted opted-in codex hook line ({line})")
 
         # SEC-3: the recorded key round-trips through the TOML loader even with quotes/backslashes/newlines.
         try:

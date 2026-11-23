@@ -941,9 +941,13 @@ def _toml_basic_string(text: str) -> str:
     return '"' + "".join(out) + '"'
 
 
-def _binary_hazard(which_path: str, top: str, common: Optional[str]) -> Optional[str]:
+def _binary_hazard(which_path: str, top: str, common: Optional[str],
+                   stat_fn: Callable[[str], Any] = os.stat,
+                   ids: Optional[Tuple[Optional[int], Optional[int]]] = None) -> Optional[str]:
     """Why a PATH hit must not be trusted at session start, or None (#409): inside the
-    checkout or its git dir, in a world-writable directory, or owned by neither you nor root."""
+    checkout or its git dir, in a world-writable directory, in a group-writable directory
+    (unless owned by root/you and grouped to gid 0, a system gid < 1000 or your primary gid),
+    or owned by neither you nor root. `stat_fn`/`ids=(uid, gid)` are injectable for tests."""
     try:
         real = os.path.realpath(which_path)
     except OSError:
@@ -956,14 +960,19 @@ def _binary_hazard(which_path: str, top: str, common: Optional[str]) -> Optional
     if link:
         return f"{link}"
     try:
-        me = os.getuid() if hasattr(os, "getuid") else None
-        for d in {os.path.dirname(which_path) or os.sep, os.path.dirname(real)}:
-            st = os.stat(d)
-            if st.st_mode & 0o022:
-                return f"sits in a group- or world-writable directory ({d})"
+        if ids is None:
+            ids = (os.getuid() if hasattr(os, "getuid") else None,
+                   os.getgid() if hasattr(os, "getgid") else None)
+        me, my_gid = ids
+        for d in sorted({os.path.dirname(which_path) or os.sep, os.path.dirname(real)}):
+            st = stat_fn(d)
+            if st.st_mode & 0o002:
+                return f"sits in a world-writable directory ({d})"
             if me is not None and st.st_uid not in (0, me):
                 return f"sits in a directory owned by another user ({d})"
-        if me is not None and os.stat(real).st_uid not in (0, me):
+            if st.st_mode & 0o020 and not (st.st_gid < 1000 or st.st_gid == my_gid):
+                return f"sits in a group-writable directory of a non-system group ({d})"
+        if me is not None and stat_fn(real).st_uid not in (0, me):
             return "is owned by another user"
     except OSError:
         return "cannot be inspected"
@@ -1045,7 +1054,12 @@ def harnesses_line(report: Dict[str, Any]) -> str:
         tag = ("native" if e["native"] else
                {"present": "on PATH", "untrusted-path": "untrusted-path", "missing": "missing"}[e["status"]])
         parts.append(f"{e['harness']} ({tag})")
-    if report["writers"]:
+    codex_entry = next((e for e in report["harnesses"] if e["harness"] == "codex"), None)
+    if report["writers"] == "codex" and codex_entry and codex_entry["status"] != "present":
+        why = (f"codex binary is untrusted: {codex_entry.get('reason', 'untrusted path')}"
+               if codex_entry["status"] == "untrusted-path" else "codex binary not found on PATH")
+        route = f"writers: native (operator opted in to codex, but {why})"
+    elif report["writers"]:
         route = f"writers: {report['writers']} (operator opt-in)"
     elif report["ask_needed"]:
         route = "writers: native (no opt-in; ask once to offer codex)"
@@ -1115,8 +1129,12 @@ def build_harness_command(
     prompt: str,
     codex_opt_in: bool = False,
     cwd: Optional[str] = None,
+    codex_bin: str = "codex",
 ) -> List[str]:
     """Build CLI execution command for target harness.
+
+    `codex_bin` is argv[0] for both codex builders: dispatch passes the absolute path
+    it trust-checked so launch cannot differ from the check (#409 SEC-1).
 
     `codex_opt_in` must come from codex_readonly_opt_in() on team.toml routes;
     `cwd` is the checkout a Codex read-only reviewer reads (default: the
@@ -1136,7 +1154,7 @@ def build_harness_command(
         # (and a different tree) a read-only role has no reason to make.
         body, pins = load_codex_persona(mapped_agent)
         checkout = str(Path(cwd or os.getcwd()).resolve())
-        cmd = ["codex", "exec", "-C", checkout, *CODEX_READONLY_PROFILE_ARGS]
+        cmd = [codex_bin, "exec", "-C", checkout, *CODEX_READONLY_PROFILE_ARGS]
         if "model" in pins:
             cmd += ["-m", pins["model"]]
         if "model_reasoning_effort" in pins:
@@ -1188,7 +1206,7 @@ def build_harness_command(
             widen_args += ["--add-dir", d]
         if widen["network_access"]:
             widen_args += ["-c", "sandbox_workspace_write.network_access=true"]
-        return ["codex", "exec", "--worktree", "--sandbox", "workspace-write", *widen_args,
+        return [codex_bin, "exec", "--worktree", "--sandbox", "workspace-write", *widen_args,
                 *pin_args, f"Act as the mARC {mapped_agent} specialist. {prompt}"]
     else:
         raise ValueError(f"Unsupported harness: {harness!r}")
@@ -1435,13 +1453,34 @@ def resolve_route(
     return d["harness"], d["fallback"], d["fallback_reason"]
 
 
+def _checked_codex_path(hit: Any, cwd: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """(absolute exec path, hazard) for a codex PATH hit (#409 SEC-1).
+
+    A relative PATH entry yields a relative hit that Popen would resolve against the
+    child's cwd (the checkout), so resolve it here and check the absolute path; callers
+    then exec that same path, leaving no check/launch gap. Non-string hits (test stubs)
+    are not checkable and pass through as (None, None).
+    """
+    if not isinstance(hit, str):
+        return None, None
+    try:
+        lexical = os.path.abspath(hit)
+        real = os.path.realpath(lexical)
+    except (OSError, ValueError):
+        return None, "cannot be resolved to an absolute path"
+    if not os.path.exists(real):
+        # Nothing to execute there: launching the absolute path fails with ENOENT, which is
+        # safe, and it never falls back to a bare-name PATH lookup.
+        return lexical, None
+    top, common = _checkout_facts(cwd)
+    why = _binary_hazard(lexical, top, common) or _binary_hazard(real, top, common)
+    return (None, why) if why else (real, None)
+
+
 def _codex_hazard_fn(cwd: Optional[str]) -> Callable[[Any], Optional[str]]:
     """Same trust check the probe uses, applied to the codex PATH hit at dispatch time (#409 SEC-1)."""
     def check_hit(hit: Any) -> Optional[str]:
-        if not isinstance(hit, str) or not os.path.isabs(hit) or not os.path.exists(hit):
-            return None
-        top, common = _checkout_facts(cwd)
-        return _binary_hazard(hit, top, common)
+        return _checked_codex_path(hit, cwd)[1]
     return check_hit
 
 
@@ -1569,8 +1608,18 @@ def prepare_dispatch(
             raise ReadOnlyRoutingError(
                 f"codex read-only opt-in for '{role}' comes from {toml_path}, not from the team.toml "
                 f"discovered from the checkout; refusing (#351)")
+        codex_bin = "codex"
+        if resolved_harness == "codex":
+            # Exec the exact absolute path that was trust-checked (#409 SEC-1), never a
+            # bare name a later PATH lookup (or the checkout cwd) could resolve elsewhere.
+            hit = which_fn("codex")
+            checked, why = _checked_codex_path(hit, str(cwd) if cwd else None)
+            if why:
+                raise ReadOnlyRoutingError(f"codex binary is untrusted at launch ({why}); refusing (#409)")
+            codex_bin = checked or "codex"
         cmd = build_harness_command(resolved_harness, role, prompt,
-                                    codex_opt_in=opt_in, cwd=str(cwd) if cwd else None)
+                                    codex_opt_in=opt_in, cwd=str(cwd) if cwd else None,
+                                    codex_bin=codex_bin)
         default_timeout = resolve_default_timeout(resolved_harness, role, str(cwd) if cwd else None)
         codex_writer = resolved_harness == "codex" and CANONICAL_ROLES[role] not in READ_ONLY_ROLES
         widen = (load_codex_writer_settings(str(cwd) if cwd else None) if codex_writer
@@ -2246,7 +2295,17 @@ def _validate_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     if is_forbidden_readonly_route(role, harness, opt_in):
         raise ReadOnlyRoutingError(
             f"job spec routes read-only role '{role}' to '{harness}'; refusing (issue #323)")
-    expected = build_harness_command(str(harness), role, prompt, codex_opt_in=opt_in, cwd=cwd)
+    codex_bin = "codex"
+    if harness == "codex":
+        argv = prepared.get("command")
+        first = argv[0] if isinstance(argv, list) and argv and isinstance(argv[0], str) else "codex"
+        if first != "codex":  # absolute, trust-checked path pinned at prepare time (#409)
+            checked, why = _checked_codex_path(first, cwd)
+            if why or checked != first or not os.path.isabs(first):
+                raise RuntimeError(f"job spec codex binary is untrusted or changed ({why or first}); refusing (#409)")
+            codex_bin = first
+    expected = build_harness_command(str(harness), role, prompt, codex_opt_in=opt_in, cwd=cwd,
+                                     codex_bin=codex_bin)
     if prepared.get("command") != expected:
         raise RuntimeError("job spec command does not match the routed harness command")
     return prepared
