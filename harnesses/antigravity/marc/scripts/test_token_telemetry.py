@@ -131,7 +131,8 @@ def main() -> int:
     check("prompt" not in record, "build_record: never forwards the 'prompt' (message-body) field")
     expected_keys = {"ts", "session_id", "turn_index", "model", "input", "output",
                      "cache_read", "cache_write", "weighted", "repo",
-                     "cache_write_weighted", "sc_cache_write", "sc_cache_write_weighted"}
+                     "cache_write_weighted", "sc_cache_write", "sc_cache_write_weighted",
+                     "schema_version"}
     check(set(record.keys()) == expected_keys,
           f"build_record: schema is exactly {sorted(expected_keys)}, got {sorted(record.keys())}")
     check(record["cache_write_weighted"] == 20 and record["sc_cache_write_weighted"] == 8

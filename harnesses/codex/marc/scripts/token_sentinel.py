@@ -66,6 +66,7 @@ import argparse
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -157,13 +158,23 @@ def is_real_user_turn(rec: dict) -> bool:
     return True
 
 
+def _safe_int(v) -> int:
+    """Finite, non-negative int; anything else (str, bool, NaN, inf, negative,
+    None) becomes 0 (origin: #402 SEC-1: transcript usage is untrusted input)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return 0
+    if isinstance(v, float) and not math.isfinite(v):
+        return 0
+    return max(int(v), 0)
+
+
 def usage_tokens(usage: dict) -> int:
     """Flat (unweighted) raw sum, kept for diagnostic display only. The band
     checks below use `weighted_usage_tokens`, not this."""
     return (
-        int(usage.get("input_tokens", 0) or 0)
-        + int(usage.get("cache_read_input_tokens", 0) or 0)
-        + int(usage.get("cache_creation_input_tokens", 0) or 0)
+        _safe_int(usage.get("input_tokens"))
+        + _safe_int(usage.get("cache_read_input_tokens"))
+        + _safe_int(usage.get("cache_creation_input_tokens"))
     )
 
 
@@ -177,10 +188,10 @@ def usage_components(usage: dict) -> tuple[int, int]:
     already cached (origin: #100 — see CACHE_READ_WEIGHT above).
     """
     fresh = (
-        int(usage.get("input_tokens", 0) or 0)
-        + int(usage.get("cache_creation_input_tokens", 0) or 0)
+        _safe_int(usage.get("input_tokens"))
+        + _safe_int(usage.get("cache_creation_input_tokens"))
     )
-    cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
+    cache_read = _safe_int(usage.get("cache_read_input_tokens"))
     return fresh, cache_read
 
 
@@ -188,12 +199,12 @@ def cache_write_weighted(usage: dict) -> int:
     """Cache-write tokens weighted by TTL (origin: #402): 5m x1.25, 1h x2.
     Uses the `cache_creation` split when present; any aggregate remainder (or
     an aggregate-only record) takes CACHE_WRITE_WEIGHT_FALLBACK."""
-    total = int(usage.get("cache_creation_input_tokens", 0) or 0)
+    total = _safe_int(usage.get("cache_creation_input_tokens"))
     cc = usage.get("cache_creation")
     if not isinstance(cc, dict):
         return round(total * CACHE_WRITE_WEIGHT_FALLBACK)
-    m5 = int(cc.get("ephemeral_5m_input_tokens", 0) or 0)
-    h1 = int(cc.get("ephemeral_1h_input_tokens", 0) or 0)
+    m5 = _safe_int(cc.get("ephemeral_5m_input_tokens"))
+    h1 = _safe_int(cc.get("ephemeral_1h_input_tokens"))
     rest = max(total - m5 - h1, 0)
     return round(m5 * CACHE_WRITE_WEIGHT_5M + h1 * CACHE_WRITE_WEIGHT_1H
                  + rest * CACHE_WRITE_WEIGHT_FALLBACK)
@@ -236,7 +247,7 @@ def user_text(rec: dict) -> str:
     return ""
 
 
-def analyze(path: str):
+def analyze(path: str, include_subagents: bool = False):
     """Fold a session .jsonl into per-turn stats. Shared by the CLI and the hook.
 
     Each turn dict carries:
@@ -245,12 +256,14 @@ def analyze(path: str):
       calls     total `tool_use` blocks across the turn's assistant messages
       requests  assistant API requests in the turn that made >=1 tool call
       tokens    weighted usage tokens across the turn's assistant messages
-                (origin: #100 — fresh tokens full rate, cache-read tokens
-                discounted by CACHE_READ_WEIGHT; this feeds the context-size
-                band)
+                (origin: #100, #402 — input at full rate, cache writes at
+                1.25x/2x per TTL, cache-read tokens discounted by
+                CACHE_READ_WEIGHT; feeds the manual CLI `--tokens` column and
+                telemetry, not the hook bands)
       raw_tokens     flat (unweighted) sum, same as pre-#100 `tokens` — kept
                      for diagnostic display
-      fresh_tokens   summed input + cache_creation tokens (full-rate)
+      fresh_tokens   summed input + cache_creation tokens as RAW counts (the
+                     cache-write premium is NOT in here; see `tokens`)
       cache_read_tokens  summed cache_read tokens (discounted)
       output_tokens  summed assistant output tokens (origin: #149 — not used
                      by any guard band above; additive field for the opt-in
@@ -264,8 +277,13 @@ def analyze(path: str):
                           split rationale as `input_tokens`, #149)
       cache_write_weighted  cache_write_tokens weighted by TTL (1.25x/2x, #402)
       sc_cache_write / sc_cache_write_weighted  the same two figures restricted
-                     to sidechain (subagent) messages, so dispatch spend shows
-                     as its own bucket (#402)
+                     to sidechain (subagent) usage: in-file `isSidechain`
+                     records (older layout) plus, when `include_subagents`,
+                     `<session>/subagents/agent-*.jsonl` (current layout).
+                     Subagent-file usage is folded into the cost accumulators
+                     above but never into calls/model/last_ts or the
+                     main-thread fields, and is attributed to the turn whose
+                     start timestamp precedes it (#402)
       last_ts        ISO timestamp of the last assistant message seen in the
                      turn ("" if none) — additive field, origin: #149
 
@@ -285,12 +303,28 @@ def analyze(path: str):
     def new_turn(prompt: str) -> dict:
         t = {"prompt": prompt, "model": "-", "calls": 0, "requests": 0,
              "tokens": 0, "raw_tokens": 0, "fresh_tokens": 0, "cache_read_tokens": 0,
-             "output_tokens": 0, "input_tokens": 0, "cache_write_tokens": 0, "last_ts": "",
+             "output_tokens": 0, "input_tokens": 0, "cache_write_tokens": 0, "last_ts": "", "start_ts": "",
              "cache_write_weighted": 0, "sc_cache_write": 0, "sc_cache_write_weighted": 0,
              "main_model": "-", "cw": 0, "cr": 0,
              "_main_seen": False}
         turns.append(t)
         return t
+
+    def add_usage(turn: dict, usage: dict, sidechain: bool) -> None:
+        turn["raw_tokens"] += usage_tokens(usage)
+        fresh, cache_read = usage_components(usage)
+        turn["fresh_tokens"] += fresh
+        turn["cache_read_tokens"] += cache_read
+        cw_raw = _safe_int(usage.get("cache_creation_input_tokens"))
+        cw_w = cache_write_weighted(usage)
+        turn["tokens"] += weighted_usage_tokens(fresh, cache_read, cw_w - cw_raw)
+        turn["cache_write_weighted"] += cw_w
+        if sidechain:
+            turn["sc_cache_write"] += cw_raw
+            turn["sc_cache_write_weighted"] += cw_w
+        turn["output_tokens"] += _safe_int(usage.get("output_tokens"))
+        turn["input_tokens"] += _safe_int(usage.get("input_tokens"))
+        turn["cache_write_tokens"] += cw_raw
 
     with open(path, "r", encoding="utf-8") as fh:
         for line in fh:
@@ -303,6 +337,9 @@ def analyze(path: str):
                 continue
             if is_real_user_turn(rec):
                 current = new_turn(user_text(rec)[:60] or "(non-text prompt)")
+                uts = rec.get("timestamp")
+                if isinstance(uts, str):
+                    current["start_ts"] = uts
                 continue
             if rec.get("type") == "assistant":
                 if current is None:
@@ -320,20 +357,7 @@ def analyze(path: str):
                     # Cost accumulators count EVERY assistant message, main-thread
                     # or sidechain: subagent spend is real spend (do not gate these
                     # on isSidechain below, origin: #178 follow-up).
-                    current["raw_tokens"] += usage_tokens(usage)
-                    fresh, cache_read = usage_components(usage)
-                    current["fresh_tokens"] += fresh
-                    current["cache_read_tokens"] += cache_read
-                    cw_raw = int(usage.get("cache_creation_input_tokens", 0) or 0)
-                    cw_w = cache_write_weighted(usage)
-                    current["tokens"] += weighted_usage_tokens(fresh, cache_read, cw_w - cw_raw)
-                    current["cache_write_weighted"] += cw_w
-                    if rec.get("isSidechain") is True:
-                        current["sc_cache_write"] += cw_raw
-                        current["sc_cache_write_weighted"] += cw_w
-                    current["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
-                    current["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
-                    current["cache_write_tokens"] += int(usage.get("cache_creation_input_tokens", 0) or 0)
+                    add_usage(current, usage, rec.get("isSidechain") is True)
                 ts = rec.get("timestamp")
                 if isinstance(ts, str) and ts:
                     current["last_ts"] = ts
@@ -348,8 +372,40 @@ def analyze(path: str):
                     current["main_model"] = model
                 if not current["_main_seen"] and isinstance(usage, dict):
                     current["_main_seen"] = True
-                    current["cw"] = int(usage.get("cache_creation_input_tokens", 0) or 0)
-                    current["cr"] = int(usage.get("cache_read_input_tokens", 0) or 0)
+                    current["cw"] = _safe_int(usage.get("cache_creation_input_tokens"))
+                    current["cr"] = _safe_int(usage.get("cache_read_input_tokens"))
+    if include_subagents and turns:
+        # Current Claude Code layout: subagent transcripts are siblings of the
+        # main file at <dir>/<session-id>/subagents/agent-*.jsonl, NOT in-file
+        # isSidechain records, so the two sources never overlap (#402 REV-1).
+        sub_dir = os.path.join(os.path.splitext(path)[0], "subagents")
+        for sub in sorted(glob.glob(os.path.join(sub_dir, "agent-*.jsonl"))):
+            try:
+                fh = open(sub, "r", encoding="utf-8")
+            except OSError:
+                continue
+            with fh:
+                for line in fh:
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(rec, dict) or rec.get("type") != "assistant":
+                        continue
+                    usage = (rec.get("message") or {}).get("usage")
+                    if not isinstance(usage, dict):
+                        continue
+                    # Attribute to the latest turn that started at/before this
+                    # record (ISO-8601 UTC strings sort chronologically); a
+                    # record with no timestamp goes to the last turn.
+                    ts = rec.get("timestamp")
+                    target = turns[-1]
+                    if isinstance(ts, str) and ts:
+                        target = turns[0]
+                        for t in turns:
+                            if t["start_ts"] and t["start_ts"] <= ts:
+                                target = t
+                    add_usage(target, usage, True)
     return turns
 
 

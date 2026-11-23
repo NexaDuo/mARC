@@ -38,6 +38,8 @@ outdated-check state file) — one line per turn, schema:
     weighted      cost-weighted total (`token_sentinel.weighted_usage_tokens`,
                   origin: #100 — fresh full-rate, cache-read discounted,
                   cache-write at 1.25x/2x per TTL, #402)
+    schema_version  2 = cache-write-weighted `weighted` incl. subagent files
+                  (#402); absent = legacy v1, not comparable
     cache_write_weighted  `cache_write` weighted by TTL (additive, #402)
     sc_cache_write, sc_cache_write_weighted  the sidechain (subagent) share
                   of the two cache-write figures above (additive, #402)
@@ -126,6 +128,12 @@ def _epoch_from_iso(ts: str) -> float:
         return time.time()
 
 
+# 2 = `weighted` prices cache writes at 1.25x/2x per TTL and includes subagent
+# (`<session>/subagents/`) usage (#402). Records without the key are v1: their
+# `weighted` is NOT comparable (cache writes at 1x, no subagent files).
+SCHEMA_VERSION = 2
+
+
 def build_record(turn: dict, *, session_id: str, turn_index: int, repo: str) -> dict:
     """Build ONE schema-compliant record from a `token_sentinel.analyze()`
     turn dict. Deliberately whitelists fields — never forwards the turn's
@@ -146,6 +154,7 @@ def build_record(turn: dict, *, session_id: str, turn_index: int, repo: str) -> 
         "cache_write_weighted": int(turn.get("cache_write_weighted", 0) or 0),
         "sc_cache_write": int(turn.get("sc_cache_write", 0) or 0),
         "sc_cache_write_weighted": int(turn.get("sc_cache_write_weighted", 0) or 0),
+        "schema_version": SCHEMA_VERSION,
         "repo": repo,
     }
 
@@ -194,7 +203,7 @@ def run_hook(stdin_text: str) -> int:
         return 0
 
     try:
-        turns = analyze(transcript_path)
+        turns = analyze(transcript_path, include_subagents=True)
     except OSError:
         return 0
     if not turns:

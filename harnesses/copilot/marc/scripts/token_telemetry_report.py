@@ -68,7 +68,7 @@ def group_by_session(records: list[dict]) -> dict[str, list[dict]]:
 def session_totals(turns: list[dict]) -> dict:
     total = {"turns": len(turns), "input": 0, "output": 0, "cache_read": 0,
              "cache_write": 0, "weighted": 0, "cache_write_weighted": 0,
-             "sc_cache_write": 0, "sc_cache_write_weighted": 0, "first_ts": None, "last_ts": None,
+             "sc_cache_write": 0, "sc_cache_write_weighted": 0, "legacy": False, "first_ts": None, "last_ts": None,
              "model": "-", "repo": "-"}
     for t in turns:
         total["input"] += int(t.get("input", 0) or 0)
@@ -76,6 +76,8 @@ def session_totals(turns: list[dict]) -> dict:
         total["cache_read"] += int(t.get("cache_read", 0) or 0)
         total["cache_write"] += int(t.get("cache_write", 0) or 0)
         total["weighted"] += int(t.get("weighted", 0) or 0)
+        if int(t.get("schema_version", 1) or 1) < 2:
+            total["legacy"] = True
         for k in ("cache_write_weighted", "sc_cache_write", "sc_cache_write_weighted"):
             total[k] += int(t.get(k, 0) or 0)
         ts = t.get("ts")
@@ -103,9 +105,14 @@ def fmt_ts(ts) -> str:
 def cw_share(totals: dict) -> str:
     """Cache-write (TTL-weighted) share of the weighted total, as a percent.
     `sc_cw_wtd` is the sidechain (subagent) part of it (origin: #402)."""
-    if totals["weighted"] <= 0:
+    if totals["weighted"] <= 0 or totals["legacy"]:
         return "-"
     return f"{totals['cache_write_weighted'] / totals['weighted'] * 100:.0f}%"
+
+
+MIXED_WARNING = ("WARNING: comparing records with different `weighted` semantics "
+                 "(pre-#402 v1 vs v2: cache writes at 1.25x/2x, subagent files "
+                 "included); the delta is not like-for-like.")
 
 
 def print_report(sessions: dict[str, list[dict]], *, limit: int) -> None:
@@ -141,6 +148,8 @@ def print_report(sessions: dict[str, list[dict]], *, limit: int) -> None:
             newest_avg = newest["weighted"] / newest["turns"]
             oldest_avg = oldest["weighted"] / oldest["turns"]
             if oldest_avg > 0:
+                if newest["legacy"] != oldest["legacy"]:
+                    print(f"\n{MIXED_WARNING}")
                 delta_pct = (newest_avg - oldest_avg) / oldest_avg * 100
                 direction = "up" if delta_pct > 0 else "down"
                 print(f"\nsimple trend: newest shown session averages "
@@ -151,6 +160,9 @@ def print_report(sessions: dict[str, list[dict]], *, limit: int) -> None:
 def print_comparison(base_sessions: dict[str, list[dict]], post_sessions: dict[str, list[dict]], cost_per_million: float) -> None:
     base_weighted = sum(session_totals(t)["weighted"] for t in base_sessions.values())
     post_weighted = sum(session_totals(t)["weighted"] for t in post_sessions.values())
+    if (any(session_totals(t)["legacy"] for t in base_sessions.values())
+            != any(session_totals(t)["legacy"] for t in post_sessions.values())):
+        print(MIXED_WARNING)
     diff = base_weighted - post_weighted
     pct = (diff / base_weighted * 100) if base_weighted > 0 else 0.0
     cost_diff = (diff / 1_000_000) * cost_per_million

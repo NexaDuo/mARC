@@ -415,6 +415,49 @@ def main() -> int:
         check(t["tokens"] == 10 + 100_000 + 8_000 + 70_000 + 2_000 + 100,
               f"weighted = fresh + cache-write premium + 0.1*cache_read ({t['tokens']})")
 
+    # --- #402 REV-1: real on-disk layout, subagents/ siblings of the main file
+    with tempfile.TemporaryDirectory() as td:
+        main_path = os.path.join(td, "sess1.jsonl")
+        os.makedirs(os.path.join(td, "sess1", "subagents"))
+        def asst(ts, cw5=0, cw1=0, side=False):
+            r = {"type": "assistant", "timestamp": ts, "message": {
+                "model": SONNET, "content": [], "usage": {
+                    "input_tokens": 0, "cache_creation_input_tokens": cw5 + cw1,
+                    "cache_creation": {"ephemeral_5m_input_tokens": cw5,
+                                       "ephemeral_1h_input_tokens": cw1}}}}
+            if side:
+                r["isSidechain"] = True
+            return r
+        def usr(ts):
+            return {"type": "user", "timestamp": ts, "message": {"role": "user", "content": "go"}}
+        with open(main_path, "w", encoding="utf-8") as fh:
+            for r in [usr("2026-01-01T00:00:00Z"), asst("2026-01-01T00:00:01Z", cw1=1000),
+                      usr("2026-01-01T00:10:00Z"), asst("2026-01-01T00:10:01Z", cw1=500)]:
+                fh.write(json.dumps(r) + "\n")
+        with open(os.path.join(td, "sess1", "subagents", "agent-a.jsonl"), "w", encoding="utf-8") as fh:
+            for r in [asst("2026-01-01T00:00:30Z", cw5=4000, side=True),
+                      asst("2026-01-01T00:10:30Z", cw5=800, side=True),
+                      {"type": "assistant", "message": {"usage": {"input_tokens": float("nan"),
+                          "output_tokens": "9", "cache_creation_input_tokens": -5}}}]:
+                fh.write(json.dumps(r) + "\n")
+        base = ts.analyze(main_path)
+        check(all(t["sc_cache_write"] == 0 for t in base),
+              "analyze() default ignores subagent files (PostToolUse guard path unchanged)")
+        a = ts.analyze(main_path, include_subagents=True)
+        b = ts.analyze(main_path, include_subagents=True)
+        check(a == b, "analyze with subagents is deterministic (backfill idempotent)")
+        check([t["sc_cache_write"] for t in a] == [4000, 800],
+              f"subagent files attributed to the right turns ({[t['sc_cache_write'] for t in a]})")
+        check([t["cache_write_weighted"] for t in a] == [2000 + 5000, 1000 + 1000],
+              "main + subagent cache-write weighted once each (no double count)")
+        check([t["cache_write_tokens"] for t in a] == [5000, 1300],
+              "raw cache_write_tokens = main + subagent, counted once")
+        check(a[0]["calls"] == base[0]["calls"] and a[0]["main_model"] == base[0]["main_model"],
+              "subagent files never touch calls/main-thread fields")
+    check(ts._safe_int(float("inf")) == 0 and ts._safe_int(-3) == 0 and ts._safe_int("7") == 0
+          and ts._safe_int(True) == 0 and ts._safe_int(7.9) == 7,
+          "_safe_int: non-finite/negative/str/bool -> 0, float truncates")
+
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
         for m in _failures:

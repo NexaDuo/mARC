@@ -94,8 +94,10 @@ def backfill(projects_root: str, target_path: str, *, dry_run: bool = False) -> 
     for transcript in find_transcripts(projects_root):
         session_id = os.path.splitext(os.path.basename(transcript))[0]
         try:
-            turns = analyze(transcript)
-        except OSError:
+            turns = analyze(transcript, include_subagents=True)
+        except Exception as exc:  # noqa: BLE001 — skip one bad transcript, keep going.
+            print(f"warning: skipping {os.path.basename(transcript)}: "
+                  f"{type(exc).__name__}", file=sys.stderr)
             continue
         if not turns:
             continue
