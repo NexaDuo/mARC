@@ -8,8 +8,25 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Added
+
+- Harness detection without `team.toml` (#409). `dispatch_agent.py harnesses`
+  (`--json`, `--line`, `--probe`, `--record codex|native`) reports which harnesses are on
+  PATH, checking PATH only and executing nothing by default (binaries inside the checkout, in
+  world-writable directories or owned by another user are `untrusted-path`; `--version` runs
+  only with `--probe`; no auth check). A SessionStart hook prints one line when more than
+  one harness is present (silent otherwise, fail-open, 3 s bound). The tech-lead asks once
+  per repo whether writers may use Codex and records the answer operator-side in
+  `${XDG_CONFIG_HOME:-~/.config}/marc/harnesses.toml` (same validation as `codex.toml`).
+
 ### Changed
 
+- **BREAKING:** a `team.toml` `[orchestration.routes]` entry that sends `@dev`/`@sre`/`@design`
+  to a non-native harness now takes effect only with the operator-side opt-in in
+  `harnesses.toml` (`[repos."<abs repo path>"] writers = "codex"`). Without it the role runs
+  native and dispatch prints a warning with the exact entry to add. Only Codex can be opted in;
+  agy/copilot writers remain reachable via `--harness`. `team.toml` can still narrow routing.
+  Read-only roles are unchanged (#323).
 - Dispatch cost rules amended with the cache measurement from #402 (#403).
   On Claude Code only, resume the same specialist (SendMessage) for quick
   follow-ups within ~5 min of its last turn (warm cache); after that, or where

@@ -61,6 +61,11 @@ from dispatch_agent import (  # noqa: E402
     parse_toml,
     resolve_route,
     resolve_target_harness,
+    resolve_target_harness_detailed,
+    harnesses_line,
+    load_writer_opt_in,
+    probe_harnesses,
+    record_block,
 )
 
 _failures: List[str] = []
@@ -256,13 +261,14 @@ sec = "copilot"
 
         # User routes override default matrix
         harness, fallback, reason = resolve_route("dev", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
-        check(harness == "copilot" and not fallback, f"hybrid user route 'dev' -> copilot (got {harness})")
+        # #409: a team.toml writer route off the native harness needs the operator opt-in.
+        check(harness == "claude-code", f"hybrid user route 'dev' -> copilot falls back native without opt-in (got {harness})")
 
         harness, fallback, reason = resolve_route("research", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
         check(harness == "claude-code" and not fallback, f"hybrid user route 'research' -> claude-code (got {harness})")
 
         harness, fallback, reason = resolve_route("sre", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
-        check(harness == "antigravity" and not fallback, f"hybrid user route 'sre' -> antigravity (got {harness})")
+        check(harness == "claude-code", f"hybrid user route 'sre' -> antigravity falls back native without opt-in (got {harness})")
 
         # Unrouted role in hybrid mode falls back to DEFAULT_HYBRID_MATRIX
         # On claude-code host: 'rev' -> claude-code (#323), 'design' -> claude-code
@@ -2181,7 +2187,145 @@ def _test_codex_writer_401() -> None:
         check(res2.get("timed_out") is True and "partial_work" not in res2, "non-codex timeout has no partial_work")
 
 
+def _fake_bin(d: Path, name: str) -> str:
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / name
+    f.write_text("#!/bin/sh\n")
+    f.chmod(0o755)
+    return str(f)
+
+
+def test_harness_detect_409() -> None:
+    """Probe, operator opt-in, read-only fail-closed, team.toml cannot widen writers (#409)."""
+    with tempfile.TemporaryDirectory() as td:
+        t = Path(td).resolve()
+        home = t / "home"
+        (home / ".config" / "marc").mkdir(parents=True)
+        repo = t / "repo"
+        repo.mkdir()
+        _git_env_run("init", "-q", cwd=repo)
+        (repo / ".agents").mkdir()
+        tt = repo / ".agents" / "team.toml"
+        tt.write_text('[orchestration]\n[orchestration.routes]\ndev = "codex"\nsre = "antigravity"\n'
+                      'sec = "codex"\n', encoding="utf-8")
+        binroot = t / "bin"
+        paths = {b: _fake_bin(binroot, b) for b in ("claude", "codex", "agy")}
+        repo_bin = _fake_bin(repo / "bin", "copilot")
+        which = lambda b: {**paths, "copilot": repo_bin}.get(b)
+        calls: List[Any] = []
+
+        def run_fn(cmd: Any, **kw: Any) -> Any:
+            calls.append((cmd, kw))
+            return MagicMock(stdout="codex-cli 9.9\nextra", returncode=0)
+
+        cc_env = {"CLAUDE_PROJECT_DIR": str(repo), "SECRET_TOKEN": "x"}
+        with _IsoEnv(home):
+            rep = probe_harnesses(which_fn=which, run_fn=run_fn, env=cc_env, cwd=str(repo))
+            by = {e["harness"]: e for e in rep["harnesses"]}
+            check(rep["native"] == "claude-code" and by["claude-code"]["native"], "probe: native detected")
+            check(by["codex"]["status"] == "present" and by["codex"]["writer_roles"], "probe: codex present, writer-eligible")
+            check(by["antigravity"]["status"] == "present" and not by["antigravity"]["writer_roles"],
+                  "probe: agy detected but never writer-eligible")
+            check(by["copilot"]["status"] == "untrusted-path", "probe: binary inside the checkout is untrusted-path")
+            check(by["claude-code"]["read_only_roles"] and not by["codex"]["read_only_roles"],
+                  "probe: read-only roles only claude-code")
+            check(calls == [] and rep["ask_needed"] and rep["writers"] is None,
+                  "probe: executes nothing by default; asks once when nothing recorded")
+            rep = probe_harnesses(which_fn=which, run_fn=run_fn, env=cc_env, cwd=str(repo), probe=True)
+            ver = [e for e in rep["harnesses"] if e["harness"] == "codex"][0]["version"]
+            check(ver == "codex-cli 9.9" and all(k["stdin"] == subprocess.DEVNULL and k["timeout"] == 3.0
+                                                 and "SECRET_TOKEN" not in k["env"] and k["cwd"] != str(repo)
+                                                 for _, k in calls) and len(calls) == 3,
+                  f"probe --probe: --version only, bounded, scrubbed env, temp cwd, never the untrusted binary ({ver})")
+            solo = probe_harnesses(which_fn=lambda b: paths["claude"] if b == "claude" else None,
+                                   env=cc_env, cwd=str(repo))
+            check(harnesses_line(solo) == "", "line: silent when only the native harness is present")
+            check(harnesses_line(rep).startswith("harnesses: claude-code (native) · antigravity (on PATH)")
+                  and "ask once" in harnesses_line(rep), "line: one line with the ask hint")
+
+            # Without opt-in: team.toml writer routes fall back native, with a warning naming the entry.
+            err = io.StringIO()
+            old = sys.stderr
+            sys.stderr = err
+            try:
+                r = resolve_route_detailed("dev", "auto", tt, env=cc_env, which_fn=which, cwd=str(repo))
+                r2 = resolve_route_detailed("sre", "auto", tt, env=cc_env, which_fn=which, cwd=str(repo))
+            finally:
+                sys.stderr = old
+            check(r["harness"] == "claude-code" and r2["harness"] == "claude-code",
+                  "team.toml alone cannot widen writer routing (dev->codex, sre->agy run native)")
+            check('writers = "codex"' in err.getvalue() and f'[repos."{repo}"]' in err.getvalue()
+                  and "harnesses.toml" in err.getvalue(), "broken legacy route warns with the exact opt-in entry")
+
+            # Read-only roles: team.toml codex route without #351 shape still fails closed; unchanged.
+            for role in ("sec", "rev", "research", "arch", "bulk-reader"):
+                rr = resolve_route_detailed(role, "auto", None, env=cc_env, which_fn=which, cwd=str(repo))
+                check(rr["harness"] == "claude-code", f"read-only {role} stays claude-code with no opt-in")
+
+            cfg = home / ".config" / "marc" / "harnesses.toml"
+            cfg.write_text(record_block(str(repo), "codex"), encoding="utf-8")
+            check(load_writer_opt_in(str(repo))["writers"] == "codex", "opt-in loads from the operator file")
+            for role in ("dev", "sre", "design"):
+                rr = resolve_route_detailed(role, "auto", None, env=cc_env, which_fn=which, cwd=str(repo))
+                check(rr["harness"] == "codex", f"opt-in enables codex for writer {role} (no team.toml needed)")
+            r = resolve_route_detailed("dev", "auto", tt, env=cc_env, which_fn=which, cwd=str(repo))
+            check(r["harness"] == "codex", "team.toml codex route is honoured once the opt-in confirms it")
+            sys.stderr = io.StringIO()
+            try:
+                r2 = resolve_route_detailed("sre", "auto", tt, env=cc_env, which_fn=which, cwd=str(repo))
+            finally:
+                sys.stderr = old
+            check(r2["harness"] == "claude-code", "opt-in for codex does not confirm a team.toml route to agy")
+            sys.stderr = io.StringIO()
+            try:
+                for role in ("rev", "research", "arch", "bulk-reader"):
+                    rr = resolve_route_detailed(role, "auto", tt, env=cc_env, which_fn=which, cwd=str(repo))
+                    check(rr["harness"] == "claude-code" and not rr["codex_readonly_opt_in"],
+                          f"read-only {role} unaffected by writers = codex")
+            finally:
+                sys.stderr = old
+            nat = tt.parent / "native.toml"
+            nat.write_text('[orchestration]\nmode = "native"\n', encoding="utf-8")
+            r = resolve_route_detailed("dev", "auto", nat, env=cc_env, which_fn=which, cwd=str(repo))
+            check(r["harness"] == "claude-code", "team.toml mode=native narrows even with the opt-in")
+
+            # The operator file is validated like codex.toml: inside the checkout, or group-writable, is refused.
+            cfg.chmod(0o666)
+            sys.stderr = io.StringIO()
+            try:
+                bad = load_writer_opt_in(str(repo))
+            finally:
+                sys.stderr = old
+            check(bad["writers"] is None, "group/world-writable opt-in file is ignored (fails closed)")
+            cfg.chmod(0o644)
+            cfg.write_text('[repos."%s"]\nwriters = "agy"\n' % repo, encoding="utf-8")
+            sys.stderr = io.StringIO()
+            try:
+                bad = load_writer_opt_in(str(repo))
+            finally:
+                sys.stderr = old
+            check(bad["writers"] is None, "writers = <not codex|native> is rejected")
+        with _IsoEnv(home, xdg=repo / "cfg"):
+            (repo / "cfg" / "marc").mkdir(parents=True)
+            (repo / "cfg" / "marc" / "harnesses.toml").write_text(record_block(str(repo), "codex"), encoding="utf-8")
+            sys.stderr = io.StringIO()
+            try:
+                inside = load_writer_opt_in(str(repo))
+            finally:
+                sys.stderr = old
+            check(inside["writers"] is None, "an opt-in file inside the checkout cannot enable itself")
+        # Direct resolver: a read-only role with writer_opt_in set still fails closed.
+        d = resolve_target_harness_detailed("claude-code", "rev", "auto", None, None, lambda b: True,
+                                            writer_opt_in="codex")
+        check(d["harness"] == "claude-code", "resolver: writer_opt_in never reaches read-only roles")
+
+
 def main() -> int:
+    with tempfile.TemporaryDirectory() as _iso, _IsoEnv(Path(_iso)):
+        return _run_all()
+
+
+def _run_all() -> int:
     test_command_generation()
     test_default_hybrid_matrix()
     test_route_resolution_from_toml()
@@ -2197,6 +2341,7 @@ def main() -> int:
     test_start_wait_jobs()
     test_arch_role_388()
     test_codex_writer_timeout_sandbox_partial_401()
+    test_harness_detect_409()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")

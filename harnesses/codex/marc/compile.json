@@ -13,6 +13,7 @@
   "hook_dialect": "codex",
   "hook_ids": [
     "team-toml-dump",
+    "harness-detect",
     "outdated-check",
     "invariants-card"
   ],
