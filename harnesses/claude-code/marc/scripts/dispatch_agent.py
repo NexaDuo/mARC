@@ -110,6 +110,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -641,12 +642,36 @@ def _orchestration_table(cwd: Optional[str]) -> Tuple[Dict[str, Any], Optional[P
     return (orch if isinstance(orch, dict) else {}), path
 
 
+_FACTS_CACHE: Optional[Dict[str, Tuple[str, Optional[str]]]] = None  # set only by the hook path (#409 SEC-6)
+_HOOK_GIT_TIMEOUT = 1.0
+
+
 def _checkout_facts(cwd: Optional[str]) -> Tuple[str, Optional[str]]:
-    """(realpath of the checkout top-level, realpath of its git common dir or None)."""
+    """(realpath of the checkout top-level, realpath of its git common dir or None).
+
+    On the SessionStart hook path (`_FACTS_CACHE` set) the two git calls run once with a
+    1 s bound each, so the whole hook stays near 3 s even without `timeout(1)` (#409 SEC-6).
+    """
+    key = cwd or ""
+    if _FACTS_CACHE is not None and key in _FACTS_CACHE:
+        return _FACTS_CACHE[key]
+    git_timeout = _HOOK_GIT_TIMEOUT if _FACTS_CACHE is not None else 20.0
+    facts = _checkout_facts_uncached(cwd, git_timeout)
+    if _FACTS_CACHE is not None:
+        _FACTS_CACHE[key] = facts
+    return facts
+
+
+def _main_checkout(top: str, common: Optional[str]) -> str:
+    """The main checkout path: a linked worktree maps to its main checkout (#409 REV-2)."""
+    return os.path.dirname(common) if common and os.path.basename(common) == ".git" else top
+
+
+def _checkout_facts_uncached(cwd: Optional[str], git_timeout: float) -> Tuple[str, Optional[str]]:
     start = Path(cwd) if cwd else Path.cwd()
-    top_out = _git_safe(["rev-parse", "--show-toplevel"], cwd=str(start))
+    top_out = _git_safe(["rev-parse", "--show-toplevel"], cwd=str(start), timeout=git_timeout)
     top = os.path.realpath(top_out.strip() if top_out and top_out.strip() else str(find_repo_root(start)))
-    common_out = _git_safe(["rev-parse", "--git-common-dir"], cwd=str(start))
+    common_out = _git_safe(["rev-parse", "--git-common-dir"], cwd=str(start), timeout=git_timeout)
     common = (os.path.realpath(os.path.join(str(start), common_out.strip()))
               if common_out and common_out.strip() else None)
     return top, common
@@ -730,31 +755,29 @@ def _check_writable_dir(raw: Any, where: str, top: str, common: Optional[str], c
     return real
 
 
-def _load_user_codex_sandbox(cwd: Optional[str]) -> Dict[str, Any]:
-    """Sandbox widening for this checkout from the operator's user-level file (#401 SEC-1).
+def _user_repo_section(cfg: Path, cwd: Optional[str], what: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """The `[repos."<abs path>"]` section of an operator-side file for this checkout (#401, #409).
 
-    Never read from the checkout. The file lives outside the repo and is keyed by the
-    realpath of the repo top-level: `[repos."/abs/path"]` with `codex_writable_dirs`
-    and `codex_network_access`. Needs tomllib (Python 3.11+); a linked worktree also
-    matches its main checkout's section.
+    Shared validation for every operator-side file (`codex.toml`, `harnesses.toml`): refuses a
+    file that resolves inside the checkout, is not owned by you, or is group/world-writable,
+    needs tomllib, and matches the checkout top-level or its main checkout (a linked worktree
+    matches its main checkout). Returns (section or None, realpath of the top-level).
     """
-    out: Dict[str, Any] = {"writable_dirs": [], "network_access": False, "source": None}
-    cfg = codex_user_config_path()
     if not cfg.is_file():
-        return out
+        return None, ""
     top, common = _checkout_facts(cwd)
     real_cfg = os.path.realpath(str(cfg))
     main_checkout = os.path.dirname(common) if common and os.path.basename(common) == ".git" else None
     if (_is_within(real_cfg, top) or (common and _is_within(real_cfg, common))
             or (main_checkout and _is_within(real_cfg, main_checkout))):
         raise ModelPinError(
-            f"codex sandbox config {cfg} resolves inside the checkout ({real_cfg}); the checkout "
+            f"{what} {cfg} resolves inside the checkout ({real_cfg}); the checkout "
             f"must not be able to widen its own sandbox. Move it outside the repo (#401)")
     if hasattr(os, "getuid") and os.stat(real_cfg).st_uid != os.getuid():
-        raise ModelPinError(f"codex sandbox config {cfg} is not owned by you; refusing (#401)")
+        raise ModelPinError(f"{what} {cfg} is not owned by you; refusing (#401)")
     if os.stat(real_cfg).st_mode & 0o022:
         raise ModelPinError(
-            f"codex sandbox config {cfg} is group- or world-writable; refusing so no other user "
+            f"{what} {cfg} is group- or world-writable; refusing so no other user "
             f"can widen your sandbox. Fix with: chmod go-w {shlex.quote(real_cfg)} (#401)")
     try:
         import tomllib
@@ -773,7 +796,6 @@ def _load_user_codex_sandbox(cwd: Optional[str]) -> Dict[str, Any]:
     wanted = [top]
     if common and os.path.basename(common) == ".git":
         wanted.append(os.path.dirname(common))
-    section: Optional[Dict[str, Any]] = None
     valid: List[Tuple[str, Dict[str, Any]]] = []
     for key, sec in repos.items():
         if not key.strip() or not os.path.isabs(key) or "\0" in key:
@@ -785,12 +807,24 @@ def _load_user_codex_sandbox(cwd: Optional[str]) -> Dict[str, Any]:
     for target in wanted:
         for real_key, sec in valid:
             if real_key == target:
-                section = sec
-                break
-        if section is not None:
-            break
+                return sec, top
+    return None, top
+
+
+def _load_user_codex_sandbox(cwd: Optional[str]) -> Dict[str, Any]:
+    """Sandbox widening for this checkout from the operator's user-level file (#401 SEC-1).
+
+    Never read from the checkout. The file lives outside the repo and is keyed by the
+    realpath of the repo top-level: `[repos."/abs/path"]` with `codex_writable_dirs`
+    and `codex_network_access`. Needs tomllib (Python 3.11+); a linked worktree also
+    matches its main checkout's section.
+    """
+    out: Dict[str, Any] = {"writable_dirs": [], "network_access": False, "source": None}
+    cfg = codex_user_config_path()
+    section, top = _user_repo_section(cfg, cwd, "codex sandbox config")
     if section is None:
         return out
+    _, common = _checkout_facts(cwd)
     where = f"[repos.\"{top}\"] codex_writable_dirs in {cfg} (#401)"
     dirs = section.get("codex_writable_dirs", [])
     if not isinstance(dirs, list):
@@ -848,6 +882,220 @@ def load_codex_writer_settings(cwd: Optional[str] = None) -> Dict[str, Any]:
     return out
 
 
+# Writer roles may leave the native harness only for these targets, and only with the
+# operator-side opt-in (#409). Codex is the one non-native writer path with a sandbox plus
+# worktree isolation; agy and copilot are detected and shown but never offered.
+WRITER_ROLES = frozenset({"dev", "sre", "design"})
+WRITER_OPT_IN_TARGETS = frozenset({"codex", "native"})
+
+
+def harnesses_user_config_path() -> Path:
+    """Operator-side harness opt-in, `${XDG_CONFIG_HOME:-~/.config}/marc/harnesses.toml` (#409)."""
+    return codex_user_config_path().with_name("harnesses.toml")
+
+
+def load_writer_opt_in(cwd: Optional[str] = None) -> Dict[str, Any]:
+    """Operator-recorded target for writer roles in this repo: `writers = "codex" | "native"` (#409).
+
+    Read only from `harnesses_user_config_path()` (never the checkout), with the same
+    validation as codex.toml. Returns {"writers": None|"codex"|"native", "source": path|None,
+    "repo": realpath of the checkout}. A malformed file or value fails closed to "no opt-in"
+    with a stderr warning, so a broken file can never widen routing.
+    """
+    cfg = harnesses_user_config_path()
+    out: Dict[str, Any] = {"writers": None, "source": None, "repo": _main_checkout(*_checkout_facts(cwd))}
+    try:
+        section, top = _user_repo_section(cfg, cwd, "harness opt-in config")
+        if section is None:
+            return out
+        val = section.get("writers")
+        if val is None:
+            return out
+        if val not in WRITER_OPT_IN_TARGETS:
+            raise ModelPinError(
+                f"[repos.\"{top}\"] writers in {cfg} must be \"codex\" or \"native\" (#409)")
+        out["writers"] = val
+        out["source"] = str(cfg)
+    except ModelPinError as e:
+        sys.stderr.write(f"[mARC dispatch] Warning: ignoring the harness opt-in ({e}); writers stay native.\n")
+    return out
+
+
+def record_block(repo: str, target: str) -> str:
+    """The exact TOML block that records the opt-in; the operator shows it before writing (#409)."""
+    return f"[repos.{_toml_basic_string(repo)}]\nwriters = {_toml_basic_string(target)}\n"
+
+
+def _toml_basic_string(text: str) -> str:
+    """TOML basic-string literal: escapes backslash, quote and control chars (#409 SEC-3)."""
+    out = []
+    for ch in text:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append("\\u%04X" % ord(ch))
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def _binary_hazard(which_path: str, top: str, common: Optional[str],
+                   stat_fn: Callable[[str], Any] = os.stat,
+                   ids: Optional[Tuple[Optional[int], Optional[int]]] = None) -> Optional[str]:
+    """Why a PATH hit must not be trusted at session start, or None (#409): inside the
+    checkout or its git dir, in a world-writable directory, in a group-writable directory
+    (unless owned by root/you and grouped to gid 0, a system gid < 1000 or your primary gid),
+    or owned by neither you nor root. `stat_fn`/`ids=(uid, gid)` are injectable for tests."""
+    try:
+        real = os.path.realpath(which_path)
+    except OSError:
+        return "cannot be inspected"
+    if _is_within(real, top) or _is_within(os.path.realpath(os.path.dirname(which_path) or os.sep), top):
+        return "resolves inside the checkout"
+    if common and _is_within(real, common):
+        return "resolves inside the git directory"
+    link = _symlink_hazard(which_path)
+    if link:
+        return f"{link}"
+    try:
+        if ids is None:
+            ids = (os.getuid() if hasattr(os, "getuid") else None,
+                   os.getgid() if hasattr(os, "getgid") else None)
+        me, my_gid = ids
+        for d in sorted({os.path.dirname(which_path) or os.sep, os.path.dirname(real)}):
+            st = stat_fn(d)
+            if st.st_mode & 0o002:
+                return f"sits in a world-writable directory ({d})"
+            if me is not None and st.st_uid not in (0, me):
+                return f"sits in a directory owned by another user ({d})"
+            if st.st_mode & 0o020 and not (st.st_gid < 1000 or st.st_gid == my_gid):
+                return f"sits in a group-writable directory of a non-system group ({d})"
+        if me is not None and stat_fn(real).st_uid not in (0, me):
+            return "is owned by another user"
+    except OSError:
+        return "cannot be inspected"
+    return None
+
+
+def probe_harnesses(
+    which_fn: Callable[[str], Optional[str]] = shutil.which,
+    run_fn: Optional[Callable[..., Any]] = None,
+    env: Optional[Dict[str, str]] = None,
+    cwd: Optional[str] = None,
+    probe: bool = False,
+    opt_in: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Which harnesses are on this machine and who may route where (#409).
+
+    Executes nothing unless `probe` is set (then `<bin> --version` with a 3 s timeout,
+    stdin closed, a temp cwd and no credential-looking env). Never checks auth.
+    """
+    native = detect_native_harness(env=env, which_fn=which_fn)
+    top, common = _checkout_facts(cwd)
+    found: List[Dict[str, Any]] = []
+    for harness, binary in HARNESS_BINARIES.items():
+        entry: Dict[str, Any] = {"harness": harness, "binary": binary, "path": None,
+                                 "status": "missing", "native": harness == native,
+                                 "auth": "unknown", "version": None}
+        hit = which_fn(binary)
+        if hit:
+            hazard = _binary_hazard(hit, top, common)
+            entry["status"] = "untrusted-path" if hazard else "present"
+            entry["path"] = hit
+            if hazard:
+                entry["reason"] = hazard
+            elif probe and run_fn is not None:
+                entry["version"] = _probe_version(hit, run_fn, env)
+        entry["read_only_roles"] = harness == READ_ONLY_PREFERRED_HARNESS
+        entry["writer_roles"] = (harness == native
+                                 or (harness == "codex" and entry["status"] == "present"))
+        found.append(entry)
+    opt = opt_in if opt_in is not None else load_writer_opt_in(cwd)
+    try:
+        team_native = _orchestration_table(cwd)[0].get("mode") == "native"
+    except Exception:
+        team_native = False
+    others = [e for e in found if not e["native"] and e["status"] == "present"]
+    codex_ok = any(e["harness"] == "codex" for e in others) and native != "codex"
+    return {
+        "native": native,
+        "harnesses": found,
+        "writers": opt.get("writers"),
+        "opt_in_source": opt.get("source"),
+        "repo": opt.get("repo") or top,
+        "ask_needed": codex_ok and opt.get("writers") is None and not team_native,
+    }
+
+
+def _probe_version(path: str, run_fn: Callable[..., Any], env: Optional[Dict[str, str]]) -> Optional[str]:
+    clean = {k: v for k, v in (os.environ if env is None else env).items()
+             if not re.search(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH", k, re.I)}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            res = run_fn([path, "--version"], capture_output=True, text=True, timeout=3.0,
+                         stdin=subprocess.DEVNULL, cwd=tmp, env=clean)
+        lines = (getattr(res, "stdout", "") or "").strip().splitlines()
+        # First line, version-ish charset only, capped: never raw tool output into the model context (#409 SEC-4).
+        clean_line = re.sub(r"[^A-Za-z0-9._+() -]", "", lines[0])[:60].strip() if lines else ""
+        return clean_line or None
+    except Exception:
+        return None
+
+
+def harnesses_line(report: Dict[str, Any]) -> str:
+    """One SessionStart line, or "" when only the native harness is present and nothing is recorded."""
+    present = [e for e in report["harnesses"] if e["status"] != "missing"]
+    if not [e for e in present if not e["native"]] and report["writers"] is None:
+        return ""
+    parts = []
+    for e in report["harnesses"]:
+        tag = ("native" if e["native"] else
+               {"present": "on PATH", "untrusted-path": "untrusted-path", "missing": "missing"}[e["status"]])
+        parts.append(f"{e['harness']} ({tag})")
+    codex_entry = next((e for e in report["harnesses"] if e["harness"] == "codex"), None)
+    if report["writers"] == "codex" and codex_entry and codex_entry["status"] != "present":
+        why = (f"codex binary is untrusted: {codex_entry.get('reason', 'untrusted path')}"
+               if codex_entry["status"] == "untrusted-path" else "codex binary not found on PATH")
+        route = f"writers: native (operator opted in to codex, but {why})"
+    elif report["writers"]:
+        route = f"writers: {report['writers']} (operator opt-in)"
+    elif report["ask_needed"]:
+        route = "writers: native (no opt-in; ask once to offer codex)"
+    else:
+        route = "writers: native"
+    return "harnesses: " + " · ".join(parts) + " — " + route
+
+
+def _main_harnesses(argv: List[str]) -> int:
+    parser = argparse.ArgumentParser(prog="dispatch_agent.py harnesses",
+                                     description="Detect available harnesses and routing opt-in (#409).")
+    parser.add_argument("--json", action="store_true", help="print the full report as JSON")
+    parser.add_argument("--line", action="store_true", help="print the one-line summary (empty if single-harness)")
+    parser.add_argument("--probe", action="store_true", help="also run `<bin> --version` (3 s, scrubbed env)")
+    parser.add_argument("--record", choices=sorted(WRITER_OPT_IN_TARGETS),
+                        help="print the exact harnesses.toml block to record (never writes)")
+    parser.add_argument("-C", dest="cwd", default=None, help="checkout directory (default: cwd)")
+    args = parser.parse_args(argv)
+    global _FACTS_CACHE
+    _FACTS_CACHE = {}
+    try:
+        report = probe_harnesses(run_fn=subprocess.run, cwd=args.cwd, probe=args.probe)
+    finally:
+        _FACTS_CACHE = None
+    if args.record:
+        sys.stdout.write(f"# append to {harnesses_user_config_path()} (keep it outside the repo, chmod go-w)\n"
+                         + record_block(report["repo"], args.record))
+    elif args.line:
+        line = harnesses_line(report)
+        if line:
+            print(line)
+    else:
+        print(json.dumps(report, indent=2))
+    return EXIT_OK
+
+
 def resolve_default_timeout(harness: Optional[str], role: str, cwd: Optional[str] = None) -> float:
     """Timeout when `--timeout` is not given: 300 s, but 1800 s (or team.toml) for Codex writers (#401)."""
     if harness == "codex" and CANONICAL_ROLES[normalize_role(role)] not in READ_ONLY_ROLES:
@@ -881,8 +1129,12 @@ def build_harness_command(
     prompt: str,
     codex_opt_in: bool = False,
     cwd: Optional[str] = None,
+    codex_bin: str = "codex",
 ) -> List[str]:
     """Build CLI execution command for target harness.
+
+    `codex_bin` is argv[0] for both codex builders: dispatch passes the absolute path
+    it trust-checked so launch cannot differ from the check (#409 SEC-1).
 
     `codex_opt_in` must come from codex_readonly_opt_in() on team.toml routes;
     `cwd` is the checkout a Codex read-only reviewer reads (default: the
@@ -902,7 +1154,7 @@ def build_harness_command(
         # (and a different tree) a read-only role has no reason to make.
         body, pins = load_codex_persona(mapped_agent)
         checkout = str(Path(cwd or os.getcwd()).resolve())
-        cmd = ["codex", "exec", "-C", checkout, *CODEX_READONLY_PROFILE_ARGS]
+        cmd = [codex_bin, "exec", "-C", checkout, *CODEX_READONLY_PROFILE_ARGS]
         if "model" in pins:
             cmd += ["-m", pins["model"]]
         if "model_reasoning_effort" in pins:
@@ -954,7 +1206,7 @@ def build_harness_command(
             widen_args += ["--add-dir", d]
         if widen["network_access"]:
             widen_args += ["-c", "sandbox_workspace_write.network_access=true"]
-        return ["codex", "exec", "--worktree", "--sandbox", "workspace-write", *widen_args,
+        return [codex_bin, "exec", "--worktree", "--sandbox", "workspace-write", *widen_args,
                 *pin_args, f"Act as the mARC {mapped_agent} specialist. {prompt}"]
     else:
         raise ValueError(f"Unsupported harness: {harness!r}")
@@ -986,12 +1238,19 @@ def resolve_target_harness_detailed(
     toml_routes: Optional[Dict[str, str]] = None,
     toml_mode: Optional[str] = None,
     cli_checker: Optional[Callable[[str], Any]] = None,
+    writer_opt_in: Optional[str] = None,
+    repo_path: str = "<absolute repo path>",
+    hazard_fn: Optional[Callable[[Any], Optional[str]]] = None,
 ) -> Dict[str, Any]:
     """Resolve target harness based on priority hierarchy and check CLI availability (origin: #241).
 
     Priorities:
         1. Explicit --harness flag (if not 'auto' or unset).
-        2. User explicit route in team.toml [orchestration.routes].
+        2. User explicit route in team.toml [orchestration.routes]. A route may only
+           narrow: a writer role (dev/sre/design) routed off the native harness needs
+           the operator-side `writer_opt_in` naming that harness, else it runs native
+           with a warning naming the entry to add (#409).
+        2b. The operator-side `writer_opt_in` ("codex") for writer roles (#409).
         3. Default hybrid specialization matrix (DEFAULT_HYBRID_MATRIX).
 
     Fallback:
@@ -1019,6 +1278,7 @@ def resolve_target_harness_detailed(
     # host detection and every fallback never count as an opt-in.
     toml_opt_in = codex_readonly_opt_in(role, toml_routes)
     route_opt_in = False
+    writer_reason: Optional[str] = None
 
     # Priority 1: Explicit --harness argument
     if explicit_harness and explicit_harness != "auto":
@@ -1035,6 +1295,24 @@ def resolve_target_harness_detailed(
         if user_route and user_route != "auto":
             target_harness = host_harness if user_route == "native" else user_route
             route_opt_in = toml_opt_in and user_route == "codex"
+            # claude-code is the trusted, sandboxed agent-definition harness: routing to it
+            # narrows, so it is honoured on every host (#409 REV-1).
+            if (canonical_role in WRITER_ROLES and target_harness != host_harness
+                    and target_harness in HARNESS_BINARIES and target_harness != "claude-code"
+                    and writer_opt_in != target_harness):
+                writer_reason = (f"team.toml routes writer role '{role}' to '{target_harness}' "
+                                 f"without the operator-side opt-in (#409)")
+                sys.stderr.write(
+                    f"[mARC dispatch] Warning: team.toml routes writer role '{role}' to "
+                    f"'{target_harness}' but there is no operator-side opt-in, so it runs on "
+                    f"'{host_harness}' (#409). To enable it, add to "
+                    f"{harnesses_user_config_path()}:\n"
+                    + (record_block(repo_path, target_harness) if target_harness == "codex"
+                       else f"  (only codex can be opted in; use --harness {target_harness} for a one-off)\n"))
+                target_harness = host_harness
+                route_opt_in = False
+        elif canonical_role in WRITER_ROLES and writer_opt_in == "codex":
+            target_harness = "codex"
         else:
             # Priority 3: When route is 'auto', unset, or in hybrid mode, lookup DEFAULT_HYBRID_MATRIX
             matrix = DEFAULT_HYBRID_MATRIX.get(host_harness, DEFAULT_HYBRID_MATRIX.get("claude-code", {}))
@@ -1065,25 +1343,36 @@ def resolve_target_harness_detailed(
         target_harness = READ_ONLY_PREFERRED_HARNESS
         route_opt_in = False
 
+    hazards: Dict[str, str] = {}
+
     def _is_available(h_or_b: str) -> bool:
         b = HARNESS_BINARIES.get(h_or_b, h_or_b)
         if cli_checker is None:
-            return shutil.which(b) is not None
-        try:
-            res = cli_checker(b)
-        except Exception:
-            res = None
-        if res is None and b != h_or_b:
+            res: Any = shutil.which(b)
+        else:
             try:
-                res = cli_checker(h_or_b)
+                res = cli_checker(b)
             except Exception:
                 res = None
+            if res is None and b != h_or_b:
+                try:
+                    res = cli_checker(h_or_b)
+                except Exception:
+                    res = None
+        if res and hazard_fn is not None and h_or_b == "codex":
+            why = hazard_fn(res)
+            if why:
+                hazards[h_or_b] = why
+                return False
         return bool(res)
 
     # Check target CLI binary availability
     expected_bin = HARNESS_BINARIES.get(target_harness, target_harness)
     if not _is_available(target_harness):
-        fallback_reason = f"CLI binary '{expected_bin}' for harness '{target_harness}' not found on PATH"
+        fallback_reason = (f"CLI binary '{expected_bin}' for harness '{target_harness}' is untrusted "
+                           f"({hazards[target_harness]}); not dispatching to it"
+                           if target_harness in hazards else
+                           f"CLI binary '{expected_bin}' for harness '{target_harness}' not found on PATH")
         if read_only:
             # Only fall back to a harness that applies agent definitions; never
             # to a NON_ENFORCING_HARNESSES entry, even when it is the host (#323).
@@ -1110,7 +1399,7 @@ def resolve_target_harness_detailed(
 
         sys.stderr.write(f"[mARC dispatch] Warning: {fallback_reason}. Falling back to '{fallback_harness}'.\n")
         _warn_if_unenforced(fallback_harness)
-        combined = f"{reroute_reason}; {fallback_reason}" if reroute_reason else fallback_reason
+        combined = "; ".join(x for x in (writer_reason, reroute_reason, fallback_reason) if x)
         return {
             "harness": fallback_harness,
             "fallback": True,
@@ -1130,8 +1419,8 @@ def resolve_target_harness_detailed(
         _warn_if_unenforced(target_harness)
     return {
         "harness": target_harness,
-        "fallback": reroute_reason is not None,
-        "fallback_reason": reroute_reason,
+        "fallback": reroute_reason is not None or writer_reason is not None,
+        "fallback_reason": "; ".join(x for x in (writer_reason, reroute_reason) if x) or None,
         "policy_reroute": reroute_reason is not None,
         "policy_reason": reroute_reason,
         "cli_fallback": False,
@@ -1164,12 +1453,44 @@ def resolve_route(
     return d["harness"], d["fallback"], d["fallback_reason"]
 
 
+def _checked_codex_path(hit: Any, cwd: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """(absolute exec path, hazard) for a codex PATH hit (#409 SEC-1).
+
+    A relative PATH entry yields a relative hit that Popen would resolve against the
+    child's cwd (the checkout), so resolve it here and check the absolute path; callers
+    then exec that same path, leaving no check/launch gap. Non-string hits (test stubs)
+    are not checkable and pass through as (None, None).
+    """
+    if not isinstance(hit, str):
+        return None, None
+    try:
+        lexical = os.path.abspath(hit)
+        real = os.path.realpath(lexical)
+    except (OSError, ValueError):
+        return None, "cannot be resolved to an absolute path"
+    if not os.path.exists(real):
+        # Nothing to execute there: launching the absolute path fails with ENOENT, which is
+        # safe, and it never falls back to a bare-name PATH lookup.
+        return lexical, None
+    top, common = _checkout_facts(cwd)
+    why = _binary_hazard(lexical, top, common) or _binary_hazard(real, top, common)
+    return (None, why) if why else (real, None)
+
+
+def _codex_hazard_fn(cwd: Optional[str]) -> Callable[[Any], Optional[str]]:
+    """Same trust check the probe uses, applied to the codex PATH hit at dispatch time (#409 SEC-1)."""
+    def check_hit(hit: Any) -> Optional[str]:
+        return _checked_codex_path(hit, cwd)[1]
+    return check_hit
+
+
 def resolve_route_detailed(
     role: str,
     requested_harness: str = "auto",
     team_toml_path: Optional[Path] = None,
     env: Optional[Dict[str, str]] = None,
     which_fn: Callable[[str], Optional[str]] = shutil.which,
+    cwd: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Like resolve_route, but returns resolve_target_harness_detailed's dict.
 
@@ -1181,6 +1502,11 @@ def resolve_route_detailed(
     toml_mode = orchestration.get("mode")
     toml_routes = orchestration.get("routes")
 
+    # Operator-side writer opt-in (#409); read only for writer roles, never from the checkout.
+    opt = {"writers": None, "repo": ""}
+    if role in CANONICAL_ROLES and CANONICAL_ROLES[role] in WRITER_ROLES:
+        opt = load_writer_opt_in(cwd)
+
     return resolve_target_harness_detailed(
         host_harness=host_harness,
         role=role,
@@ -1188,6 +1514,9 @@ def resolve_route_detailed(
         toml_routes=toml_routes,
         toml_mode=toml_mode,
         cli_checker=which_fn,
+        writer_opt_in=opt["writers"],
+        repo_path=opt["repo"] or "<absolute repo path>",
+        hazard_fn=_codex_hazard_fn(cwd),
     )
 
 
@@ -1242,6 +1571,7 @@ def prepare_dispatch(
             team_toml_path=toml_path,
             env=env,
             which_fn=which_fn,
+            cwd=str(cwd) if cwd else None,
         )
     except (ReadOnlyRoutingError, UnknownRoleError) as e:
         # Fail closed (#323): never dispatch a read-only role unrestricted, and
@@ -1278,8 +1608,18 @@ def prepare_dispatch(
             raise ReadOnlyRoutingError(
                 f"codex read-only opt-in for '{role}' comes from {toml_path}, not from the team.toml "
                 f"discovered from the checkout; refusing (#351)")
+        codex_bin = "codex"
+        if resolved_harness == "codex":
+            # Exec the exact absolute path that was trust-checked (#409 SEC-1), never a
+            # bare name a later PATH lookup (or the checkout cwd) could resolve elsewhere.
+            hit = which_fn("codex")
+            checked, why = _checked_codex_path(hit, str(cwd) if cwd else None)
+            if why:
+                raise ReadOnlyRoutingError(f"codex binary is untrusted at launch ({why}); refusing (#409)")
+            codex_bin = checked or "codex"
         cmd = build_harness_command(resolved_harness, role, prompt,
-                                    codex_opt_in=opt_in, cwd=str(cwd) if cwd else None)
+                                    codex_opt_in=opt_in, cwd=str(cwd) if cwd else None,
+                                    codex_bin=codex_bin)
         default_timeout = resolve_default_timeout(resolved_harness, role, str(cwd) if cwd else None)
         codex_writer = resolved_harness == "codex" and CANONICAL_ROLES[role] not in READ_ONLY_ROLES
         widen = (load_codex_writer_settings(str(cwd) if cwd else None) if codex_writer
@@ -1955,7 +2295,17 @@ def _validate_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     if is_forbidden_readonly_route(role, harness, opt_in):
         raise ReadOnlyRoutingError(
             f"job spec routes read-only role '{role}' to '{harness}'; refusing (issue #323)")
-    expected = build_harness_command(str(harness), role, prompt, codex_opt_in=opt_in, cwd=cwd)
+    codex_bin = "codex"
+    if harness == "codex":
+        argv = prepared.get("command")
+        first = argv[0] if isinstance(argv, list) and argv and isinstance(argv[0], str) else "codex"
+        if first != "codex":  # absolute, trust-checked path pinned at prepare time (#409)
+            checked, why = _checked_codex_path(first, cwd)
+            if why or checked != first or not os.path.isabs(first):
+                raise RuntimeError(f"job spec codex binary is untrusted or changed ({why or first}); refusing (#409)")
+            codex_bin = first
+    expected = build_harness_command(str(harness), role, prompt, codex_opt_in=opt_in, cwd=cwd,
+                                     codex_bin=codex_bin)
     if prepared.get("command") != expected:
         raise RuntimeError("job spec command does not match the routed harness command")
     return prepared
@@ -2192,6 +2542,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _main_start(argv[1:])
     if argv and argv[0] == "wait":
         return _main_wait(argv[1:])
+    if argv and argv[0] == "harnesses":
+        return _main_harnesses(argv[1:])
     if argv and argv[0] in ("task", "task-usage"):
         # Codex implements -> suite -> PR -> headless @rev/@sec -> fix rounds (#361).
         import task_pipeline

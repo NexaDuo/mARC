@@ -16,6 +16,7 @@
   "hook_dialect": "antigravity",
   "hook_ids": [
     "team-toml-dump",
+    "harness-detect",
     "outdated-check",
     "token-guard",
     "outdated-recheck",

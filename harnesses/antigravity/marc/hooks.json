@@ -48,5 +48,13 @@
         "command": "bash hooks/agy-hook.sh token-telemetry Stop"
       }
     ]
+  },
+  "harness-detect": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "bash hooks/agy-hook.sh harness-detect SessionStart"
+      }
+    ]
   }
 }

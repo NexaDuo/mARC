@@ -13,6 +13,7 @@
   "hook_dialect": "claude-code",
   "hook_ids": [
     "team-toml-dump",
+    "harness-detect",
     "outdated-check",
     "invariants-card",
     "token-guard",
