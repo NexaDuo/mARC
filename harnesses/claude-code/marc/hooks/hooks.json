@@ -27,6 +27,15 @@
             "command": "script=\"${CLAUDE_PLUGIN_ROOT:-$PWD}/hooks/invariants-card.sh\"; if [ -f \"$script\" ]; then bash \"$script\" 2>/dev/null; else st=\"${MARC_STATE_DIR:-$HOME/.claude/marc-state}/hook-missing\"; mkdir -p \"$st\" 2>/dev/null; sid=\"$(cat 2>/dev/null | LC_ALL=C sed -n -e 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' -e 's/.*\"conversationId\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n1)\"; sid=\"${sid:-${ANTIGRAVITY_CONVERSATION_ID:-$PPID}}\"; mk=\"$st/$(printf '%s' \"${sid:-nosession}_invariants-card.sh\" | LC_ALL=C tr -c 'A-Za-z0-9_.-' '_')\"; if [ ! -f \"$mk\" ]; then echo \"[mARC] hook script not found: $script (is CLAUDE_PLUGIN_ROOT set for this harness?)\" >&2;  touch \"$mk\" 2>/dev/null; fi; fi; exit 0"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${CLAUDE_PLUGIN_ROOT:-$HOME/.copilot/plugin-data/marc}\"; s=\"$root/scripts/dispatch_agent.py\"; if [ -n \"$root\" ] && [ -f \"$s\" ] && command -v python3 >/dev/null 2>&1; then t=\"\"; command -v timeout >/dev/null 2>&1 && t=\"timeout 3\"; (cd \"${CLAUDE_PROJECT_DIR:-$PWD}\" 2>/dev/null && $t python3 -I \"$s\" harnesses --line 2>/dev/null) || true; fi; exit 0"
+          }
+        ]
       }
     ],
     "PostToolUse": [

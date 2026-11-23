@@ -14,6 +14,7 @@
   "hook_dialect": "copilot",
   "hook_ids": [
     "team-toml-dump",
+    "harness-detect",
     "copilot-plugin-data-sync",
     "token-sentinel-post-tool-use"
   ]

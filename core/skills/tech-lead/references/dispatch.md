@@ -67,8 +67,23 @@ A tool-call budget in the prompt is advisory;
 `dispatch_agent.py` enforces a timeout, not a token or tool-call budget.
 
 #### Cross-harness dispatch & poly-model routing (optional)
-When `team.toml` declares `[orchestration]` (or cross-harness subagent delegation is explicitly requested), invoke the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses. Codex writer roles default to Codex; read-only roles routed via this script require Claude Code unless `team.toml` explicitly opts them into Codex (#351). On other hosts, by default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness.
+Use the bundled `dispatch_agent.py` helper to route specialists across different agent CLI harnesses (no `team.toml` needed; see the detect-and-ask rule below). Codex writer roles default to Codex when the host is Codex; read-only roles routed via this script require Claude Code unless `team.toml` explicitly opts them into Codex (#351). On other hosts, by default (`--harness auto`), an embedded hybrid specialization matrix routes `@dev`/`@sec`/`@rev`/`@research` to `claude-code`, and `@sre`/`@design` to the native host harness.
 **Note:** When using `dispatch_agent.py`, read-only roles (`@rev`/`@research`/`@sec`/`@arch`) are never dispatched to `antigravity`, `copilot`, or `codex`, since none of these apply mARC agent definitions headless (#323). The one exception is an explicit `team.toml` route to `codex` for `@sec`/`@rev`/`@research` (see the Codex note below; origin: #351 · 2026-10-14). This restriction applies ONLY to the CLI wrapper — when dispatching read-only roles natively, strictly follow your primary dispatch instructions above to ensure tool boundaries are safely enforced.
+<!-- rules:origin-required -->
+- **Detect, ask once, remember (replaces "only when `team.toml` declares `[orchestration]`").**
+  The SessionStart line `harnesses: ...` (from `dispatch_agent.py harnesses --line`; silent
+  with one harness) tells you what is installed. At the first writer dispatch where
+  `harnesses --json` shows `ask_needed`, ask the user once whether `@dev`/`@sre`/`@design`
+  may run on Codex in this repo. Say plainly that a Codex writer is sandboxed but its code
+  still runs unsandboxed in the suite step with the operator's rights. On yes or no, run
+  `dispatch_agent.py harnesses --record codex|native`, show the printed block, and append it
+  to `${XDG_CONFIG_HOME:-~/.config}/marc/harnesses.toml` only after the user confirms (no
+  silent writes; never inside the repo). Never re-ask once recorded; with no answer, stay
+  native. Only Codex is offered for writers; `--harness` stays an explicit one-off. A
+  `team.toml` writer route to a non-native harness is honoured only if that file confirms
+  it, otherwise it runs native with a warning naming the entry to add. Read-only roles
+  ignore the file entirely (#323). (origin: #409 · 2026-11-23)
+<!-- /rules:origin-required -->
 ```bash
 python3 "{{ bundled_scripts_dir }}/dispatch_agent.py" \
   --role "<dev|sre|design|sec|rev|research|arch>" \
