@@ -410,7 +410,8 @@ jobs:
         run: |
           set -euo pipefail
           CHECK="core/scripts/check_rule_origin.py"
-          FILES="core/skills/tech-lead/SKILL.md core/skills/tech-lead/references/*.md \
+          FILES="core/skills/eng-director/SKILL.md core/skills/eng-director/references/*.md \
+                 core/skills/tech-lead/SKILL.md core/skills/tech-lead/references/*.md \
                  core/agents/engineer.md core/agents/sre.md core/agents/design.md \
                  core/agents/security.md core/agents/review.md core/agents/research.md \
                  AGENTS.md"
@@ -1036,7 +1037,7 @@ jobs:
           echo "== assert skill + agents registered (plugin details) =="
           DETAILS="$(claude plugin details marc@nexaduo)"
           echo "$DETAILS"
-          for component in tech-lead engineer sre design security review research; do
+          for component in eng-director tech-lead engineer sre design security review research; do
             echo "$DETAILS" | grep -qiw "$component" \
               || { echo "::error::component '$component' not registered in plugin details"; exit 1; }
           done
@@ -1122,7 +1123,7 @@ jobs:
           CONFIG_DIR="$HOME/.gemini/config/plugins/marc"
 
           # Assert specialist components (now compiled as skills for Antigravity)
-          for component in engineer sre design security review research; do
+          for component in eng-director engineer sre design security review research; do
             test -f "$CONFIG_DIR/skills/$component/SKILL.md" || {
               echo "::error::Skill component '$component' not found in config directory"
               exit 1
@@ -1241,7 +1242,7 @@ jobs:
           echo "== assert skills registered (skill list) =="
           SKILLS="$(copilot skill list)"
           echo "$SKILLS"
-          for skill in init tech-lead; do
+          for skill in init tech-lead eng-director; do
             echo "$SKILLS" | grep -qiw "$skill" \
               || { echo "::error::skill '$skill' not registered in copilot skill list"; exit 1; }
           done
@@ -1314,7 +1315,7 @@ jobs:
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
           DETAILS="$(claude plugin details marc@nexaduo)"
           echo "$DETAILS"
-          for component in tech-lead engineer sre design security review research; do
+          for component in eng-director tech-lead engineer sre design security review research; do
             echo "$DETAILS" | grep -qiw "$component" \
               || { echo "::error::cross-repo: component '$component' not registered"; exit 1; }
           done
@@ -1364,7 +1365,7 @@ jobs:
           echo "== Assert upgraded plugin details =="
           DETAILS="$(claude plugin details marc@nexaduo)"
           echo "$DETAILS"
-          for component in tech-lead engineer sre design security review research; do
+          for component in eng-director tech-lead engineer sre design security review research; do
             echo "$DETAILS" | grep -qiw "$component" \
               || { echo "::error::upgrade: component '$component' not registered after upgrade"; exit 1; }
           done

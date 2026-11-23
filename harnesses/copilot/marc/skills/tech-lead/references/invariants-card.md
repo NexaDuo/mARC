@@ -46,7 +46,11 @@ rejection from first principles or re-propose the same pattern:
 - **Autonomous scheduled/cadence automation** (discovery/triage that runs on
   its own timer, unprompted). Conflicts with the opt-in-only reconcile
   stance: reconcile fires only on three explicit triggers — never session
-  start, never a background sweep (origin #123). (origin: #153 · 2026-07-21)
+  start, never an unsolicited background sweep (origin #123). The eng-director
+  may start or restore a specifically user-authorized watcher or review schedule under
+  its operations procedure; this opt-in extension does not authorize autonomous
+  discovery or change techlead defaults. (origin: #153 · 2026-07-21)
+  (origin: #411 · 2026-11-23)
 - **Unprompted / volume-based compaction advisories** (suggesting `/compact`
   or session restart based on work volume or task boundaries). Conflicts with
   the token-guard rule: compaction advice comes solely from measuring token
@@ -59,3 +63,13 @@ rejection from first principles or re-propose the same pattern:
   adopts ai-memory's size-capping, pinned/decay, and recall-index conventions
   natively, without the daemon, external install channel, or unreviewed write
   path. (origin: #175 · 2026-07-29; origin: #176 · 2026-07-29)
+
+## Explicit director operations mandate
+
+The director may apply a consumer-approved, measured context-maintenance policy
+under `eng-director/references/operations.md`. This is an opt-in extension to
+#184, not permission to guess context pressure or advise unsolicited restarts.
+The default operator still follows the measuring sentinel. Existing authorization
+may cover routine resume, monitoring and resource guardianship within its recorded
+scope; it never bypasses tool permissions, claims or review gates.
+(origin: #411 · 2026-11-23)

@@ -8,6 +8,8 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.23] - 2026-11-23
+
 ### Added
 
 - Harness detection without `team.toml` (#409). `dispatch_agent.py harnesses`
@@ -25,6 +27,36 @@ date whose `YY.M.D` is already taken.
   one harness is present or a decision is recorded (silent otherwise, fail-open, 3 s bound). The tech-lead asks once
   per repo whether writers may use Codex and records the answer operator-side in
   `${XDG_CONFIG_HOME:-~/.config}/marc/harnesses.toml` (same validation as `codex.toml`).
+
+- Opt-in Codex sandbox widening (#401), both off by default and set only in
+  an operator-side file, `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml`, one
+  `[repos."<abs repo top-level>"]` section per repo: `codex_writable_dirs`
+  (passed as `codex exec --add-dir`, for toolchain caches outside the
+  worktree) and `codex_network_access` (`-c
+  sandbox_workspace_write.network_access=true`). They are deliberately not read
+  from the checkout's team.toml, since a PR could otherwise widen its own
+  sandbox: a team.toml that sets them is ignored with a stderr warning, and a
+  user-level file that resolves inside the checkout is refused. Each directory
+  must exist and is checked after resolving symlinks; `/`, your home or its
+  ancestors, the checkout or its ancestors, system trees (including /opt, /mnt,
+  /media, /srv), credential, agent and code-execution persistence directories
+  under home, and the repo's git dir are refused (exit 2), as is a path through
+  a symlink another user owns or that sits in a world-writable directory. The
+  config file itself is refused if group- or world-writable (`chmod go-w`) or
+  inside the checkout or its main checkout; relative `[repos]` keys are skipped.
+  Read-only Codex roles never get the widening. The applied values and their
+  source file are reported in the result JSON and on stderr. Not verified
+  against a real toolchain test run that writes to caches outside the worktree.
+
+- README and public site introduce the director, its invocation, private workspace
+  setup and the boundary between leadership procedures and local runtime adapters.
+
+- `eng-director` leadership skill for independent techlead sessions in one or
+  several repositories: private registry, minimal work records, delegated
+  authority, session recovery, authorized watchers, measured context maintenance,
+  shared-resource guardianship and evidence-based user reporting (#411).
+  It uses inspected local adapters; no broker, daemon or universal wakeup API is
+  installed. Live recovery and mitigation require consumer-specific validation.
 
 ### Changed
 
@@ -103,31 +135,21 @@ date whose `YY.M.D` is already taken.
   normalised rendering (NFKC, zero-width, HTML, entities, emphasis, any heading
   level, first five lines), so a near-miss heading from a trusted author is a
   blocking suspect, not silently skipped (SEC-20/REV-18). This refines the
-  exact-prefix detection of @arch rule 2; the strict grammar still decides what
+  exact-prefix detection of `@arch` rule 2; the strict grammar still decides what
   counts. `dispatch_agent.py task` posts review comments in the strict header
   shape, so pipeline reviews satisfy the gate (REV-17).
 
-### Added
-
-- Opt-in Codex sandbox widening (#401), both off by default and set only in
-  an operator-side file, `${XDG_CONFIG_HOME:-~/.config}/marc/codex.toml`, one
-  `[repos."<abs repo top-level>"]` section per repo: `codex_writable_dirs`
-  (passed as `codex exec --add-dir`, for toolchain caches outside the
-  worktree) and `codex_network_access` (`-c
-  sandbox_workspace_write.network_access=true`). They are deliberately not read
-  from the checkout's team.toml, since a PR could otherwise widen its own
-  sandbox: a team.toml that sets them is ignored with a stderr warning, and a
-  user-level file that resolves inside the checkout is refused. Each directory
-  must exist and is checked after resolving symlinks; `/`, your home or its
-  ancestors, the checkout or its ancestors, system trees (including /opt, /mnt,
-  /media, /srv), credential, agent and code-execution persistence directories
-  under home, and the repo's git dir are refused (exit 2), as is a path through
-  a symlink another user owns or that sits in a world-writable directory. The
-  config file itself is refused if group- or world-writable (`chmod go-w`) or
-  inside the checkout or its main checkout; relative `[repos]` keys are skipped.
-  Read-only Codex roles never get the widening. The applied values and their
-  source file are reported in the result JSON and on stderr. Not verified
-  against a real toolchain test run that writes to caches outside the worktree.
+- Extend director governance for explicitly authorized operational monitoring
+  and measured context policies; unsolicited schedules and guessed context
+  warnings remain disallowed. Claims, independent reviews and no self-merge
+  remain in force (#411).
+- Tighten the director's operational preflight and partial-install discovery,
+  watcher/schedule deduplication and owner-scoped cleanup checks after live
+  evaluation (#411).
+- Reconcile the ready queue, recent owner replies and actual schedules on
+  director resume; failed prerequisite checks block their dependent actions.
+  Scope protocol provenance to claim/ownership changes so routine authorized
+  coordination can continue with that dependency explicitly pending (#411).
 
 ### Deprecated
 

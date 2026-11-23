@@ -36,7 +36,10 @@ invoked as `/marc:<leader>`.
 
 - **Today:** `tech-lead` (`/marc:tech-lead`) — ops the channel, turns a
   discussion into delegated work, and convenes the specialist bench.
-- **Planned growth:** `founder`, `eng-director`, `c-level` — each a new
+- **Engineering director:** `eng-director` coordinates independent techlead
+  sessions, operational recovery and delegated shared-resource supervision from
+  an optionally private workspace. See `core/skills/eng-director/SKILL.md`.
+- **Planned growth:** `founder`, `c-level` — each a new
   `skills/<leader>/SKILL.md`, invoked `/marc:<leader>`. One plugin can host many
   skills with no collision.
 
