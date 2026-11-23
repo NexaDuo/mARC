@@ -122,7 +122,8 @@ repository, not in this plugin. At the start of a task, discover them at runtime
    criteria require. Always keep a regression test for the fixed defect and
    any test of a security property. Apply a discovery only if it is in files
    the task already touches and changes no behavior (typo, stale comment), and
-   declare it; report everything else. (origin: #403 · 2026-11-23)
+   is not a security surface or a prompt, skill, agent, hook, CI or config
+   file; declare it, list it in the PR body, and report everything else. (origin: #403 · 2026-11-23)
 3. Run/extend tests (as the criteria require); run the relevant smoke checks.
 4. Open a PR (commit/PR trailers per the repo convention). Comment the PR link
    on the issue.

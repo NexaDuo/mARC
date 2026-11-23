@@ -21,8 +21,9 @@ date whose `YY.M.D` is already taken.
   write). Writers get a minimal-scope clause (smallest change meeting the
   criteria; no extra tests, abstractions or files), notably when escalated to
   `opus`; regression and security-property tests stay in scope. Writers may
-  apply only no-behavior fixes in files already touched and must declare them;
-  other finds go in a `discoveries` return list, which the operator triages by
+  apply only no-behavior fixes in files already touched, never security
+  surfaces or prompt/skill/agent/hook/CI/config files; all finds, applied or
+  not, are declared in a `discoveries` return list, which the operator triages by
   timing (fold, ride the next fix round, new issue, or drop). The #73 note
   now ties in Claude Code operator-thread cache writes (1h, 2x) to avoid
   context churn. Motivated by Akita LLM Benchmark v5 (2026-11-20).
