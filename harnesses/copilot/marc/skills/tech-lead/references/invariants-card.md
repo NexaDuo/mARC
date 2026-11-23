@@ -47,7 +47,7 @@ rejection from first principles or re-propose the same pattern:
   its own timer, unprompted). Conflicts with the opt-in-only reconcile
   stance: reconcile fires only on three explicit triggers — never session
   start, never an unsolicited background sweep (origin #123). The eng-director
-  may restore a specifically user-authorized watcher or review schedule under
+  may start or restore a specifically user-authorized watcher or review schedule under
   its operations procedure; this opt-in extension does not authorize autonomous
   discovery or change techlead defaults. (origin: #153 · 2026-07-21)
   (origin: #411 · 2026-11-23)

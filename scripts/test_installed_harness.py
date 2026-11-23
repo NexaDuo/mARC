@@ -488,6 +488,15 @@ def main() -> int:
                 return 1
             plugin = ad.install()
         check(os.path.isdir(plugin), f"{a.harness}: plugin dir {plugin}")
+        # New leadership must survive installation, including its lazy references.
+        for relative in (
+            "skills/eng-director/SKILL.md",
+            "skills/eng-director/references/operating-contract.md",
+            "skills/eng-director/references/operations.md",
+        ):
+            check(os.path.isfile(os.path.join(plugin, relative)),
+                  f"{a.harness}: installed director resource {relative}")
+
         if a.seed_break == "drop-hook-script":
             if a.plugin or a.source:  # never touch a copy this run did not install
                 shutil.copytree(plugin, os.path.join(tmp, "broken-copy"), symlinks=True)

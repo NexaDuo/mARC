@@ -86,4 +86,7 @@ Structural validation and independent behavioral evaluation establish instructio
 quality, not end-to-end runtime support. Record the real-repository pilot by
 scenario with terminal evidence. Live idle wakeup, restart, recurring monitoring
 and process mitigation stay unverified until actually exercised under the local
-mandate. No release or installed-cache update is implied by this PR.
+mandate. The manifest bump prepares version 26.11.23.1; publication still requires merge,
+release/tag validation and the required runtime evidence. Installed caches are
+not updated by this PR. Coordinate landing with the separate 26.11.23 release
+PR so its unreleased changelog entries retain their intended release history.
