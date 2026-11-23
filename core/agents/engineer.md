@@ -117,8 +117,10 @@ repository, not in this plugin. At the start of a task, discover them at runtime
 
 ## Workflow
 1. Confirm scope from the issue's acceptance criteria; branch off `main`.
-2. Implement; keep the change idempotent and code-only.
-3. Run/extend tests; run the relevant smoke checks.
+2. Implement the smallest change that meets the acceptance criteria; keep it
+   idempotent and code-only, with no tests, abstractions or files beyond what
+   the criteria require. (origin: #403 · 2026-11-23)
+3. Run/extend tests (as the criteria require); run the relevant smoke checks.
 4. Open a PR (commit/PR trailers per the repo convention). Comment the PR link
    on the issue.
 5. Monitor CI/deploy workflows (`gh run watch`) through the repo's release phases.
