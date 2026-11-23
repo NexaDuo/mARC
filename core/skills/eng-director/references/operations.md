@@ -54,6 +54,15 @@ the configured acknowledgment deadline, without repeatedly injecting text.
 Only restore monitoring already requested by the user, or start it under a new
 explicit mandate. Verify singleton ownership and identity; PID existence alone
 is insufficient. Inspect state/cursor format and its relation to source history.
+Before removing apparent duplicates, compare their purpose, team scope,
+arguments, schedule and owner. Matching names or age do not prove a watcher or
+schedule is orphaned. Preserve unread events and handled references before
+stopping an old reader; its exit handler may advance a cursor. Stop only instances
+covered by the mandate, recheck process identity/start time immediately before
+signaling, and confirm termination before replacement. Do not remove another
+active director's watcher. Treat expected cancellation callbacks separately
+from service failures; record retained schedule IDs and verify the final list.
+
 Empty, malformed, truncated or stale cursor state is a recovery condition:
 reconcile a bounded recent window against handled references before choosing a
 new cursor. Do not blindly initialize to end-of-file and skip unseen decisions.
@@ -109,6 +118,19 @@ kill command is not recovery. Changing host-wide limits or shutting down shared
 infrastructure needs its own authority. Preserve review/production constraints
 even during pressure. Coordinate cache cleanup with active users and the owning
 cache tool; a large directory is not evidence it is safe to delete.
+
+## Delegating branch and worktree cleanup
+
+Route project cleanup to its owning techlead under repository policy. A merged
+commit, empty branch diff or patch-equivalence check alone does not establish
+that a checkout is disposable. Before removal, the owner must fetch the relevant
+remote, confirm the exact branch/head and integration evidence, inspect tracked
+and untracked local changes, and check worktree registration, live jobs and other
+operators' use. Do not authorize deleting another operator's worktree or sweeping
+all merged branches. Dirty, locked, uncertain or shared targets remain intact
+pending the existing human-resolution rule. Never suggest force removal or
+pruning as a routine completion step. Report requested cleanup as requested
+until the owning team confirms the inspected target and result.
 
 ## Pilot: prove reachability first
 

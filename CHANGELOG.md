@@ -128,6 +128,9 @@ date whose `YY.M.D` is already taken.
   and measured context policies; unsolicited schedules and guessed context
   warnings remain disallowed. Claims, independent reviews and no self-merge
   remain in force (#411).
+- Tighten the director's operational preflight and partial-install discovery,
+  watcher/schedule deduplication and owner-scoped cleanup checks after live
+  evaluation (#411).
 
 ## [26.11.14] - 2026-11-14
 
