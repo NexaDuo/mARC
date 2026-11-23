@@ -119,7 +119,8 @@ repository, not in this plugin. At the start of a task, discover them at runtime
 1. Confirm scope from the issue's acceptance criteria; branch off `main`.
 2. Implement the smallest change that meets the acceptance criteria; keep it
    idempotent and code-only, with no tests, abstractions or files beyond what
-   the criteria require. (origin: #403 · 2026-11-23)
+   the criteria require, but never a regression test for the fixed defect or a
+   test of a security property. (origin: #403 · 2026-11-23)
 3. Run/extend tests (as the criteria require); run the relevant smoke checks.
 4. Open a PR (commit/PR trailers per the repo convention). Comment the PR link
    on the issue.

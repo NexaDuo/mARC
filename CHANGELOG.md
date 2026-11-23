@@ -11,23 +11,26 @@ date whose `YY.M.D` is already taken.
 ### Changed
 
 - Dispatch cost rules amended with the cache measurement from #402 (#403).
-  Resume the same specialist (SendMessage) for quick follow-ups within ~5 min
-  of its last turn, when its prompt cache is still warm; later, resume saves
-  re-exploration but not cache and stays the choice for a writer fix round
-  (with the #391 header). Reviewers stay independent; fresh sessions remain
+  On Claude Code only, resume the same specialist (SendMessage) for quick
+  follow-ups within ~5 min of its last turn (warm cache); after that, or where
+  resume doesn't exist (`dispatch_agent.py`, Codex, Copilot, Antigravity),
+  dispatch fresh with the #391 header, writer fix rounds included. Never
+  resume across implementer/reviewer roles. Reviewers stay independent; fresh sessions remain
   the default for new tasks. Group small related items over the same files
   into one bounded dispatch (each fresh dispatch pays a full prefix cache
   write). Writers get a minimal-scope clause (smallest change meeting the
   criteria; no extra tests, abstractions or files), notably when escalated to
-  `opus`. The #73 note now ties in operator-thread cache writes (1h, 2x) to
-  avoid context churn. Motivated by Akita LLM Benchmark v5 (2026-11-20).
+  `opus`; regression and security-property tests stay in scope. The #73 note
+  now ties in Claude Code operator-thread cache writes (1h, 2x) to avoid
+  context churn. Motivated by Akita LLM Benchmark v5 (2026-11-20).
 - Token telemetry weights cache writes per TTL, 1.25x for 5-min and 2x for 1h,
   and reports them as their own bucket (#402, #405). Subagent transcripts under
   `<session>/subagents/` are folded in, usage is deduplicated by `message.id`,
   records carry `schema_version: 2` (a mixed-schema warning is shown when old
   and new records coexist), and late subagent usage is re-emitted per turn. The
   first backfill after upgrading re-writes old turns once. The subagent-file
-  reader is hardened.
+  reader skips symlinks and non-regular files, caps files and bytes, and skips
+  malformed files; further hardening is tracked in #406.
 - `@sec`, `@rev` and `@arch` default to `model: opus` instead of `fable`
   (#401), on the owner's decision to avoid Fable by default. `@dev`, `@sre`,
   `@design` and `@research` stay on `sonnet`; a dispatcher can still pass an

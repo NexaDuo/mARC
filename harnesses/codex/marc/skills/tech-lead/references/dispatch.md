@@ -5,7 +5,8 @@ Include in each prompt: issue number + URL when available, full acceptance
 criteria, affected paths, constraints, and the return contract below. For a
 writer, add: smallest change that meets the acceptance criteria; no tests,
 abstractions or files beyond what the criteria require, especially when
-escalated to `opus`. (origin: #403 · 2026-11-23)
+escalated to `opus`. A regression test for the fixed defect and tests of a
+security property are always in scope. (origin: #403 · 2026-11-23)
 
 #### Compact return and continuation
 Ask for a summary of at most 300 words: status/verdict, reviewed SHA for reviews,
@@ -29,12 +30,23 @@ constraints, and any structurally failed optional pass (reason and configuration
 For writer resume, include a header listing files and line ranges already touched
 and items already verified, so the writer does not re-diff the tree. (origin: #391 · 2026-11-11)
 Keep implementer and reviewer state separate (reviewers stay independent of
-implementers). Fresh sessions remain the default for new tasks. Resuming the
-same specialist (SendMessage) reuses its prompt cache only within ~5 min of its
-last turn (subagent cache TTL, #402), so prefer resume for quick follow-ups on
-the same task (a fix round right after a review, a clarification). Later, resume
-saves re-exploration but not cache, which is still the reason to resume a writer
-for a fix round, with the header above. (origin: #403 · 2026-11-23) A tool-call budget in the prompt is advisory;
+implementers). Fresh sessions remain the default for new tasks.
+
+<!-- rules:origin-required -->
+- **Resume only on Claude Code, only while warm.** SendMessage resume exists
+  only on Claude Code and only while the agent is still addressable;
+  `dispatch_agent.py`, Codex, Copilot and Antigravity have no resume, so they
+  always get a fresh dispatch. Within ~5 min of the agent's last turn (subagent
+  cache TTL, measured on Claude Code in #402), prefer resume for quick follow-ups
+  on the same task. After that, a cold resume re-writes the whole accumulated
+  context and can cost more than a fresh start: prefer a fresh dispatch with the
+  #391 resume header (files and line ranges touched, items verified), writer fix
+  rounds included. If the agent can't be resumed, do the same. Never resume an
+  implementer as a reviewer or a reviewer as an implementer; each role keeps
+  its own session. (origin: #403 · 2026-11-23)
+<!-- /rules:origin-required -->
+
+A tool-call budget in the prompt is advisory;
 `dispatch_agent.py` enforces a timeout, not a token or tool-call budget.
 
 #### Cross-harness dispatch & poly-model routing (optional)
@@ -320,7 +332,9 @@ cheapest lever on token budget:
 <!-- /rules:origin-required -->
 
 **Automatic Token Guard (where supported):** Harnesses with the token sentinel wired provide background protection; Codex currently has no token sentinel or telemetry adapter. Do not manually check your token usage. If the background guard detects a runaway tool-call loop or a mid-session model switch, it will inject a system warning into your command output. If you see this warning, you MUST immediately halt work, summarize your progress to the user, and advise them to start a fresh Codex session. (origin: #119 · 2026-07-16; context-size advisory retired at #181 · 2026-08-12 — the harness's own context/auto-compact handling supersedes it)
-Escalate to a higher tier at a natural break, not mid-session (cache invalidation). Operator-thread cache writes are 1h TTL, billed at 2x base input (subagents: 5-min, 1.25x), so also avoid operator-side context churn such as pasting large outputs. (origin: #73 · 2026-07-12; reworded at #383 · 2026-11-10, no longer Opus-specific) (origin: #403 · 2026-11-23)
+<!-- rules:origin-required -->
+Escalate to a higher tier at a natural break, not mid-session (cache invalidation). On Claude Code (measured in #402), operator-thread cache writes are 1h TTL, billed at 2x base input (subagents: 5-min, 1.25x), so also avoid operator-side context churn such as pasting large outputs. (origin: #73 · 2026-07-12; reworded at #383 · 2026-11-10, no longer Opus-specific) (origin: #403 · 2026-11-23)
+<!-- /rules:origin-required -->
 
 <!-- rules:origin-required -->
 - **Never volunteer compaction or session-restart advice.** The token sentinel
