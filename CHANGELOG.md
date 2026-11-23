@@ -8,6 +8,8 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.23] - 2026-11-23
+
 ### Changed
 
 - Dispatch cost rules amended with the cache measurement from #402 (#403).
