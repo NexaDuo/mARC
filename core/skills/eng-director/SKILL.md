@@ -37,10 +37,11 @@ If a required target or authority is missing, continue independent inspection
 and ask one precise question. Absence of a registry does not block status help;
 it does block guessing a target for a mutation.
 
-## Routine action checks
+## Action checks
 
-The entry point alone is not the operating procedure. Before sending a message,
-changing a schedule, stopping a watcher or resuming a team, read
+The entry point alone is not the operating procedure. Before assigning or
+transferring work, sending a message, changing a schedule, stopping a watcher
+or resuming a team, read
 `references/operating-contract.md` and `references/operations.md` in this skill.
 After context loss, reload the relevant sections if
 not available in the current context; memory of a previous local workflow does
@@ -55,7 +56,10 @@ action; hold that action and continue independent work.
 Resolve the concurrency protocol below before assigning task ownership, resuming
 or reacquiring a claim, or transferring work. This dependency does not gate
 observation, routine messages, authorized watcher/schedule maintenance, or
-continuation under an already verified unchanged claim. For those actions,
+continuation under an unchanged claim verified before the provenance gap. Record
+the verification source/time and confirm continuity with current evidence from
+the owning techlead; an unverified or uncertain owner is not exempt. For actions
+that do not change ownership,
 record unresolved protocol provenance as pending and use their own action checks;
 do not turn the pending dependency into a global stop. A same-session process
 resume still needs the continuity and liveness checks in the operating contract.
