@@ -51,7 +51,7 @@ For a copied project skill, resolve references relative to its actual skill
 folder, not the workspace cwd. The full mARC plugin supplies the sibling
 tech-lead protocol below. If that link is absent, resolve the installed mARC
 tech-lead through the host's skill/plugin metadata. Accept only the user's
-approved mARC installation identity and source (normally `marc@nexaduo`), not
+approved mARC installation identity and marketplace/source, not
 an unrelated repository-local skill with the same name. Read its concurrency
 reference and record source/version. Do not guess a cache path or edit the cache.
 An older/unknown version needs inspection of claim trust, withdrawal, stale-claim
