@@ -51,6 +51,7 @@ practice).
 
 ## Artifacts
 
+- [2026-11-23-decision-team-coordination-contract.md](2026-11-23-decision-team-coordination-contract.md) — proposed contract for independent mARC teams and an optional director in a private workspace; no runtime implementation or adopted policy (#411).
 - [2026-07-06-brief-team-artifacts-file-write-policy.md](2026-07-06-brief-team-artifacts-file-write-policy.md) — the `@research` brief behind this folder's own PEF policy (#46).
 - [2026-07-06-decision-team-config-toml.md](2026-07-06-decision-team-config-toml.md) — decision record: per-repo team binding moves from `team.config` to `team.toml` (#51).
 - [2026-07-21-brief-agy-marketplace-clone-free-install.md](2026-07-21-brief-agy-marketplace-clone-free-install.md) — research brief: no clone-free `agy` (Antigravity) marketplace install exists (#151).
