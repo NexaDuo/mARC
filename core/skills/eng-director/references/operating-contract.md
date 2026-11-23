@@ -11,9 +11,10 @@ limits and team names in a local index linked from the workspace's instructions.
 Use that index as the binding, not a fork of this skill with embedded local facts.
 No particular index filename, directory layout or serialization format is required.
 
-If organization is needed, reuse the user's existing authorization or obtain
-opt-in for a concrete plan: old-to-new path map, consumers of each path, backups,
-validation and rollback. Creating an index is often sufficient. Reorganization
+If organization is needed, always prepare a concrete plan: old-to-new path map,
+consumers of each path, backups, validation and rollback. Proceed under existing
+authorization that covers this reorganization; otherwise obtain opt-in for that
+plan. Creating an index is often sufficient. Reorganization
 must preserve unrelated personal material and existing permissions/visibility;
 it does not authorize moving secrets, publishing records or editing plugin caches.
 Before moving operational files, inspect scripts, schedules, session instructions
