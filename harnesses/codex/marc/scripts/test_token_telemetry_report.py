@@ -52,6 +52,38 @@ class TestTokenTelemetryReport(unittest.TestCase):
         self.assertIn("sess-2", out)
         self.assertIn("weighted tokens (shown sessions): 1500", out)
 
+    def test_cache_write_bucket(self):
+        path = os.path.join(self.tmpdir.name, "cw.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"session_id": "sess-cw", "weighted": 1000, "cache_write": 300,
+                                "cache_write_weighted": 250, "sc_cache_write": 100,
+                                "sc_cache_write_weighted": 125, "schema_version": 2}) + "\n")
+        rc, out = self.run_main(["--path", path])
+        self.assertEqual(rc, 0)
+        row = [l for l in out.splitlines() if l.startswith("sess-cw")][0].split()
+        self.assertEqual(row[row.index("300"):row.index("300") + 4], ["300", "250", "25%", "125"])
+
+    def test_legacy_records_show_dash_and_mixed_warns(self):
+        rc, out = self.run_main(["--path", self.baseline_path])
+        row = [l for l in out.splitlines() if l.startswith("sess-1")][0].split()
+        self.assertEqual(row[-4:-1], ["0", "-", "0"])
+        new = os.path.join(self.tmpdir.name, "v2.jsonl")
+        with open(new, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"session_id": "s9", "weighted": 100, "schema_version": 2}) + "\n")
+        rc, out = self.run_main(["--path", self.baseline_path, "--compare", new])
+        self.assertIn("different `weighted` semantics", out)
+        rc, out = self.run_main(["--path", self.post_path, "--compare", self.baseline_path])
+        self.assertNotIn("different `weighted` semantics", out)
+
+    def test_reemitted_turn_counts_once(self):
+        path = os.path.join(self.tmpdir.name, "re.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            for w in (100, 700):
+                f.write(json.dumps({"session_id": "s", "turn_index": 0, "weighted": w,
+                                    "schema_version": 2}) + "\n")
+        rc, out = self.run_main(["--path", path])
+        self.assertIn("weighted tokens (shown sessions): 700   turns: 1", out)
+
     def test_report_empty(self):
         empty_path = os.path.join(self.tmpdir.name, "empty.jsonl")
         open(empty_path, "w").close()

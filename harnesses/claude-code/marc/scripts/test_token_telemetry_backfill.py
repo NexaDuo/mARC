@@ -117,6 +117,48 @@ def main() -> int:
         written4, sessions4 = backfill.backfill(empty_root, os.path.join(base, "unused.jsonl"))
         check(written4 == 0 and sessions4 == 0, "missing projects root -> 0 records, 0 sessions, no crash")
 
+        # #402: subagent files in the real layout are folded in, once; a corrupt
+        # sibling transcript is skipped with a stderr warning, not fatal.
+        with tempfile.TemporaryDirectory() as b2:
+            root2 = os.path.join(b2, "projects")
+            sess = os.path.join(root2, "-enc-", "sess-sub.jsonl")
+            write_transcript(sess, [{"model": "m", "input": 1, "output": 1,
+                                     "cache_read": 0, "cache_write": 0}])
+            subdir = os.path.join(root2, "-enc-", "sess-sub", "subagents")
+            os.makedirs(subdir)
+            with open(os.path.join(subdir, "agent-x.jsonl"), "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"type": "assistant", "message": {"usage": {
+                    "cache_creation_input_tokens": 100,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 100}}}}) + "\n")
+            t2 = os.path.join(b2, "t.jsonl")
+            backfill.backfill(root2, t2)
+            backfill.backfill(root2, t2)
+            recs = read_lines(t2)
+            check(len(recs) == 1 and recs[0]["sc_cache_write"] == 100
+                  and recs[0]["sc_cache_write_weighted"] == 125
+                  and recs[0]["schema_version"] == 2,
+                  "backfill folds subagents/ files once and stays idempotent")
+
+        # #402: late subagent usage -> the turn is re-emitted ONCE; re-run is a no-op.
+        with tempfile.TemporaryDirectory() as b3:
+            root3 = os.path.join(b3, "projects")
+            sess = os.path.join(root3, "-enc-", "sess-late.jsonl")
+            write_transcript(sess, [{"model": "m", "input": 1, "output": 1,
+                                     "cache_read": 0, "cache_write": 0}])
+            t3 = os.path.join(b3, "t.jsonl")
+            backfill.backfill(root3, t3)
+            subdir = os.path.join(root3, "-enc-", "sess-late", "subagents")
+            os.makedirs(subdir)
+            with open(os.path.join(subdir, "agent-x.jsonl"), "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"type": "assistant", "message": {"usage": {
+                    "cache_creation_input_tokens": 100}}}) + "\n")
+            w1, _ = backfill.backfill(root3, t3)
+            w2, _ = backfill.backfill(root3, t3)
+            recs = read_lines(t3)
+            check(w1 == 1 and w2 == 0 and len(recs) == 2
+                  and recs[-1]["sc_cache_write"] == 100,
+                  "backfill re-emits a changed turn once and then is a no-op")
+
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
         for m in _failures:
