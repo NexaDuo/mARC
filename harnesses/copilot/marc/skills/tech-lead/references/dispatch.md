@@ -24,7 +24,17 @@ For a
 writer, add: smallest change that meets the acceptance criteria; no tests,
 abstractions or files beyond what the criteria require, especially when
 escalated to `opus`. A regression test for the fixed defect and tests of a
-security property are always in scope. (origin: #403 · 2026-11-23)
+security property are always in scope. The writer may apply a discovery only
+if it is in files the task already touches AND changes no behavior (typo, stale
+docstring or comment), and must declare it; everything else it reports, not
+applies. Its return carries a `discoveries` list outside the 300-word cap; each
+entry: what/where (file:line), cost (trivial/small/medium), changes behavior
+y/n, touches a security surface y/n, applied or reported.
+Operator triage, by timing: before review, fold it into the PR; review under
+way, ride the next fix round if one exists (a push just for it invalidates both
+reviews); PR at the gate or behavior-changing, open a new issue via
+`board.py create`; not worth it, drop it with a one-line reason. Don't
+fabricate work: discoveries are found, never sought. (origin: #403 · 2026-11-23)
 <!-- /rules:origin-required -->
 
 #### Compact return and continuation
