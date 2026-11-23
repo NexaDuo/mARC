@@ -17,11 +17,15 @@ Once an item is on the board, immediately ping the right specialist in the chann
 - Dependent work stays sequenced, but sequence it via invoke_subagent dispatch and waiting for notifications, not by blocking synchronously.
 
 Include in each prompt: issue number + URL when available, full acceptance
-criteria, affected paths, constraints, and the return contract below. For a
+criteria, affected paths, constraints, and the return contract below.
+
+<!-- rules:origin-required -->
+For a
 writer, add: smallest change that meets the acceptance criteria; no tests,
 abstractions or files beyond what the criteria require, especially when
 escalated to `opus`. A regression test for the fixed defect and tests of a
 security property are always in scope. (origin: #403 · 2026-11-23)
+<!-- /rules:origin-required -->
 
 #### Compact return and continuation
 Ask for a summary of at most 300 words: status/verdict, reviewed SHA for reviews,

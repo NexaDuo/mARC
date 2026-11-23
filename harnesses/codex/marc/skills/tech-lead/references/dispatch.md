@@ -2,11 +2,15 @@
 Delegate using the bundled dispatch_agent.py in detached form: `start` each specialist, then collect them with one blocking `wait` (re-issue it on exit 75), as described under "Detached dispatch" below. Escalate only the `start` call, per call (never persist an approval for a bare python3 prefix); run `wait` sandboxed. Never poll with sleep, empty write_stdin, or transcript reads. Codex writer runs use codex exec --worktree --sandbox workspace-write. Read-only roles (security/review/research/bulk-reader) route to Claude Code and fail closed if unavailable, unless team.toml [orchestration.routes] names codex for security/review/research (opt-in, fs read-only + network profile, #351). Packaged agent TOML descriptors are templates; automatic plugin-agent discovery and tool boundaries are not yet verified.
 
 Include in each prompt: issue number + URL when available, full acceptance
-criteria, affected paths, constraints, and the return contract below. For a
+criteria, affected paths, constraints, and the return contract below.
+
+<!-- rules:origin-required -->
+For a
 writer, add: smallest change that meets the acceptance criteria; no tests,
 abstractions or files beyond what the criteria require, especially when
 escalated to `opus`. A regression test for the fixed defect and tests of a
 security property are always in scope. (origin: #403 · 2026-11-23)
+<!-- /rules:origin-required -->
 
 #### Compact return and continuation
 Ask for a summary of at most 300 words: status/verdict, reviewed SHA for reviews,
