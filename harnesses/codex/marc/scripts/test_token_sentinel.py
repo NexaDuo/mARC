@@ -458,6 +458,28 @@ def main() -> int:
           and ts._safe_int(True) == 0 and ts._safe_int(7.9) == 7,
           "_safe_int: non-finite/negative/str/bool -> 0, float truncates")
 
+    # --- #402 REV-7: usage shared by records with one message.id counts once
+    with tempfile.TemporaryDirectory() as td:
+        mp = os.path.join(td, "s.jsonl")
+        os.makedirs(os.path.join(td, "s", "subagents"))
+        def rec(mid, cw, tool=False):
+            m = {"model": SONNET, "usage": {"cache_creation_input_tokens": cw},
+                 "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {}}] if tool else []}
+            if mid:
+                m["id"] = mid
+            return {"type": "assistant", "timestamp": "2026-01-01T00:00:01Z", "message": m}
+        with open(mp, "w", encoding="utf-8") as fh:
+            for r in [{"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                       "message": {"content": "go"}},
+                      rec("a", 100, True), rec("a", 100, True), rec(None, 10), rec(None, 10)]:
+                fh.write(json.dumps(r) + "\n")
+        with open(os.path.join(td, "s", "subagents", "agent-1.jsonl"), "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec("a", 100)) + "\n" + json.dumps(rec("b", 50)) + "\n")
+        t = ts.analyze(mp, include_subagents=True)[0]
+        check(t["cache_write_tokens"] == 100 + 10 + 10 + 50,
+              f"duplicate message.id usage summed once, id-less counted each ({t['cache_write_tokens']})")
+        check(t["calls"] == 2, "tool_use calls still counted per record")
+
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
         for m in _failures:

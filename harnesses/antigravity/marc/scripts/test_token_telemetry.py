@@ -261,6 +261,68 @@ def main() -> int:
         check(not os.path.exists(os.path.join(state, "token-telemetry.jsonl")),
               "ON + missing transcript: no telemetry file written")
 
+    # --- #402 REV-1 residual: late subagent usage re-emits earlier turns -----
+    with tempfile.TemporaryDirectory() as base:
+        project = os.path.join(base, "proj")
+        os.makedirs(os.path.join(project, ".agents"))
+        write_team_toml(os.path.join(project, ".agents", "team.toml"),
+                        "[telemetry]\nenabled = true\n")
+        state = os.path.join(base, "state")
+        plugin_root = setup_plugin_root(base)
+        transcript = os.path.join(base, "sess-late.jsonl")
+        def u(ts):
+            return {"type": "user", "timestamp": ts, "message": {"content": "go"}}
+        def a(ts, mid, cw5=0, cw1=0):
+            return {"type": "assistant", "timestamp": ts, "message": {
+                "id": mid, "model": "m", "content": [], "usage": {
+                    "cache_creation_input_tokens": cw5 + cw1,
+                    "cache_creation": {"ephemeral_5m_input_tokens": cw5,
+                                       "ephemeral_1h_input_tokens": cw1}}}}
+        def put(path, recs, mode="w"):
+            with open(path, mode, encoding="utf-8") as fh:
+                for r in recs:
+                    fh.write(json.dumps(r) + "\n")
+        def run():
+            return run_hook_subprocess(project_dir=project, plugin_root=plugin_root,
+                                       state_dir=state, transcript_path=transcript,
+                                       session_id="sess-late")
+        tfile = os.path.join(state, "token-telemetry.jsonl")
+        def nlines():
+            with open(tfile, encoding="utf-8") as fh:
+                return len([x for x in fh if x.strip()])
+        put(transcript, [u("2026-01-01T00:00:00Z"), a("2026-01-01T00:00:01Z", "m1", cw1=1000)])
+        run()
+        check(nlines() == 1, "late: first Stop writes turn 0")
+        put(transcript, [u("2026-01-01T00:10:00Z"), a("2026-01-01T00:10:01Z", "m2", cw1=500)], "a")
+        sub = os.path.join(base, "sess-late", "subagents")
+        os.makedirs(sub)
+        put(os.path.join(sub, "agent-a.jsonl"), [
+            a("2026-01-01T00:00:30Z", "s1", cw5=4000),   # lands AFTER turn 0's Stop
+            a("2026-01-01T00:00:30Z", "s1", cw5=4000),   # duplicate message.id
+            a("2026-01-01T00:10:30Z", "s2", cw5=800)])
+        run()
+        n_after = nlines()
+        run()
+        check(nlines() == n_after, "late: an unchanged re-run appends nothing (idempotent)")
+        latest = {}
+        with open(tfile, encoding="utf-8") as fh:
+            for ln in fh:
+                r = json.loads(ln)
+                latest[r["turn_index"]] = r
+        check(sorted(latest) == [0, 1] and n_after == 3,
+              f"late: turn 0 re-emitted + turn 1 written, no unbounded growth (lines={n_after})")
+        check(latest[0]["cache_write_weighted"] == 2000 + 5000
+              and latest[1]["cache_write_weighted"] == 1000 + 1000,
+              "late: deduplicated records equal finished-session totals "
+              f"({latest[0]['cache_write_weighted']}, {latest[1]['cache_write_weighted']})")
+        # Subagent-file hardening: symlink, non-UTF8, non-dict message are skipped.
+        os.symlink(os.path.join(sub, "agent-a.jsonl"), os.path.join(sub, "agent-link.jsonl"))
+        with open(os.path.join(sub, "agent-bad.jsonl"), "wb") as fh:
+            fh.write(b"\xff\xfe\x00bad\n")
+        put(os.path.join(sub, "agent-nodict.jsonl"), [{"type": "assistant", "message": "x"}])
+        run()
+        check(nlines() == n_after, "late: symlink/bad-bytes/non-dict subagent files change nothing")
+
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
         for m in _failures:

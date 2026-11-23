@@ -57,6 +57,18 @@ def load_records(path: str) -> list[dict]:
 
 def group_by_session(records: list[dict]) -> dict[str, list[dict]]:
     sessions: dict[str, list[dict]] = {}
+    # Last-write-wins per (session_id, turn_index): a turn re-emitted after
+    # late subagent usage (#402) must count once. Records with no turn_index
+    # (legacy/hand-made) are all kept.
+    latest: dict = {}
+    unkeyed: list[dict] = []
+    for rec in records:
+        idx = rec.get("turn_index")
+        if isinstance(idx, int):
+            latest[(str(rec.get("session_id", "-")), idx)] = rec
+        else:
+            unkeyed.append(rec)
+    records = unkeyed + list(latest.values())
     for rec in records:
         sid = str(rec.get("session_id", "-"))
         sessions.setdefault(sid, []).append(rec)

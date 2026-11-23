@@ -69,6 +69,7 @@ import json
 import math
 import os
 import re
+import stat
 import sys
 import tempfile
 
@@ -169,8 +170,9 @@ def _safe_int(v) -> int:
 
 
 def usage_tokens(usage: dict) -> int:
-    """Flat (unweighted) raw sum, kept for diagnostic display only. The band
-    checks below use `weighted_usage_tokens`, not this."""
+    """Flat (unweighted) raw sum, kept for diagnostic display only. The
+    weighted measure (`weighted_usage_tokens`) feeds the CLI/telemetry; the hook
+    bands use call counts, not token sums."""
     return (
         _safe_int(usage.get("input_tokens"))
         + _safe_int(usage.get("cache_read_input_tokens"))
@@ -247,6 +249,13 @@ def user_text(rec: dict) -> str:
     return ""
 
 
+# Subagent-folder read limits (origin: #402 SEC-3): transcripts are untrusted
+# input, so bound the work one session can cost a hook. 500 files covers any
+# realistic session; 64 MiB per file is far above a real transcript.
+MAX_SUBAGENT_FILES = 500
+MAX_SUBAGENT_FILE_BYTES = 64 * 1024 * 1024
+
+
 def analyze(path: str, include_subagents: bool = False):
     """Fold a session .jsonl into per-turn stats. Shared by the CLI and the hook.
 
@@ -310,6 +319,19 @@ def analyze(path: str, include_subagents: bool = False):
         turns.append(t)
         return t
 
+    seen_ids: set[str] = set()
+
+    def first_sighting(msg: dict) -> bool:
+        """Records sharing a `message.id` repeat the same usage; sum it once
+        (origin: #402 REV-7). Records without an id are always counted."""
+        mid = msg.get("id")
+        if not isinstance(mid, str) or not mid:
+            return True
+        if mid in seen_ids:
+            return False
+        seen_ids.add(mid)
+        return True
+
     def add_usage(turn: dict, usage: dict, sidechain: bool) -> None:
         turn["raw_tokens"] += usage_tokens(usage)
         fresh, cache_read = usage_components(usage)
@@ -353,7 +375,7 @@ def analyze(path: str, include_subagents: bool = False):
                 if n_calls:
                     current["requests"] += 1
                 usage = msg.get("usage")
-                if isinstance(usage, dict):
+                if isinstance(usage, dict) and first_sighting(msg):
                     # Cost accumulators count EVERY assistant message, main-thread
                     # or sidechain: subagent spend is real spend (do not gate these
                     # on isSidechain below, origin: #178 follow-up).
@@ -378,34 +400,44 @@ def analyze(path: str, include_subagents: bool = False):
         # Current Claude Code layout: subagent transcripts are siblings of the
         # main file at <dir>/<session-id>/subagents/agent-*.jsonl, NOT in-file
         # isSidechain records, so the two sources never overlap (#402 REV-1).
-        sub_dir = os.path.join(os.path.splitext(path)[0], "subagents")
-        for sub in sorted(glob.glob(os.path.join(sub_dir, "agent-*.jsonl"))):
+        sub_dir = os.path.join(glob.escape(os.path.splitext(path)[0]), "subagents")
+        subs = sorted(glob.glob(os.path.join(sub_dir, "agent-*.jsonl")))
+        for sub in subs[:MAX_SUBAGENT_FILES]:
             try:
-                fh = open(sub, "r", encoding="utf-8")
-            except OSError:
+                st = os.lstat(sub)
+                if not stat.S_ISREG(st.st_mode):  # no symlinks / specials
+                    continue
+                read = 0
+                with open(sub, "r", encoding="utf-8") as fh:
+                    for line in fh:
+                        read += len(line)
+                        if read > MAX_SUBAGENT_FILE_BYTES:
+                            break
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(rec, dict) or rec.get("type") != "assistant":
+                            continue
+                        msg = rec.get("message")
+                        if not isinstance(msg, dict):
+                            continue
+                        usage = msg.get("usage")
+                        if not isinstance(usage, dict) or not first_sighting(msg):
+                            continue
+                        # Attribute to the latest turn that started at/before
+                        # this record (ISO-8601 UTC strings sort chronologically);
+                        # no timestamp -> the last turn.
+                        ts = rec.get("timestamp")
+                        target = turns[-1]
+                        if isinstance(ts, str) and ts:
+                            target = turns[0]
+                            for t in turns:
+                                if t["start_ts"] and t["start_ts"] <= ts:
+                                    target = t
+                        add_usage(target, usage, True)
+            except (OSError, ValueError):  # incl. UnicodeDecodeError: skip this file only
                 continue
-            with fh:
-                for line in fh:
-                    try:
-                        rec = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(rec, dict) or rec.get("type") != "assistant":
-                        continue
-                    usage = (rec.get("message") or {}).get("usage")
-                    if not isinstance(usage, dict):
-                        continue
-                    # Attribute to the latest turn that started at/before this
-                    # record (ISO-8601 UTC strings sort chronologically); a
-                    # record with no timestamp goes to the last turn.
-                    ts = rec.get("timestamp")
-                    target = turns[-1]
-                    if isinstance(ts, str) and ts:
-                        target = turns[0]
-                        for t in turns:
-                            if t["start_ts"] and t["start_ts"] <= ts:
-                                target = t
-                    add_usage(target, usage, True)
     return turns
 
 

@@ -159,6 +159,33 @@ def build_record(turn: dict, *, session_id: str, turn_index: int, repo: str) -> 
     }
 
 
+def latest_records(path: str | None = None) -> dict[tuple[str, int], dict]:
+    """Latest record per (session_id, turn_index), last-write-wins (#402: a
+    turn is re-emitted when late subagent usage changes its totals). Missing/
+    unreadable file -> {}."""
+    out: dict[tuple[str, int], dict] = {}
+    try:
+        with open(path or telemetry_path(), "r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (isinstance(rec, dict) and rec.get("session_id") is not None
+                        and isinstance(rec.get("turn_index"), int)):
+                    out[(rec["session_id"], rec["turn_index"])] = rec
+    except OSError:
+        pass
+    return out
+
+
+def record_changed(old: dict | None, new: dict) -> bool:
+    """True if `new` differs from `old` in anything but the timestamp or repo label (hook and backfill label repos differently)."""
+    if old is None:
+        return True
+    return any(old.get(k) != v for k, v in new.items() if k not in ("ts", "repo"))
+
+
 def append_record(record: dict, *, path: str | None = None) -> bool:
     """Append ONE JSON line. Best-effort: any I/O failure is swallowed and
     returns False (warn-only contract — telemetry must never break a turn)."""
@@ -209,12 +236,22 @@ def run_hook(stdin_text: str) -> int:
     if not turns:
         return 0
 
-    turn_index = len(turns) - 1  # current (just-completed) turn
-    turn = turns[turn_index]
     session_id = str(payload.get("session_id") or "-")
-    record = build_record(turn, session_id=session_id, turn_index=turn_index,
-                           repo=repo_basename(cwd))
-    append_record(record)
+    repo = repo_basename(cwd)
+    last = len(turns) - 1
+    # Subagent usage can land after an earlier turn's Stop (background
+    # dispatch): re-emit any EARLIER turn that already has a record and whose
+    # totals changed, plus the current turn. Unchanged turns append nothing, so
+    # the file grows only when something real changed (#402). Earlier turns
+    # with no record yet are not back-filled here (that is the backfill tool).
+    existing = latest_records()
+    for idx, turn in enumerate(turns):
+        old = existing.get((session_id, idx))
+        if idx != last and old is None:
+            continue
+        record = build_record(turn, session_id=session_id, turn_index=idx, repo=repo)
+        if record_changed(old, record):
+            append_record(record)
     return 0
 
 

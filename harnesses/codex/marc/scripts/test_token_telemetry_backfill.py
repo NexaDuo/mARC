@@ -139,6 +139,26 @@ def main() -> int:
                   and recs[0]["schema_version"] == 2,
                   "backfill folds subagents/ files once and stays idempotent")
 
+        # #402: late subagent usage -> the turn is re-emitted ONCE; re-run is a no-op.
+        with tempfile.TemporaryDirectory() as b3:
+            root3 = os.path.join(b3, "projects")
+            sess = os.path.join(root3, "-enc-", "sess-late.jsonl")
+            write_transcript(sess, [{"model": "m", "input": 1, "output": 1,
+                                     "cache_read": 0, "cache_write": 0}])
+            t3 = os.path.join(b3, "t.jsonl")
+            backfill.backfill(root3, t3)
+            subdir = os.path.join(root3, "-enc-", "sess-late", "subagents")
+            os.makedirs(subdir)
+            with open(os.path.join(subdir, "agent-x.jsonl"), "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"type": "assistant", "message": {"usage": {
+                    "cache_creation_input_tokens": 100}}}) + "\n")
+            w1, _ = backfill.backfill(root3, t3)
+            w2, _ = backfill.backfill(root3, t3)
+            recs = read_lines(t3)
+            check(w1 == 1 and w2 == 0 and len(recs) == 2
+                  and recs[-1]["sc_cache_write"] == 100,
+                  "backfill re-emits a changed turn once and then is a no-op")
+
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
         for m in _failures:

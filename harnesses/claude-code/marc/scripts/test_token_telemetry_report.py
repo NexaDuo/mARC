@@ -75,6 +75,15 @@ class TestTokenTelemetryReport(unittest.TestCase):
         rc, out = self.run_main(["--path", self.post_path, "--compare", self.baseline_path])
         self.assertNotIn("different `weighted` semantics", out)
 
+    def test_reemitted_turn_counts_once(self):
+        path = os.path.join(self.tmpdir.name, "re.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            for w in (100, 700):
+                f.write(json.dumps({"session_id": "s", "turn_index": 0, "weighted": w,
+                                    "schema_version": 2}) + "\n")
+        rc, out = self.run_main(["--path", path])
+        self.assertIn("weighted tokens (shown sessions): 700   turns: 1", out)
+
     def test_report_empty(self):
         empty_path = os.path.join(self.tmpdir.name, "empty.jsonl")
         open(empty_path, "w").close()

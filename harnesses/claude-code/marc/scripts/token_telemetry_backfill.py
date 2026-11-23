@@ -48,6 +48,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from token_sentinel import analyze  # noqa: E402
 from token_telemetry import (  # noqa: E402
     build_record,
+    latest_records,
+    record_changed,
     repo_basename,
     telemetry_path,
 )
@@ -87,7 +89,7 @@ def find_transcripts(projects_root: str) -> list[str]:
 
 def backfill(projects_root: str, target_path: str, *, dry_run: bool = False) -> tuple[int, int]:
     """Returns (records_written, sessions_scanned)."""
-    seen = existing_keys(target_path)
+    existing = latest_records(target_path)
     written = 0
     sessions = 0
 
@@ -110,12 +112,14 @@ def backfill(projects_root: str, target_path: str, *, dry_run: bool = False) -> 
         new_lines = []
         for turn_index, turn in enumerate(turns):
             key = (session_id, turn_index)
-            if key in seen:
-                continue
             record = build_record(turn, session_id=session_id,
                                    turn_index=turn_index, repo=repo)
+            # Missing, or totals changed since last written (late subagent
+            # usage, #402): (re-)emit; report keeps the latest per key.
+            if not record_changed(existing.get(key), record):
+                continue
             new_lines.append(record)
-            seen.add(key)
+            existing[key] = record
 
         if not new_lines:
             continue
