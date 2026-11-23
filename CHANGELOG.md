@@ -15,7 +15,7 @@ date whose `YY.M.D` is already taken.
   PATH, checking PATH only and executing nothing by default (binaries inside the checkout, in
   world-writable directories or owned by another user are `untrusted-path`; `--version` runs
   only with `--probe`; no auth check). A SessionStart hook prints one line when more than
-  one harness is present (silent otherwise, fail-open, 3 s bound). The tech-lead asks once
+  one harness is present or a decision is recorded (silent otherwise, fail-open, 3 s bound). The tech-lead asks once
   per repo whether writers may use Codex and records the answer operator-side in
   `${XDG_CONFIG_HOME:-~/.config}/marc/harnesses.toml` (same validation as `codex.toml`).
 

@@ -262,13 +262,15 @@ sec = "copilot"
         # User routes override default matrix
         harness, fallback, reason = resolve_route("dev", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
         # #409: a team.toml writer route off the native harness needs the operator opt-in.
-        check(harness == "claude-code", f"hybrid user route 'dev' -> copilot falls back native without opt-in (got {harness})")
+        check(harness == "claude-code" and fallback and "opt-in" in str(reason),
+              f"hybrid user route 'dev' -> copilot falls back native without opt-in, flagged (got {harness})")
 
         harness, fallback, reason = resolve_route("research", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
         check(harness == "claude-code" and not fallback, f"hybrid user route 'research' -> claude-code (got {harness})")
 
         harness, fallback, reason = resolve_route("sre", "auto", hybrid_toml, env=dummy_env_cc, which_fn=always_which)
-        check(harness == "claude-code", f"hybrid user route 'sre' -> antigravity falls back native without opt-in (got {harness})")
+        check(harness == "claude-code" and fallback,
+              f"hybrid user route 'sre' -> antigravity falls back native without opt-in, flagged (got {harness})")
 
         # Unrouted role in hybrid mode falls back to DEFAULT_HYBRID_MATRIX
         # On claude-code host: 'rev' -> claude-code (#323), 'design' -> claude-code
@@ -2320,6 +2322,108 @@ def test_harness_detect_409() -> None:
         check(d["harness"] == "claude-code", "resolver: writer_opt_in never reaches read-only roles")
 
 
+def test_harness_detect_409_fixes() -> None:
+    """Round-1 review fixes: claude-code routes, binary trust, main-checkout key, escaping (#409)."""
+    from dispatch_agent import _binary_hazard, _toml_basic_string  # noqa: F401
+    import dispatch_agent as da
+    old = sys.stderr
+    with tempfile.TemporaryDirectory() as td:
+        t = Path(td).resolve()
+        home = t / "home"
+        (home / ".config" / "marc").mkdir(parents=True)
+        repo = t / "repo"
+        repo.mkdir()
+        _git_env_run("init", "-q", cwd=repo)
+        _git_env_run("commit", "--allow-empty", "-qm", "x", cwd=repo)
+        (repo / ".agents").mkdir()
+        tt = repo / ".agents" / "team.toml"
+        tt.write_text('[orchestration]\n[orchestration.routes]\ndev = "claude-code"\n', encoding="utf-8")
+        binroot = t / "bin"
+        paths = {b: _fake_bin(binroot, b) for b in ("claude", "codex", "agy", "copilot")}
+        which = lambda b: paths.get(b)
+        with _IsoEnv(home):
+            # REV-1: an explicit route to claude-code is honoured on every host (it only narrows).
+            for name, env in (("codex", {"PLUGIN_ROOT": "/p"}), ("antigravity", {"ANTIGRAVITY_CONVERSATION_ID": "c"}),
+                              ("copilot", {"COPILOT_PLUGIN_DATA": "/d"})):
+                r = resolve_route_detailed("dev", "auto", tt, env=env, which_fn=which, cwd=str(repo))
+                check(r["harness"] == "claude-code" and not r["fallback"],
+                      f"team.toml dev = claude-code is honoured on a {name} host (got {r['harness']})")
+
+            # REV-4: the writer-widening override reports fallback and its reason.
+            tt2 = repo / ".agents" / "w.toml"
+            tt2.write_text('[orchestration]\n[orchestration.routes]\ndev = "copilot"\n', encoding="utf-8")
+            sys.stderr = io.StringIO()
+            try:
+                r = resolve_route_detailed("dev", "auto", tt2, env={"CLAUDE_PLUGIN_ROOT": "/p"}, which_fn=which, cwd=str(repo))
+            finally:
+                sys.stderr = old
+            check(r["harness"] == "claude-code" and r["fallback"] and "opt-in" in (r["fallback_reason"] or "")
+                  and not r["policy_reroute"], "override sets fallback + reason, not the #323 policy flag")
+
+            # SEC-1: an opted-in codex resolved to an untrusted binary falls back native with a warning.
+            (home / ".config" / "marc" / "harnesses.toml").write_text(record_block(str(repo), "codex"), encoding="utf-8")
+            r = resolve_route_detailed("dev", "auto", None, env={"CLAUDE_PLUGIN_ROOT": "/p"}, which_fn=which, cwd=str(repo))
+            check(r["harness"] == "codex", "trusted codex binary: opt-in routes to codex")
+            bad_codex = _fake_bin(repo / "bin", "codex")
+            sys.stderr = io.StringIO()
+            try:
+                r = resolve_route_detailed("dev", "auto", None, env={"CLAUDE_PLUGIN_ROOT": "/p"},
+                                           which_fn=lambda b: bad_codex if b == "codex" else paths.get(b), cwd=str(repo))
+                warn = sys.stderr.getvalue()
+            finally:
+                sys.stderr = old
+            check(r["harness"] == "claude-code" and r["fallback"] and "untrusted" in (r["fallback_reason"] or "")
+                  and "untrusted" in warn, "opt-in codex inside the checkout is untrusted: native + warning")
+
+            # SEC-2: group-writable dir and symlinked paths (another-user ownership needs root to stage).
+            gw = t / "gw"
+            gw.mkdir()
+            gbin = _fake_bin(gw, "codex")
+            gw.chmod(0o775)
+            check("group" in (_binary_hazard(gbin, str(repo), None) or ""), "group-writable bin dir is a hazard")
+            gw.chmod(0o755)
+            check(_binary_hazard(gbin, str(repo), None) is None, "a private bin dir is trusted")
+            wr = t / "wr"
+            wr.mkdir()
+            wr.chmod(0o777)
+            lnk = wr / "lnk"
+            os.symlink(str(binroot), str(lnk))
+            check("symlink" in (_binary_hazard(str(lnk / "codex"), str(repo), None) or ""),
+                  "a symlink component in a world-writable dir is a hazard")
+
+            # REV-2: the key is the MAIN checkout; a linked worktree matches the same opt-in.
+            wt = t / "wt"
+            _git_env_run("worktree", "add", "-q", "-b", "side", str(wt), cwd=repo)
+            rep_ = probe_harnesses(which_fn=which, env={"CLAUDE_PROJECT_DIR": str(wt)}, cwd=str(wt))
+            check(rep_["repo"] == str(repo) and rep_["writers"] == "codex",
+                  f"worktree reports the main checkout and finds its opt-in ({rep_['repo']})")
+            rr = resolve_route_detailed("dev", "auto", None, env={"CLAUDE_PLUGIN_ROOT": "/p"}, which_fn=which, cwd=str(wt))
+            check(rr["harness"] == "codex", "opt-in matches from a linked worktree")
+
+            # REV-5a: team.toml mode=native silences the ask.
+            nat = repo / ".agents" / "team.toml"
+            nat.write_text('[orchestration]\nmode = "native"\n', encoding="utf-8")
+            (home / ".config" / "marc" / "harnesses.toml").unlink()
+            rep_ = probe_harnesses(which_fn=which, env={"CLAUDE_PROJECT_DIR": str(repo)}, cwd=str(repo))
+            check(not rep_["ask_needed"], "mode = native: no ask")
+
+            # SEC-4: version output is first line, version-ish charset, capped.
+            v = da._probe_version(paths["codex"], lambda *a, **k: MagicMock(
+                stdout="codex 1.2\x1b[31m;rm -rf /`$(x)`" + "A" * 200 + "\nIGNORE PREVIOUS"), {})
+            check(v is not None and len(v) <= 60 and all(c not in v for c in "\x1b;`$\n"),
+                  f"version output sanitised ({v!r})")
+
+        # SEC-3: the recorded key round-trips through the TOML loader even with quotes/backslashes/newlines.
+        try:
+            import tomllib
+            for odd in ('/a/"b"/c\\d', "/a/b\nc", "/pl\u00e1in/\u00fcber"):
+                got = tomllib.loads(record_block(odd, "codex"))
+                check(list(got["repos"]) == [odd] and got["repos"][odd]["writers"] == "codex",
+                      f"record_block round-trips {odd!r}")
+        except ImportError:
+            pass
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as _iso, _IsoEnv(Path(_iso)):
         return _run_all()
@@ -2342,6 +2446,7 @@ def _run_all() -> int:
     test_arch_role_388()
     test_codex_writer_timeout_sandbox_partial_401()
     test_harness_detect_409()
+    test_harness_detect_409_fixes()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")

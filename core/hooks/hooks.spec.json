@@ -50,7 +50,7 @@
       "event": "session_start",
       "kind": "inline",
       "copilot_timeout_sec": 5,
-      "command": "root=\"${{{ plugin_root_env }}:-}\"; s=\"$root/scripts/dispatch_agent.py\"; if [ -n \"$root\" ] && [ -f \"$s\" ] && command -v python3 >/dev/null 2>&1; then t=\"\"; command -v timeout >/dev/null 2>&1 && t=\"timeout 3\"; (cd \"${{{ project_dir_env }}:-$PWD}\" 2>/dev/null && $t python3 -I \"$s\" harnesses --line 2>/dev/null) || true; fi; exit 0"
+      "command": "root=\"${{{ plugin_root_env }}:-$HOME/.copilot/plugin-data/marc}\"; s=\"$root/scripts/dispatch_agent.py\"; if [ -n \"$root\" ] && [ -f \"$s\" ] && command -v python3 >/dev/null 2>&1; then t=\"\"; command -v timeout >/dev/null 2>&1 && t=\"timeout 3\"; (cd \"${{{ project_dir_env }}:-$PWD}\" 2>/dev/null && $t python3 -I \"$s\" harnesses --line 2>/dev/null) || true; fi; exit 0"
     },
     {
       "id": "token-sentinel-post-tool-use",
