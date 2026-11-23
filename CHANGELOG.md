@@ -81,7 +81,7 @@ date whose `YY.M.D` is already taken.
   normalised rendering (NFKC, zero-width, HTML, entities, emphasis, any heading
   level, first five lines), so a near-miss heading from a trusted author is a
   blocking suspect, not silently skipped (SEC-20/REV-18). This refines the
-  exact-prefix detection of @arch rule 2; the strict grammar still decides what
+  exact-prefix detection of `@arch` rule 2; the strict grammar still decides what
   counts. `dispatch_agent.py task` posts review comments in the strict header
   shape, so pipeline reviews satisfy the gate (REV-17).
 
