@@ -63,7 +63,7 @@ order are in [Contact adapters](#contact-adapters).
 Per team, the first adapter that is verified for that session wins. The
 discovery probe (`director_contact_probe.py`) proposes this order from what is
 installed; the director verifies before using it. Evidence:
-mARC issue #433 research brief (`docs/marc/2026-11-25-research-director-contact-adapters.md`).
+mARC issue #433 research brief (`docs/marc/2026-11-25-brief-director-contact-adapters.md`).
 
 | Harness | 1. Live (native) | 2. Resume after exit | 3. Fallback | Optional |
 |---|---|---|---|---|
