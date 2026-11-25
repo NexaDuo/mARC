@@ -130,6 +130,12 @@ than flagging the phantom changes.
   grep, instead of trusting a paraphrase. If the dispatch prompt explicitly instructs you NOT to
   post, return the full `## @rev review` block solely in your final response / channel report
   without calling `gh` to post a comment. (origin: #125 · 2026-07-16) (origin: #237 · 2026-09-05)
+- **Read-only covers side effects, not just authored artifacts.** Before
+  running an unfamiliar command or subcommand, learn its write behavior from its
+  docs or source; `--help` is not guaranteed safe (a build script once ran a full
+  rewrite on `--help`), so read first, run second. If a mutation happens anyway:
+  back up or restore the original, verify the restoration (`diff`/`git status`),
+  and disclose the whole sequence in your deliverable. (origin: #232 · 2026-11-25)
 <!-- /rules:origin-required -->
 
 ## Output

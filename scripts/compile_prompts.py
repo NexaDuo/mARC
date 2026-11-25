@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
+import argparse
+import contextlib
+import io
 import json
 import os
 import shutil
 import sys
+import tempfile
 
 # Python program that reads a plugin list (JSON) on stdin and prints the
 # installed plugin's absolute `scripts/` directory. It is emitted as
@@ -598,8 +602,8 @@ def compile_hooks(core_dir, harness_marc_path, config):
     print(f"Compiled hooks: {spec_path} -> {dest_hooks_json}")
 
 
-def main():
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def compile_all(base_dir):
+    """Compile core/ into every harness under `base_dir` (writes in place)."""
     core_dir = os.path.join(base_dir, "core")
     harnesses_dir = os.path.join(base_dir, "harnesses")
 
@@ -695,5 +699,74 @@ def main():
 
     print("\nPrompt compilation complete.")
 
+
+def _tree_files(root):
+    """{relative path: bytes, or link target for a symlink} under `root`,
+    ignoring generated __pycache__."""
+    out = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, root)
+            if os.path.islink(path):
+                out[rel] = ("link", os.readlink(path))
+            else:
+                with open(path, "rb") as f:
+                    out[rel] = ("file", f.read())
+    return out
+
+
+def check_all(base_dir):
+    """Compile into a scratch copy and return the sorted list of files under
+    harnesses/*/marc/ that differ from what core/ produces. Never writes to
+    `base_dir` (#417)."""
+    harnesses_dir = os.path.join(base_dir, "harnesses")
+    with tempfile.TemporaryDirectory(prefix="marc-compile-check-") as tmp:
+        for name in ("core", "harnesses"):
+            src = os.path.join(base_dir, name)
+            if os.path.isdir(src):
+                shutil.copytree(src, os.path.join(tmp, name), symlinks=True,
+                                ignore=shutil.ignore_patterns("__pycache__"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            compile_all(tmp)
+        diffs = []
+        for harness in sorted(os.listdir(harnesses_dir)):
+            if not os.path.exists(os.path.join(harnesses_dir, harness, "marc", "compile.json")):
+                continue
+            rel_root = os.path.join("harnesses", harness, "marc")
+            have = _tree_files(os.path.join(base_dir, rel_root))
+            want = _tree_files(os.path.join(tmp, rel_root))
+            for rel in sorted(set(have) | set(want)):
+                if have.get(rel) != want.get(rel):
+                    kind = "missing" if rel not in have else "stale" if rel not in want else "differs"
+                    diffs.append(f"{os.path.join(rel_root, rel)} ({kind})")
+        return diffs
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Compile core/ templates into harnesses/*/marc/. With no "
+                    "arguments, rewrites the compiled outputs in place.")
+    parser.add_argument(
+        "--check", action="store_true",
+        help="compile into a temporary copy and exit 1 listing out-of-sync "
+             "files; never writes to the tree")
+    args = parser.parse_args(argv)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not args.check:
+        compile_all(base_dir)
+        return 0
+    diffs = check_all(base_dir)
+    if diffs:
+        print("Compiled prompts are out of sync with core/ templates:", file=sys.stderr)
+        for d in diffs:
+            print(f"  {d}", file=sys.stderr)
+        print("Run 'python3 scripts/compile_prompts.py' and commit the changes.", file=sys.stderr)
+        return 1
+    print("Compiled prompts are up to date.")
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -111,6 +111,12 @@ before searching — an unfocused search burns the timebox on noise.
 - **Degrade gracefully.** If web search/fetch tools are unavailable or failing in
   this environment, say exactly that in the brief and stop — **never** fake or
   reconstruct findings from memory as if they were fetched. (origin: #43 · 2026-07-06)
+- **Read-only covers side effects, not just authored artifacts.** Before
+  running an unfamiliar command or subcommand, learn its write behavior from its
+  docs or source; `--help` is not guaranteed safe (a build script once ran a full
+  rewrite on `--help`), so read first, run second. If a mutation happens anyway:
+  back up or restore the original, verify the restoration (`diff`/`git status`),
+  and disclose the whole sequence in your deliverable. (origin: #232 · 2026-11-25)
 <!-- /rules:origin-required -->
 
 ## Deliverable: ONE structured brief

@@ -86,11 +86,13 @@ jobs:
 
       - name: Verify compiled prompts are up-to-date
         run: |
-          python3 scripts/compile_prompts.py
-          if ! git diff --exit-code; then
+          if ! python3 scripts/compile_prompts.py --check; then
             echo "::error::Compiled prompts are out of sync with core/ templates. Run 'python3 scripts/compile_prompts.py' and commit the changes."
             exit 1
           fi
+
+      - name: compile_prompts.py args and --check (#417)
+        run: python3 scripts/test_compile_prompts.py
 
       - name: agent-configs mirror refuses symlinks (#385)
         run: python3 scripts/test_compile_agent_configs.py
