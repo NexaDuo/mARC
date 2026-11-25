@@ -945,3 +945,93 @@ test('result detail reflects the outcome, not a pre-consent warning; doctor exce
   text = logs.map(l => l.replace(SGR, ''));
   assert.ok(text.some(l => /^ {2}codex {4}FAILED {2}boom$/.test(l)), text.join('|'));
 });
+
+// #435: doctor project column and STALE/FAILED classification.
+const claudeRow = (scope, projectPath, version = '26.11.25.2') => ({ id: 'marc@nexaduo', version, scope, enabled: true, ...(projectPath === undefined ? {} : { projectPath }),
+  source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } });
+async function doctorRun(h, opts = {}, extra = {}) {
+  const logs = [];
+  const run = async (name, a) => a[1] === 'marketplace' ? JSON.stringify(opts.markets ?? marketFixtures[h]) : opts.list ?? fixtures[h];
+  const code = await main(['doctor', '--harness', h], { release, run, log: l => logs.push(l), isTTY: false, env: {}, stdoutIsTTY: false, home: '/home/user', ...extra });
+  return { code, logs, text: logs.map(l => l.replace(SGR, '')) };
+}
+
+test('doctor Claude project/local rows show ~-relative, absolute and sanitized project paths', async () => {
+  const BEL = String.fromCharCode(7);
+  const list = JSON.stringify([claudeRow('user'), claudeRow('project', '/home/user/repos/app'), claudeRow('local', '/home/user/repos/other'),
+    claudeRow('project', '/srv/work/x'), claudeRow('project', `/home/user/${ESC}[2Jhost${BEL}`), claudeRow('project', '/home/username/evil')]);
+  const { code, logs, text } = await doctorRun('claude', { list });
+  assert.equal(code, 0);
+  const rows = logs.filter(l => l.startsWith('claude\t'));
+  assert.deepEqual(rows.map(r => r.split('\t')), [
+    ['claude', '26.11.25.2', 'user', 'enabled'],
+    ['claude', '26.11.25.2', 'project', 'enabled', '~/repos/app'],
+    ['claude', '26.11.25.2', 'local', 'enabled', '~/repos/other'],
+    ['claude', '26.11.25.2', 'project', 'enabled', '/srv/work/x'],
+    ['claude', '26.11.25.2', 'project', 'enabled', '~/[2Jhost'],
+    ['claude', '26.11.25.2', 'project', 'enabled', '/home/username/evil']]);
+  assert.ok(!logs.join('').includes(ESC) && !logs.join('').includes(BEL));
+  assert.deepEqual(text.slice(-1), ['claude: OK']);
+  // Color mode keeps the same data, painted, with no stray controls.
+  const color = await doctorRun('claude', { list }, { env: { FORCE_COLOR: '1' } });
+  const ctext = color.text.filter(l => /^ {2}claude /.test(l));
+  assert.ok(ctext.some(l => /project {1,}enabled {1,}~\/repos\/app$/.test(l)), ctext.join('|'));
+  assert.ok(!hasControl(color.logs.join('\n').replace(SGR, '').split('\n').join('')));
+  assert.ok(color.text.every(l => [...l].every(c => c.charCodeAt(0) < 128)));
+});
+
+test('doctor project column appends after DRIFT and the home option defaults from env', async () => {
+  const list = JSON.stringify([claudeRow('project', '/home/me/repos/app', '26.11.25.1')]);
+  const { logs } = await doctorRun('claude', { list }, { home: undefined, env: { HOME: '/home/me' } });
+  assert.ok(logs.includes('claude\t26.11.25.1\tproject\tenabled\tDRIFT\t~/repos/app'), logs.join('|'));
+});
+
+const staleHint = 'run `npx @nexaduo/marc update`';
+for (const h of ['claude', 'codex', 'agy']) {
+  test(`doctor ${h} version-only drift is STALE with the update hint and a non-zero exit`, async () => {
+    const list = fixtures[h].replaceAll('26.11.25.2', '26.11.25.1');
+    const { code, text } = await doctorRun(h, { list });
+    assert.equal(code, 1);
+    assert.ok(text.includes(`${h}: STALE`), text.join('|'));
+    assert.ok(text.some(l => l.includes(staleHint)));
+    assert.ok(!text.includes(`${h}: FAILED`));
+    const color = await doctorRun(h, { list }, { env: { FORCE_COLOR: '1' } });
+    assert.ok(color.logs.some(l => l.includes(`${ESC}[1;93mSTALE`)), 'STALE uses the amber role');
+    assert.ok(color.text.some(l => new RegExp(`^ {2}${h} +STALE +out of date; run`).test(l)));
+  });
+}
+
+test('doctor codex catalog behind (main-tracking, version matches) is STALE', async () => {
+  const list = fixtures.codex.replace(release.tag, 'main');
+  const { code, text } = await doctorRun('codex', { list });
+  assert.equal(code, 1);
+  assert.ok(text.includes('codex: STALE') && text.some(l => l.includes('main-tracking')), text.join('|'));
+});
+
+test('doctor FAILED cases: codex local source, missing marketplace, missing plugin, unverifiable, errors', async () => {
+  const local = [{ name: 'nexaduo', marketplaceSource: { sourceType: 'local', source: '/home/user/mARC' } }];
+  let r = await doctorRun('codex', { markets: { marketplaces: local } });
+  assert.equal(r.code, 1); assert.ok(r.text.includes('codex: FAILED'), r.text.join('|'));
+  r = await doctorRun('codex', { markets: { marketplaces: [] } });
+  assert.ok(r.text.includes('codex: FAILED') && r.text.some(l => l.includes('marketplace missing')));
+  r = await doctorRun('codex', { list: '{"installed":[]}' });
+  assert.equal(r.code, 1); assert.ok(r.text.includes('codex: FAILED'));
+  assert.ok(r.text.some(l => l.includes('run `npx @nexaduo/marc install`')), r.text.join('|'));
+  r = await doctorRun('agy', { list: '[]' });
+  assert.ok(r.text.includes('agy: FAILED'));
+  r = await doctorRun('codex', { list: JSON.stringify({ installed: [{ pluginId: 'marc@nexaduo', version: '26.11.25.2', installed: true, enabled: true }] }) });
+  assert.ok(r.text.includes('codex: FAILED'), 'release source unverifiable: ' + r.text.join('|'));
+  r = await doctorRun('codex', { list: 'garbage' });
+  assert.ok(r.text.includes('codex: FAILED'));
+});
+
+test('doctor mixed STALE and FAILED reports FAILED, in the magenta role', async () => {
+  const local = [{ name: 'nexaduo', marketplaceSource: { sourceType: 'local', source: '/home/user/mARC' } }];
+  const list = fixtures.codex.replaceAll('26.11.25.2', '26.11.25.1');
+  const r = await doctorRun('codex', { list, markets: { marketplaces: local } });
+  assert.equal(r.code, 1);
+  assert.ok(r.text.includes('codex: FAILED') && !r.text.includes('codex: STALE'), r.text.join('|'));
+  assert.ok(r.logs.every(l => [...l].every(c => c.charCodeAt(0) < 128)));
+  const c = await doctorRun('codex', { list, markets: { marketplaces: local } }, { env: { FORCE_COLOR: '1' } });
+  assert.ok(c.logs.some(l => l.includes(`${ESC}[1;95mFAILED`)));
+});
