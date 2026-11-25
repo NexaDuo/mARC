@@ -45,9 +45,13 @@ last pipeline command's success. Failure is never equivalent to a passed check.
 4. For a confirmed stopped session, resume the saved conversation when supported
    and authorized. Start a replacement only through the ownership rules. Restore
    its workspace and resource settings from private configuration, not the plugin.
+   Pin the intended model on resume where the harness supports it; settings
+   defaults may not apply to a resumed conversation.
 5. Verify target identity, responsiveness, checkpoint and claim after recovery.
    Deliver a bounded continuation, confirm acknowledgment, then record observed
-   session/process bindings. Never report success at process launch alone.
+   session/process bindings, including the model actually used, read from the
+   transcript or native status, not config. Never report success at process
+   launch alone.
 
 No default command assumes a terminal multiplexer, operating system, local path,
 fixed pane number or CLI flag. If an adapter is absent, explain the missing
@@ -74,6 +78,13 @@ retry with the same reference; check screen/inbox/checkpoint before retrying so
 lost acknowledgments don't duplicate work. An idle reminder references eligible
 work or requests a blocker; it does not manufacture a new task. Escalate after
 the configured acknowledgment deadline, without repeatedly injecting text.
+
+<!-- rules:origin-required -->
+After a team answers "no eligible item" (threshold from local policy), suppress
+further idle reminders until its ready-queue state changes, then send one reminder
+citing the change. Change detection belongs to the consumer's opted-in watcher.
+(origin: #415 · 2026-11-24)
+<!-- /rules:origin-required -->
 
 ## Watcher and coordinator health
 
@@ -128,7 +139,17 @@ invent a cron API in a harness that lacks one. Without scheduling support,
 report that gap and perform the currently requested review only. Compare fresh
 metrics with the prior record: quality/rework, throughput, tokens/cache, quota,
 CI waits and resource pressure. Apply only delegated adjustments; plan, cost or
-infrastructure authority outside that scope stays with the user.
+infrastructure authority outside that scope stays with the user. Include a
+capacity recommendation (add or pause a team) from the compared metrics; the user
+decides, and ownership changes follow the concurrency protocol.
+
+<!-- rules:origin-required -->
+Within delegated configuration authority and where the harness allows, disable
+connectors, MCP servers or synced skills a team does not use, only after evidence
+of non-use (telemetry or transcripts). Change team-local uncommitted settings,
+show the change before writing it, and confirm the effect next session.
+(origin: #415 · 2026-11-24)
+<!-- /rules:origin-required -->
 
 ## Resource guardian
 

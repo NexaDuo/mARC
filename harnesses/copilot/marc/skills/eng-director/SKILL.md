@@ -131,6 +131,18 @@ its issue, commit, run or inspected artifact and say what it proves. Distinguish
 inventory, implementation, validation and release. Never infer completion from
 an issue title, successful send, opened PR or enqueued run.
 
+<!-- rules:origin-required -->
+Acceptance evidence exercises the deliverable where its user observes it. Label
+proxies (static reading, simulated renders, isolated tests, mocks) as proxies; they
+do not close acceptance alone unless the owner explicitly accepts the proxy, and
+that acceptance is recorded. If the agreed method begins with a discovery or
+inventory step, verify that artifact exists before accepting downstream "done".
+Inspect evidence before relaying it. Independent verification by another team is a
+request to that team's techlead, who must agree; it is read-only and ownership is
+unchanged.
+(origin: #415 · 2026-11-24)
+<!-- /rules:origin-required -->
+
 Use the user's preferred format; otherwise a short routine line and an explicit
 "Needs you: decision/action, options, recommendation, affected work" suffice.
 Put detail in the approved local record, not repeated chat summaries. Keep
