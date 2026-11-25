@@ -13,8 +13,9 @@ date whose `YY.M.D` is already taken.
 ### Changed
 
 - Mention-free markers, step 2 of #419: emitters and agent templates now write `marc:<role>` headers for reviews, claims, withdrawals, decisions and research briefs. Parsers still accept legacy `@` markers.
-- **Update every harness on a clone together.** An older install cannot see a `marc:` claim and may double-claim.
-- `board_claim.py` prints a one-line warning when it sees a live, trusted, well-formed legacy claim from a different operator: that operator appears to run a pre-26.11.25 mARC. The warning does not change the decision or exit code.
+- **Update every harness on a clone together.** Installs older than 26.11.25 cannot see `marc:` claims and may double-claim. Installs older than 26.11.25.1 write the legacy form.
+- **Run the merge gate from 26.11.25 or later, and always pass `--expect-reviewer`.** Older gates can count an earlier legacy PASS while missing a later `marc:` BLOCK. Reviewer ids provide audit traceability, not authentication.
+- `board_claim.py` warns at most once per CLI invocation when it sees a live, trusted, well-formed legacy claim from another operator id (which may be your own from an earlier session). The warning explains the version boundaries above and asks for every harness on the clone to be updated together; it does not change the decision or exit code.
 
 ## [26.11.25] - 2026-11-25
 

@@ -320,6 +320,25 @@ class CliExitCodes(unittest.TestCase):
             self.assertEqual(bool(warning), op == "codex/sess-9")
             self.assertEqual(self.stderr.getvalue(), "")
 
+    def test_claim_legacy_warning_once_across_do_claim_rereads(self):
+        mine = view_comment(claim("claude-code/sess-2"), idx=0)
+        peer = view_comment(claim("antigravity/sess-7", marker="## @techlead claim"), idx=1)
+        # Exercise a warning first seen before or after posting, and ensure a
+        # later CLI invocation in the same process still gets its own warning.
+        for initial in ([], [mine, peer]):
+            for invocation in range(2):
+                with self.subTest(initial=bool(initial), invocation=invocation):
+                    gh = FakeGh(initial, inject_after_post=[] if initial else [peer])
+                    rc, out = self.run_cli(
+                        ["claim", "--issue", "226", "--operator", "claude-code/sess-2"], gh)
+                    self.assertEqual(rc, 1, out)
+                    status = json.loads(out)["status"]
+                    self.assertEqual(status["decision"], "withdrew")
+                    self.assertEqual(status["owner"], "antigravity/sess-7")
+                    self.assertEqual(sum(c[2] == "view" for c in gh.calls), 3)
+                    self.assertEqual(len(self.stderr.getvalue().splitlines()), 1)
+                    self.assertIn("live legacy-form claim", self.stderr.getvalue())
+
     def test_claim_status_error_is_2(self):
         rc, _ = self.run_cli(["claim-status", "--issue", "226"], RuntimeError("gh: HTTP 502"))
         self.assertEqual(rc, 2)
@@ -576,8 +595,11 @@ class LegacyClaimWarning(unittest.TestCase):
         status, warning = self.evaluate(comments)
         self.assertEqual(status.decision, "claimed-by-other")
         self.assertEqual(warning.splitlines(), [
-            "warning: another operator appears to run a pre-26.11.25 mARC; "
-            "update all harnesses on this clone together"])
+            "warning: live legacy-form claim from another operator id seen "
+            "(may be yours from an earlier session); "
+            "installs older than 26.11.25.1 write the legacy form; "
+            "installs older than 26.11.25 cannot see marc: claims; "
+            "update every harness on this clone together"])
 
     def test_no_warning_for_new_own_untrusted_malformed_or_withdrawn_claim(self):
         legacy = claim("claude-code/abc", marker="## @techlead claim")
@@ -597,7 +619,7 @@ class LegacyClaimWarning(unittest.TestCase):
     def test_deduplicated_legacy_claim_still_warns(self):
         comments = [view_comment(claim("claude-code/abc"), idx=0),
                     view_comment(claim("claude-code/abc", marker="## @techlead claim"), idx=1)]
-        self.assertIn("pre-26.11.25", self.evaluate(comments)[1])
+        self.assertIn("live legacy-form claim", self.evaluate(comments)[1])
 
     def test_warning_does_not_change_tie_break(self):
         comments = [view_comment(claim("codex/sess-9"), idx=0),

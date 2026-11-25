@@ -45,7 +45,7 @@ always empty; that's expected, don't re-block on it. (origin: #105 · 2026-07-16
   re-posts (the operator never edits a review to make it parse). Trust boundary: the association check filters
   non-collaborator forgeries, it does not authenticate the reviewer. Mint a
   unique `reviewer: <harness>/<dispatch-id>` per dispatch and pass it as
-  `--expect-reviewer` (SHOULD: audit traceability, not authentication).
+  `--expect-reviewer` (MUST: audit traceability, not authentication). (origin: #419 · 2026-11-25)
   Unresolved inline review threads block too ("CI green" is not permission):
   per thread, verify the fix, reply citing the commit (or a stated won't-fix
   justification), resolve; repeat at every push.

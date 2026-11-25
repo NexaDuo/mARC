@@ -65,7 +65,7 @@ In Google Antigravity, the native equivalent is:
   - The control, `enable_write_tools: true`, can write files and run shell commands.
   - The built-in `TypeName: research` keeps `run_command` (it created a file with `touch`), so it is **not** read-only and is not used for `@research`.
   - Not tested: runs without `--dangerously-skip-permissions`, and whether the web-read tools can exfiltrate what the subagent read (a residual path the operator should assume exists).
-  - Consequence: the no-write subagent can't run `gh` or any shell command. The operator writes the PR diff and any needed files to a scratch path, passes absolute paths, and posts the returned report verbatim as the `## @sec review` / `## @rev review` comment, noting it was relayed from a no-write subagent.
+  - Consequence: the no-write subagent can't run `gh` or any shell command. The operator writes the PR diff and any needed files to a scratch path, passes absolute paths, and posts the returned report verbatim as the `## marc:sec review` / `## marc:rev review` comment, noting it was relayed from a no-write subagent.
 - **Personas are skills here:** with `agents_as_skills: true` in `compile.json`, `core/agents/<name>.md` compiles to `skills/<name>/SKILL.md`, because native role resolution did not load agent personas. Their `tools:`/`model:` frontmatter is advisory on Antigravity; only the subagent definition enforces tool boundaries. `scripts/dispatch_agent.py` names the persona skill in the `agy -p` prompt (no `--agent`, which headless agy ignores, #323) and never routes read-only roles to agy.
 - **Ongoing Coordination:** Use `send_message` for two-way agent communication and task steering without spawning redundant subagents.
 
