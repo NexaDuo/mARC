@@ -7,7 +7,7 @@ import { createRunner, resolveExecutable, safeValue } from './process.js';
 import { tagToNpm } from './version.js';
 import { createStyle, stripControls } from './style.js';
 import { safeVersion, parsePlugins, describeSource, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource,
-  classifyMarketplace, sourceParts, looksLocal, enrichMarketplaces } from './lists.js';
+  classifyMarketplace, sourceParts, looksLocal, redactSource, enrichMarketplaces } from './lists.js';
 
 export const HARNESSES = ['claude', 'copilot', 'codex', 'agy'];
 const SCOPES = ['user', 'project', 'local'];
@@ -351,7 +351,7 @@ export function describeForPlan(row, home, platform) {
   }
   let v = stripControls(value ?? (typeof row.path === 'string' ? row.path : ''));
   if (looksLocal(v)) v = displayProject(v.replace(/^Local: /, ''), home, platform);
-  else v = v.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/\s]*@/i, '$1***@').replace(/[?#].*$/, '');
+  else v = redactSource(v);
   return [type != null && `sourceType: ${clip(stripControls(type))}`, `source: ${clip(v) || 'unknown'}`].filter(Boolean).join(', ');
 }
 
@@ -424,49 +424,66 @@ function forceLines(h, f, opts, home, platform) {
   return L;
 }
 
-// remove -> verify gone -> add -> reinstall missing scopes. Never rolls back:
-// restoring would re-add the old, possibly hostile, source.
-async function forceReplace({ h, f, run, out, ctx, report, opts, cwd }) {
+// remove -> verify gone -> add -> bring installs onto the new source. Never
+// rolls back: restoring would re-add the old, possibly hostile, source. Once
+// the remove has succeeded, ANY later failure sets ctx.aborted (later
+// harnesses skip their remove), prints the previous registration and a
+// constant retry block.
+async function forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, platform }) {
   if (ctx.aborted) throw new Error('skipped: earlier forced re-registration failed; nothing removed');
   const listed = async () => parseMarketplaces(h, await run(h, MLIST));
   if (canon(await listed()) !== f.rawCanon) throw new Error('registration changed since the plan was shown; nothing removed');
   try { await run(h, REMOVE); } catch (e) { throw new Error(`marketplace remove failed (${e.message}); registration preserved`); }
-  if ((await listed()).length) throw new Error('nexaduo is still listed after marketplace remove; not adding');
-  let added = true;
-  try { await run(h, ADD); } catch { added = false; }
-  if (added && !(await listed()).length) added = false;
-  if (!added) {
-    ctx.aborted = true;
-    out.line(h, 'warn', `${h}: previous registration was: ${f.desc}`);
-    out.remedy(h, `${h}: nexaduo is now unregistered; retry (review first):`,
-      [`${h} ${ADD.join(' ')}`, ...f.targets.map(t => `${h} ${installArgs(h, t.scope).join(' ')}`)]);
-    throw new Error('nexaduo is now unregistered: marketplace add failed');
-  }
-  let rows = parsePlugins(h, await run(h, listArgs(h)));
-  const present = t => h !== 'claude' ? rows.length > 0 : rows.some(r => (r.scope || 'user') === t.scope &&
-    (t.scope === 'user' || (typeof r.projectPath === 'string' && samePath(r.projectPath, t.cwd))));
-  const missing = f.targets.filter(t => !present(t));
-  let failed = f.skipped.length > 0;
-  for (const [i, t] of missing.entries()) {
-    const options = t.cwd ? { cwd: t.cwd } : undefined;
-    try {
-      if (t.cwd && !(await stat(t.cwd)).isDirectory()) throw new Error('project path is not a directory');
-    } catch (e) { out.line(h, 'warn', `${h}: warning: skipped ${t.scope} scope at ${displayProject(t.cwd)}: ${e.message}`); failed = true; continue; }
-    try { await run(h, installArgs(h, t.scope), options); } catch (e) {
-      out.remedy(h, `${h}: reinstall failed after re-registration; retry (review first):`,
-        missing.slice(i).map(x => `${h} ${installArgs(h, x.scope).join(' ')}`));
-      throw new Error(`reinstall of ${ID} failed (${e.message}); the marketplace is registered`);
+  const installs = ts => ts.map(t => `${h} ${installArgs(h, t.scope).join(' ')}`);
+  let retry = [`${h} ${ADD.join(' ')}`, ...installs(f.targets)];
+  let title = `${h}: nexaduo is now unregistered; retry (review first):`;
+  try {
+    if ((await listed()).length) throw new Error('nexaduo is still listed after marketplace remove; not adding');
+    try { await run(h, ADD); } catch { throw new Error('nexaduo is now unregistered: marketplace add failed'); }
+    if (!(await listed()).length) throw new Error('nexaduo is now unregistered: marketplace add failed');
+    title = `${h}: failed after re-registration; retry (review first):`;
+    retry = installs(f.targets);
+    let rows = parsePlugins(h, await run(h, listArgs(h)));
+    const present = t => h !== 'claude' ? rows.length > 0 : rows.some(r => (r.scope || 'user') === t.scope &&
+      (t.scope === 'user' || (typeof r.projectPath === 'string' && samePath(r.projectPath, t.cwd))));
+    const requested = t => h !== 'claude' || t.scope === (opts.scope || 'user');
+    // Installs that survived the remove still point at the old source: the
+    // requested install scope is re-run, surviving update scopes are updated.
+    const todo = f.targets.map(t => ({ t, install: !present(t) || (opts.command === 'install' && requested(t)) }));
+    let failed = f.skipped.length > 0;
+    const ready = [];
+    for (const x of todo) {
+      try {
+        if (x.t.cwd && !(await stat(x.t.cwd)).isDirectory()) throw new Error('project path is not a directory');
+        ready.push(x);
+      } catch (e) { out.line(h, 'warn', `${h}: warning: skipped ${x.t.scope} scope at ${displayProject(x.t.cwd, home, platform)}: ${e.message}`); failed = true; }
     }
-    if (t.disabled && h === 'claude') {
-      try { await run(h, ['plugin', 'disable', ID, ...scopeArgs(t.scope)], options); } catch (e) {
-        out.line(h, 'warn', `${h}: warning: could not re-disable ${t.scope} scope: ${e.message}`); failed = true;
+    const options = t => t.cwd ? { cwd: t.cwd } : undefined;
+    if (opts.command === 'update' && ready.some(x => !x.install)) {
+      try { await run(h, updateArgs(h, opts.scope || 'user')[0]); } catch (e) { throw new Error(`marketplace update failed (${e.message}); the marketplace is registered`); }
+    }
+    for (const [i, { t, install }] of ready.entries()) {
+      const argv = install ? installArgs(h, t.scope) : updateArgs(h, t.scope)[1];
+      try { await run(h, argv, options(t)); } catch (e) {
+        retry = installs(ready.slice(i).map(x => x.t));
+        throw new Error(`${install ? 'reinstall' : 'update'} of ${ID} failed (${e.message}); the marketplace is registered`);
+      }
+      if (install && t.disabled && h === 'claude') {
+        try { await run(h, ['plugin', 'disable', ID, ...scopeArgs(t.scope)], options(t)); } catch (e) {
+          out.line(h, 'warn', `${h}: warning: could not re-disable ${t.scope} scope: ${e.message}`); failed = true;
+        }
       }
     }
+    rows = parsePlugins(h, await run(h, listArgs(h)));
+    const after = opts.command === 'install' || opts.scope ? installedRows(h, rows, opts.scope || 'user', cwd) : rows;
+    if (!after.length) throw new Error('marc is not listed after install');
+    return { outcome: report(after), failed };
+  } catch (e) {
+    ctx.aborted = true;
+    out.line(h, 'warn', `${h}: previous registration was: ${f.desc}`);
+    out.remedy(h, title, retry);
+    throw e;
   }
-  rows = parsePlugins(h, await run(h, listArgs(h)));
-  const after = opts.command === 'install' || opts.scope ? installedRows(h, rows, opts.scope || 'user', cwd) : rows;
-  if (!after.length) throw new Error('marc is not listed after install');
-  return { outcome: report(after), failed };
 }
 
 export async function main(argv, { release, run = createRunner(), log = console.log,
@@ -568,9 +585,10 @@ export async function main(argv, { release, run = createRunner(), log = console.
         throw f.error;
       } else if (f?.action === 'refuse') {
         manualRemedy(h, out, opts.scope);
+        if (!installedRows(h, f.rows ?? [], opts.scope || 'user', cwd).length) { notInstalled = true; out.line(h, 'info', `${h}: marc not installed`); }
         throw new Error(f.message);
       } else if (f?.action === 'replace') {
-        const r = await forceReplace({ h, f, run, out, ctx, report, opts, cwd });
+        const r = await forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, platform });
         outcome = r.outcome; failed = r.failed;
       } else if (f?.action === 'update') {
         const scope = opts.scope || 'user';

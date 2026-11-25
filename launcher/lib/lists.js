@@ -119,8 +119,19 @@ export function enrichMarketplaces(harness, markets, rows) {
 
 // Human-readable "sourceType: X, source: Y" for a marketplace row, with control
 // characters stripped (native CLI output is untrusted text).
+// One redaction for every place a native source value is printed: controls
+// stripped, URL userinfo replaced, query/fragment dropped. Local paths are
+// kept as-is (a "#" or "?" can be part of a directory name).
+export function redactSource(value) {
+  const v = String(value ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '');
+  if (looksLocal(v)) return v;
+  return v.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1***@').replace(/[?#].*$/, '');
+}
+
+// Human-readable "sourceType: X, source: Y" for a marketplace row (native CLI
+// output is untrusted text).
 export function describeSource(market) {
-  const clean = v => String(v ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '').slice(0, 200);
+  const clean = v => redactSource(v).slice(0, 200);
   const raw = market.marketplaceSource ?? market.source;
   let type, value;
   if (raw && typeof raw === 'object') {

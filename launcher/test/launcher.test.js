@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, symlink, chmod, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
+import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStyle, stripControls } from '../lib/style.js';
 import { main, displayProject, makeOut, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
 import { tagToNpm, npmToTag } from '../lib/version.js';
 import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/process.js';
-import { classifyMarketplace, enrichMarketplaces, describeSource, safeVersion, parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
+import { classifyMarketplace, enrichMarketplaces, describeSource, redactSource, safeVersion, parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const release = { tag: 'v26.11.25.2', sha: 'a'.repeat(40), npm: '26.1125.2' };
@@ -1097,9 +1098,11 @@ function forceFake(calls, init, hooks = {}) {
     if (hooks.fail?.(h, args)) throw new Error('native failure');
     if (args[1] === 'list') return fmtP(h, s.plugins);
     if (key === 'marketplace list --json') { s.reads++; return fmtM(h, hooks.list?.(h, s.reads, s.markets) ?? s.markets); }
-    if (key.startsWith('marketplace remove')) { if (!hooks.keep) s.markets = []; s.plugins = []; return ''; }
+    if (key.startsWith('marketplace remove')) { if (!hooks.keep) s.markets = []; if (!hooks.survive) s.plugins = []; return ''; }
     if (key.startsWith('marketplace add')) { s.markets = [GOOD[h]]; return ''; }
+    if (args[1] === 'update' && args[2] !== 'nexaduo' && args[1] !== 'marketplace') s.plugins.forEach(p => { p.version = '26.11.25.2'; });
     if (['install', 'add'].includes(args[1]) && args[2] === 'marc@nexaduo') {
+      s.plugins = s.plugins.filter(p => (p.scope ?? 'user') !== (args[4] ?? 'user') && h === 'claude');
       s.plugins.push(h === 'codex' ? { pluginId: 'marc@nexaduo', version: '26.11.25.2', installed: true, enabled: true } :
         h === 'copilot' ? { name: 'marc', marketplace: 'nexaduo', version: '26.11.25.2' } :
           { id: 'marc@nexaduo', version: '26.11.25.2', scope: args[4] ?? 'user', projectPath: options?.cwd, enabled: true });
@@ -1390,4 +1393,82 @@ test('without --force a mismatch is refused as before (no force lines, no mutati
   assert.equal(r.code, 1); assert.deepEqual(wargs(r.calls), []);
   assert.ok(!r.logs.some(s => s.includes('--force')));
   assert.ok(r.logs.includes('claude: nexaduo is registered from a different or unverified source (found sourceType: github, source: Fork/mARC); registration preserved'));
+});
+
+test('SEC-1: a failed verify re-list after remove aborts the run, prints retry commands and skips later removes', async () => {
+  const init = { claude: { markets: [FOREIGN.claude], plugins: OLD }, codex: { markets: [FOREIGN.codex], plugins: [] } };
+  const r = await force(['install', '--force', '--yes', '--harness', 'claude', '--harness', 'codex'], init,
+    { list: (h, n, m) => { if (h === 'claude' && n >= 3) throw new Error('list down'); return m; } });
+  assert.equal(r.code, 1);
+  assert.deepEqual(wargs(r.calls), ['claude plugin marketplace remove nexaduo']);
+  assert.ok(r.logs.includes('claude: previous registration was: sourceType: github, source: Fork/mARC'), r.logs.join('\n'));
+  assert.ok(r.logs.includes('claude plugin marketplace add NexaDuo/mARC') && r.logs.includes('claude plugin install marc@nexaduo --scope user'));
+  assert.ok(r.logs.includes('codex: skipped: earlier forced re-registration failed; nothing removed'));
+});
+
+for (const [name, hook, flag] of [['post-add re-list', (h, n, m) => { if (n >= 4) throw new Error('list down'); return m; }],
+  ['reinstall', null, (h, a) => a[1] === 'install'], ['final plugin re-list', null, null]]) {
+  test(`SEC-1: ${name} failing after a successful remove aborts later harnesses`, async () => {
+    const init = { claude: { markets: [FOREIGN.claude], plugins: OLD }, codex: { markets: [FOREIGN.codex], plugins: [] } };
+    let plist = 0;
+    const hooks = hook ? { list: (h, n, m) => h === 'claude' ? hook(h, n, m) : m } :
+      flag ? { fail: (h, a) => h === 'claude' && flag(h, a) } :
+        { fail: (h, a) => h === 'claude' && a[1] === 'list' && ++plist >= 3 };
+    const r = await force(['install', '--force', '--yes', '--harness', 'claude', '--harness', 'codex'], init, hooks);
+    assert.equal(r.code, 1);
+    assert.ok(!wargs(r.calls).some(s => s.startsWith('codex')), wargs(r.calls).join('|'));
+    assert.ok(r.logs.some(s => s.startsWith('claude: previous registration was:')), r.logs.join('\n'));
+    assert.ok(r.logs.includes('claude plugin install marc@nexaduo --scope user'), r.logs.join('\n'));
+  });
+}
+
+for (const h of ['claude', 'codex']) for (const command of ['install', 'update']) {
+  test(`REV-1: ${h} ${command} --force moves an install that survived the remove onto the new source`, async () => {
+    const plugins = h === 'codex' ? [{ pluginId: 'marc@nexaduo', version: '26.11.14', installed: true, enabled: true }] : OLD;
+    const r = await force([command, '--force', '--yes', '--harness', h], { [h]: { markets: [FOREIGN[h]], plugins } }, { survive: true });
+    assert.equal(r.code, 0, r.logs.join('\n'));
+    assert.ok(r.logs.some(s => /already installed at 26\.11\.25\.2/.test(s)) && r.logs.includes(`${h}: OK`), r.logs.join('\n'));
+    const w = wargs(r.calls);
+    assert.ok(w.indexOf(`${h} plugin marketplace add NexaDuo/mARC`) < w.findIndex(s => /plugin (install|update|add) marc/.test(s) && !/marketplace/.test(s)), w.join('|'));
+    if (command === 'install') assert.ok(w.some(s => s.startsWith(`${h} plugin ${h === 'codex' ? 'add' : 'install'} marc@nexaduo`)), w.join('|'));
+    else assert.ok(w.some(s => /plugin marketplace (update|upgrade) nexaduo/.test(s)) && w.some(s => /plugin (update|add) marc/.test(s)), w.join('|'));
+  });
+}
+
+test('SEC-2: one redaction covers describeSource, the non-force refusal, the result table and the force plan', async () => {
+  const url = 'https://user:tok@github.com/x?token=abc';
+  const row = { name: 'nexaduo', source: 'git', url };
+  assert.equal(redactSource(`${url}#frag\u001b[31m`), 'https://***@github.com/x');
+  assert.equal(describeSource(row), 'sourceType: git, source: https://***@github.com/x');
+  let r = await force(['install', '--yes', '--harness', 'claude'], { claude: { markets: [row], plugins: OLD } });
+  for (const s of [...r.logs]) assert.ok(!/tok|token=abc/.test(s), s);
+  assert.ok(r.logs.some(s => s.includes('https://***@github.com/x')));
+  r = await force(['install', '--force', '--force-local', '--yes', '--harness', 'claude'], { claude: { markets: [row], plugins: OLD } }, { fail: (h, a) => a[2] === 'add' });
+  for (const s of r.logs) assert.ok(!/tok|token=abc/.test(s), s);
+});
+
+test('REV-2: the skip warning prints the project path home-relative', async t => {
+  const dir = await temp(t);
+  const plugins = [{ id: 'marc@nexaduo', version: '26.11.14', scope: 'project', projectPath: dir, enabled: true }];
+  const r = await force(['install', '--force', '--yes', '--harness', 'claude', '--scope', 'project'], { claude: { markets: [FOREIGN.claude], plugins } },
+    { survive: false, list: (h, n, m) => { if (n === 3) rmSync(dir, { recursive: true, force: true }); return m; } }, { cwd: dir, home: path.dirname(dir), platform: process.platform });
+  assert.ok(r.logs.some(s => /skipped project scope at ~\//.test(s)), r.logs.join('\n'));
+});
+
+test('REV-4: a refused --force with marc absent reports not installed (Claude and Windows root-only Codex)', async () => {
+  for (const [h, market] of [['claude', { name: 'nexaduo', source: 'directory', path: '/home/user/mARC' }], ['codex', WIN_CODEX]]) {
+    const r = await force(['install', '--force', '--yes', '--harness', h], { [h]: { markets: [market], plugins: [] } });
+    assert.equal(r.code, 1);
+    assert.ok(r.logs.some(s => s.includes('--force refused:')));
+    assert.ok(r.logs.some(s => /not installed; /.test(s)) || r.logs.includes(`${h}: FAILED`) && r.logs.some(s => s === `${h}: marc not installed`), r.logs.join('\n'));
+    assert.deepEqual(wargs(r.calls), []);
+  }
+});
+
+test('REV-5: two raw sources that sanitize identically still abort after consent', async () => {
+  const a = { name: 'nexaduo', source: 'git', url: 'https://github.com/Fork/m?a=1' }, b = { ...a, url: 'https://github.com/Fork/m?a=2' };
+  const r = await force(['install', '--force', '--yes', '--harness', 'claude'], { claude: { markets: [a], plugins: OLD } },
+    { list: (h, n, m) => n >= 2 ? [b] : m });
+  assert.equal(r.code, 1); assert.deepEqual(wargs(r.calls), []);
+  assert.ok(r.logs.includes('claude: registration changed since the plan was shown; nothing removed'));
 });
