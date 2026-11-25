@@ -5,27 +5,31 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { main, parseArgs, installAgy, HARNESSES } from '../lib/main.js';
+import { main, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
 import { tagToNpm, npmToTag } from '../lib/version.js';
 import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/process.js';
-import { parsePlugins, parseMarketplaces, marketplaceWarnings, readCatalogSource } from '../lib/lists.js';
+import { parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const release = { tag: 'v26.11.26', sha: 'a'.repeat(40), npm: '26.1126.0' };
 const fixtures = {
-  claude: JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.26', scope: 'user', enabled: true, source: { ref: release.tag } },
-    { id: 'marc@nexaduo', version: '26.11.26', scope: 'project', enabled: false, source: { ref: release.tag } }]),
-  copilot: JSON.stringify([{ name: 'marc', marketplace: 'nexaduo', version: '26.11.26', enabled: true, source: { ref: release.tag } }]),
+  claude: JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.26', scope: 'user', enabled: true, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } },
+    { id: 'marc@nexaduo', version: '26.11.26', scope: 'project', enabled: false, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } }]),
+  copilot: JSON.stringify([{ name: 'marc', marketplace: 'nexaduo', version: '26.11.26', enabled: true, source: { source: 'github', repo: 'NexaDuo/mARC', path: 'harnesses/copilot/marc', ref: release.tag } }]),
   codex: JSON.stringify({ installed: [{ pluginId: 'marc@nexaduo', version: '26.11.26', installed: true,
     enabled: true, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/codex/marc', ref: release.tag } }] }),
   agy: JSON.stringify([{ name: 'marc', version: '26.11.26', enabled: true }]),
 };
-const markets = JSON.stringify([{ name: 'nexaduo', source: { source: 'github', repo: 'NexaDuo/mARC' } }]);
+const marketFixtures = {
+  claude: [{ name: 'nexaduo', source: { source: 'github', repo: 'NexaDuo/mARC' } }],
+  copilot: [{ name: 'nexaduo', source: 'GitHub: NexaDuo/mARC' }],
+  codex: [{ name: 'nexaduo', marketplaceSource: { sourceType: 'git', source: 'https://github.com/NexaDuo/mARC.git', ref: null } }],
+};
 const silent = () => {};
 function runner(calls, overrides = {}) {
   return async (h, args, options) => {
     calls.push([h, args, options]);
-    return args[1] === 'marketplace' && args[2] === 'list' ? markets :
+    return args[1] === 'marketplace' && args[2] === 'list' ? JSON.stringify(marketFixtures[h]) :
       args[1] === 'list' ? overrides[h] ?? fixtures[h] : '';
   };
 }
@@ -58,20 +62,20 @@ for (const npm of ['26.1125.1.2', '26.01125.0', '26.1125.01', '26.1132.0', '26.1
 
 const golden = {
   claude: {
-    install: [['plugin', 'marketplace', 'add', 'NexaDuo/mARC'], ['plugin', 'install', 'marc@nexaduo', '--scope', 'user']],
+    install: [['plugin', 'marketplace', 'list', '--json'], ['plugin', 'install', 'marc@nexaduo', '--scope', 'user']],
     update: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'update', 'nexaduo'],
       ['plugin', 'update', 'marc@nexaduo', '--scope', 'user'], ['plugin', 'update', 'marc@nexaduo', '--scope', 'project']],
     doctor: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']],
     uninstall: [['plugin', 'uninstall', 'marc@nexaduo', '--scope', 'user']],
   },
   copilot: {
-    install: [['plugin', 'marketplace', 'add', 'NexaDuo/mARC'], ['plugin', 'install', 'marc@nexaduo']],
+    install: [['plugin', 'marketplace', 'list', '--json'], ['plugin', 'install', 'marc@nexaduo']],
     update: [['plugin', 'marketplace', 'update', 'nexaduo'], ['plugin', 'update', 'marc']],
     doctor: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']], uninstall: [['plugin', 'uninstall', 'marc@nexaduo']],
   },
   codex: {
-    install: [['plugin', 'marketplace', 'add', 'NexaDuo/mARC'], ['plugin', 'add', 'marc@nexaduo']],
-    update: [['plugin', 'marketplace', 'upgrade'], ['plugin', 'add', 'marc@nexaduo']],
+    install: [['plugin', 'marketplace', 'list', '--json'], ['plugin', 'add', 'marc@nexaduo']],
+    update: [['plugin', 'marketplace', 'upgrade', 'nexaduo'], ['plugin', 'add', 'marc@nexaduo']],
     doctor: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']],
     uninstall: [['plugin', 'remove', 'marc@nexaduo']],
   },
@@ -115,7 +119,7 @@ for (const h of HARNESSES) for (const command of ['install', 'update', 'doctor',
     if (command !== 'doctor') await assert.rejects(invoke([command, '--harness', h], calls), /--yes/);
     assert.equal(await invoke([command, '--harness', h, '--yes', '--dry-run'], calls), 0);
     assert.equal(await invoke([command, '--harness', h, '--dry-run'], calls), 0);
-    assert.deepEqual(calls, []);
+    assert.deepEqual(calls.map(c => c[1]), h === 'claude' && command === 'update' ? [['plugin', 'list', '--json'], ['plugin', 'list', '--json']] : []);
   });
 }
 for (const flag of ['--harness', '--scope', '--version']) for (const bad of ['&', '|', '%', '^', '"', '!', '\n', ' ', '-evil']) {
@@ -241,7 +245,7 @@ test('PATH stubs record exact argv for all native flows; HOME stays unchanged', 
   await mkdir(bin); await mkdir(home); await mkdir(cwd);
   const logPath = path.join(dir, 'argv.jsonl');
   const impl = path.join(bin, 'stub.cjs');
-  await writeFile(impl, `const fs = require('node:fs');\nconst [h,...a]=process.argv.slice(2);\nfs.appendFileSync(process.env.STUB_LOG,JSON.stringify([h,a])+'\\n');\nif(h==='git'&&a[0]==='clone'){const p=require('node:path').join(a.at(-1),'harnesses/antigravity/marc');fs.mkdirSync(p,{recursive:true});fs.writeFileSync(require('node:path').join(p,'plugin.json'),JSON.stringify({version:'26.11.26'}));}\nif(h==='git'&&a[0]==='rev-parse'){console.log('${release.sha}');process.exit(0);}\nconst f=JSON.parse(process.env.STUB_FIXTURES);\nconsole.log(a[1]==='marketplace'&&a[2]==='list'?process.env.STUB_MARKETS:a[1]==='list'?f[h]:'');\n`);
+  await writeFile(impl, `const fs = require('node:fs');\nconst [h,...a]=process.argv.slice(2);\nfs.appendFileSync(process.env.STUB_LOG,JSON.stringify([h,a])+'\\n');\nif(h==='git'&&a[0]==='clone'){const p=require('node:path').join(a.at(-1),'harnesses/antigravity/marc');fs.mkdirSync(p,{recursive:true});fs.writeFileSync(require('node:path').join(p,'plugin.json'),JSON.stringify({version:'26.11.26'}));}\nif(h==='git'&&a[0]==='rev-parse'){console.log('${release.sha}');process.exit(0);}\nconst f=JSON.parse(process.env.STUB_FIXTURES);\nconsole.log(a[1]==='marketplace'&&a[2]==='list'?JSON.stringify(JSON.parse(process.env.STUB_MARKETS)[h]):a[1]==='list'?f[h]:'');\n`);
   for (const h of [...HARNESSES, 'git']) {
     const win = process.platform === 'win32';
     const file = path.join(bin, h + (win ? '.cmd' : ''));
@@ -261,7 +265,7 @@ if [ '${h}' = git ]; then
   exit 0
 fi
 case "$1 $2 $3" in
-  'plugin marketplace list') printf '%s\\n' '${markets}' ;;
+  'plugin marketplace list') printf '%s\\n' '${JSON.stringify(marketFixtures[h])}' ;;
   'plugin list'*) printf '%s\\n' '${fixtures[h]}' ;;
 esac
 `);
@@ -269,7 +273,7 @@ esac
     await chmod(file, 0o755);
   }
   const env = { ...process.env, PATH: bin, PATHEXT: '.CMD', HOME: home, USERPROFILE: home, STUB_LOG: logPath,
-    STUB_FIXTURES: JSON.stringify(fixtures), STUB_MARKETS: markets };
+    STUB_FIXTURES: JSON.stringify(fixtures), STUB_MARKETS: JSON.stringify(marketFixtures) };
   const run = createRunner({ env, cwd });
   const snapshot = async () => Promise.all((await readdir(home, { recursive: true })).sort().map(async f => {
     const p = path.join(home, f);
@@ -280,12 +284,12 @@ esac
   const expected = [];
   for (const h of HARNESSES) for (const cmd of Object.keys(golden[h])) {
     const calls = [];
-    await main([cmd, '--harness', h, '--harness', h, '--yes', '--version', release.tag], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd });
+    assert.equal(await main([cmd, '--harness', h, '--harness', h, '--yes', '--version', release.tag], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd }), 0);
     expected.push(...golden[h][cmd].map(a => [h, a]));
   }
   for (const cmd of ['install', 'update']) {
     const calls = [];
-    await main([cmd, '--harness', 'agy', '--yes'], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd, tmpRoot: dir });
+    assert.equal(await main([cmd, '--harness', 'agy', '--yes'], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd, tmpRoot: dir }), 0);
     const clone = calls[1][1].at(-1);
     expected.push(['agy', ['plugin', 'list', '--json']], ['git', ['clone', '--depth', '1', '--branch', release.tag, '--no-checkout', 'https://github.com/NexaDuo/mARC.git', clone]],
       ['git', ['rev-parse', 'HEAD']], ['git', ['ls-tree', '-r', 'HEAD']], ['git', ['checkout', '--detach', '--force', 'HEAD']],
@@ -333,9 +337,9 @@ test('observed native JSON list fixtures, text fallback and cached-catalog point
   for (const [h, location] of [['claude', '.claude-plugin'], ['copilot', '.github/plugin'], ['codex', '.agents/plugins']]) {
     await mkdir(path.join(dir, location), { recursive: true });
     const catalog = path.join(dir, location, 'marketplace.json');
-    const source = { source: h === 'copilot' ? 'github' : 'git-subdir', ref: release.tag };
+    const source = { source: h === 'copilot' ? 'github' : 'git-subdir', [h === 'copilot' ? 'repo' : 'url']: 'NexaDuo/mARC', path: `harnesses/${h === 'claude' ? 'claude-code' : h}/marc`, ref: release.tag };
     await writeFile(catalog, JSON.stringify({ name: 'nexaduo', plugins: [{ name: 'marc', source }] }));
-    const nativeMarkets = [{ name: 'nexaduo', root: dir }];
+    const nativeMarkets = [{ ...marketFixtures[h][0], root: dir }];
     const run = async (name, a) => a[1] === 'marketplace' ? JSON.stringify(nativeMarkets) : JSON.stringify(observed[h]);
     assert.equal(await invoke(['doctor', '--harness', h, '--yes'], [], { run }), 0);
     assert.deepEqual(await readCatalogSource(h, nativeMarkets, []), source);
@@ -396,3 +400,129 @@ test('allowlist rejects embedded and trailing metacharacters, including JS end-a
   }
   for (const tag of ['v26.11.26\n', 'v26.11.26\r\n']) assert.throws(() => tagToNpm(tag));
 });
+
+for (const h of ['claude', 'copilot', 'codex']) {
+  test(`install ${h} adds absent registration, skips expected existing registration`, async () => {
+    const calls = [];
+    const run = async (name, args) => {
+      calls.push(args);
+      if (args[1] === 'marketplace' && args[2] === 'list') return '[]';
+      return '';
+    };
+    assert.equal(await invoke(['install', '--harness', h, '--yes'], [], { run }), 0);
+    assert.deepEqual(calls, [['plugin', 'marketplace', 'list', '--json'], ['plugin', 'marketplace', 'add', 'NexaDuo/mARC'], golden[h].install[1]]);
+    const existing = [];
+    assert.equal(await invoke(['install', '--harness', h, '--yes'], existing), 0);
+    assert.deepEqual(existing.map(c => c[1]), golden[h].install);
+  });
+  test(`install ${h} preserves conflicting sources, continues and reports every harness`, async () => {
+    for (const conflict of [
+      { source: 'Local: /legacy' }, { source: { source: 'github', repo: 'someone/mARC' } },
+      { source: { source: 'github', repo: 'NexaDuo/mARC', ref: release.tag } },
+      { marketplaceSource: { sourceType: 'local', source: '/legacy' } },
+      { marketplaceSource: { sourceType: 'git', source: 'https://github.com/NexaDuo/mARC.git', ref: release.tag } },
+    ]) {
+      const calls = [], logs = [], next = h === 'copilot' ? 'codex' : 'copilot';
+      const otherRun = runner(calls);
+      const run = async (name, args, options) => {
+        if (name === h) { calls.push([name, args, options]); return JSON.stringify([{ name: 'nexaduo', ...conflict }]); }
+        return otherRun(name, args, options);
+      };
+      assert.equal(await invoke(['install', '--harness', h, '--harness', next, '--yes'], [], { run, log: s => logs.push(s) }), 1);
+      assert.equal(calls.filter(c => c[0] === h).length, 1);
+      assert.ok(calls.some(([name, args]) => name === next && args[1] === (next === 'codex' ? 'add' : 'install')));
+      assert.ok(logs.includes(`${h} plugin marketplace remove nexaduo`));
+      assert.ok(logs.includes(`${h} plugin marketplace add NexaDuo/mARC`));
+      assert.ok(logs.includes(`${h}: FAILED`)); assert.ok(logs.includes(`${next}: OK`));
+      assert.ok(!calls.some(([, args]) => args.includes('remove')));
+    }
+  });
+}
+
+test('failed list or native command never aborts remaining harnesses', async () => {
+  for (const command of ['install', 'update', 'doctor', 'uninstall']) {
+    const calls = [], logs = [], native = runner(calls);
+    const run = (h, args, options) => { if (h === 'claude') throw Error('fixture failure'); return native(h, args, options); };
+    assert.equal(await invoke([command, '--harness', 'claude', '--harness', 'codex', '--yes'], [], { run, log: s => logs.push(s) }), 1);
+    assert.ok(calls.some(([h]) => h === 'codex')); assert.ok(logs.includes('claude: FAILED')); assert.ok(logs.includes('codex: OK'));
+  }
+});
+
+test('dry-run lists exactly the real update settings paths, respecting scope', async t => {
+  const dir = await temp(t), other = path.join(dir, 'other'); await mkdir(other);
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', scope: 'local', projectPath: other }, { id: 'marc@nexaduo', scope: 'project', projectPath: dir }]);
+  const paths = [];
+  for (const dry of [true, false]) {
+    const calls = [], logs = [];
+    assert.equal(await invoke(['update', '--harness', 'claude', '--scope', 'local', ...(dry ? ['--dry-run'] : ['--yes'])], [],
+      { run: runner(calls, { claude: rows }), log: s => logs.push(s) }), 0);
+    paths.push(logs.filter(s => s.startsWith('Claude will edit')));
+    if (dry) assert.deepEqual(calls.map(c => c[1]), [['plugin', 'list', '--json']]);
+  }
+  assert.deepEqual(paths[0], paths[1]); assert.deepEqual(paths[0], [`Claude will edit ${path.join(other, '.claude/settings.local.json')}`]);
+});
+
+test('deleted Claude project is skipped while valid scopes and other harnesses finish', async t => {
+  const dir = await temp(t), missing = path.join(dir, 'deleted');
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', scope: 'project', projectPath: missing },
+    { id: 'marc@nexaduo', scope: 'user' }, { id: 'marc@nexaduo', scope: 'local', projectPath: dir }]);
+  const calls = [], logs = [];
+  assert.equal(await invoke(['update', '--harness', 'claude', '--harness', 'codex', '--yes'], [],
+    { run: runner(calls, { claude: rows }), log: s => logs.push(s) }), 1);
+  assert.ok(logs.some(s => s.includes('warning: skipped project') && s.includes(missing)));
+  assert.deepEqual(calls.filter(([h, a]) => h === 'claude' && a[1] === 'update').map(c => c[1].at(-1)), ['user', 'local']);
+  assert.ok(logs.includes('codex: OK'));
+});
+
+for (const h of ['claude', 'copilot', 'codex']) test(`doctor ${h} rejects matching tag from wrong repo, path, or registration`, async () => {
+  const source = JSON.parse(fixtures[h])[h === 'codex' ? 'installed' : '0'];
+  const good = (h === 'codex' ? source[0] : source).source;
+  assert.ok(sourceHasPointer(good, release.tag, h));
+  for (const bad of [{ ...good, [h === 'copilot' ? 'repo' : 'url']: 'fork/mARC' }, { ...good, path: 'other/plugin' }, `NexaDuo/mARC#${release.tag}`]) {
+    assert.equal(sourceHasPointer(bad, release.tag, h), false);
+  }
+  const logs = [];
+  const run = async (name, args) => args[1] === 'marketplace' ? JSON.stringify([{ name: 'nexaduo', source: 'Local: /legacy' }]) : fixtures[h];
+  assert.equal(await invoke(['doctor', '--harness', h], [], { run, log: s => logs.push(s) }), 1);
+  assert.ok(logs.some(s => s.includes('source drift')));
+});
+
+test('native Windows temp root expands RUNNER~1 and prefers a root without spaces', () => {
+  const short = 'C:\\Users\\RUNNER~1\\Temp';
+  const calls = [];
+  assert.deepEqual(tempRoots(short, { platform: 'win32', realpath: p => { calls.push(p); return 'C:\\Users\\runneradmin\\Temp'; } }), ['C:\\Users\\runneradmin\\Temp']);
+  assert.deepEqual(calls, [short]);
+  const roots = tempRoots(undefined, { platform: 'win32', env: { TMP: short, TEMP: 'C:\\with space' }, realpath: p => p === short ? 'C:\\Users\\runneradmin\\Temp' : 'C:\\with space' });
+  assert.equal(roots[0], 'C:\\Users\\runneradmin\\Temp');
+});
+
+test('Windows generated paths allow short names and separators only on marked argv', () => {
+  const options = { platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, generatedPaths: [1] };
+  for (const value of ['C:/Users/RUNNER~1/Temp/marc-123/release', 'C:\\Users\\RUNNER~1\\Temp\\marc-123\\release']) {
+    assert.doesNotThrow(() => spawnSpec('C:\\bin\\agy.cmd', ['install', value], options));
+    assert.throws(() => spawnSpec('C:\\bin\\agy.cmd', ['install', value], { ...options, generatedPaths: [] }));
+  }
+  for (const c of ['&', '|', '<', '>', '^', '%', '!', '"', '(', ')', '\r', '\n']) {
+    assert.throws(() => spawnSpec('C:\\bin\\agy.cmd', ['install', `C:/temp/x${c}y`], options), /Unsafe generated/);
+  }
+  assert.throws(() => spawnSpec('C:\\bin\\agy.cmd', ['install', 'C:/with space/release'], options), /TMP\/TEMP/);
+  assert.throws(() => spawnSpec('C:\\bin\\agy.cmd', ['install', '-evil'], options));
+});
+
+for (const [folder, error] of [['RUNNER~1', null], ['with space', /TMP\/TEMP/], ['x&y', /Unsafe generated/]]) {
+  test(`Antigravity generated-path marking through batch runner: ${folder}`, async t => {
+    const dir = await temp(t), root = path.join(dir, folder); await mkdir(root);
+    const calls = [], native = agyRunner(calls);
+    const run = async (h, args, options) => {
+      spawnSpec(`C:\\bin\\${h}.cmd`, args, { platform: 'win32', env: { SystemRoot: 'C:\\Windows' }, generatedPaths: options?.generatedPaths });
+      return native(h, args, options);
+    };
+    const action = installAgy({ run, release, tmpRoot: root });
+    if (error) await assert.rejects(action, error); else await action;
+    assert.deepEqual(await readdir(root), []);
+    if (!error) {
+      assert.deepEqual(calls.find(([h, a]) => h === 'git' && a[0] === 'clone')[2].generatedPaths, [7]);
+      assert.deepEqual(calls.find(([h, a]) => h === 'agy' && a[1] === 'install')[2].generatedPaths, [2]);
+    }
+  });
+}

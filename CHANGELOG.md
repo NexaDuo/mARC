@@ -26,6 +26,22 @@ date whose `YY.M.D` is already taken.
   catalogs so it continues testing the PR tree. npm version: `26.1126.0`.
 - #161's rejection of a self-owned npx installer is partially superseded;
   third-party installer rejections stand. README includes clone-free Codex setup.
+- Install reuses verified unpinned marketplaces; conflicting sources are preserved
+  with manual remedies. Harness failures are isolated, Codex upgrade targets only
+  `nexaduo`, Claude previews list actual settings paths, and deleted projects skip.
+- Windows generated temp paths expand short names, allow safe path separators
+  and `~`, and reject cmd metacharacters or spaces with a `TMP`/`TEMP` remedy.
+- Benchmarks install each arm's checkout through temporary local-source catalogs.
+  Version parity includes launcher package/release metadata and a null source SHA.
+- npm verification applies only to this launcher repo from `v26.11.26` onward;
+  other repos and older tags report `not_applicable`. Only bootstrap `v26.11.26`
+  / npm `26.1126.0` is exempt from attestation; all other checks still apply.
+- Maintainer release prerequisites: a `v*` tag ruleset restricting create/update/
+  delete, a rule blocking `refs/heads/v*` branches, the `npm-publish` environment
+  with required reviewers, and a trusted publisher bound to `npm-publish.yml`
+  plus environment `npm-publish`. Push the tag immediately after merge.
+  Tests have only `contents: read`; the dependent publish job gets OIDC after
+  environment approval and repeats checkout-SHA and `origin/main` ancestor gates.
 
 ## [26.11.25.1] - 2026-11-25
 

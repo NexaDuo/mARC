@@ -43,15 +43,36 @@ export function parseMarketplaces(harness, output) {
   throw new Error('Unrecognized marketplace list');
 }
 
-export function marketplaceWarnings(marketplaces) {
-  const text = JSON.stringify(marketplaces);
-  const pinned = /#[^"\s]+|"(?:ref|branch|tag)"\s*:\s*"[^"\s]+"/.test(text);
-  return pinned ? ['legacy-pinned marketplace; remove its ref manually, then add NexaDuo/mARC unpinned (launcher will not do this)'] : [];
+const REPOS = new Set(['NexaDuo/mARC', 'https://github.com/NexaDuo/mARC', 'https://github.com/NexaDuo/mARC.git']);
+
+export function marketplaceMatches(harness, market) {
+  const source = market.marketplaceSource ?? market.source;
+  // Pins are registration drift even if the plugin catalog itself is current.
+  const pinned = value => value && typeof value === 'object' && Object.entries(value).some(([key, v]) =>
+    (['ref', 'branch', 'tag', 'rev', 'commit', 'sha', 'gitRef'].includes(key) && v != null && v !== '') ||
+    (typeof v === 'object' && pinned(v)));
+  if (pinned(market)) return false;
+  if (typeof source === 'string') return harness !== 'codex' &&
+    (source === 'NexaDuo/mARC' || source === 'GitHub: NexaDuo/mARC');
+  if (!source || typeof source !== 'object') return false;
+  if (harness === 'codex') return (source.sourceType ?? source.source) === 'git' &&
+    REPOS.has(source.sourceType ? source.source : source.url);
+  return source.source === 'github' && source.repo === 'NexaDuo/mARC';
 }
 
-export function sourceHasPointer(source, tag) {
-  return typeof source === 'object' && source !== null ? source.ref === tag :
-    typeof source === 'string' && source.includes(tag);
+export function marketplaceWarnings(marketplaces, harness) {
+  const text = JSON.stringify(marketplaces);
+  const pinned = /#[^"\s]+|"(?:ref|branch|tag)"\s*:\s*"[^"\s]+"/.test(text);
+  if (pinned) return ['legacy-pinned marketplace; manual re-registration required'];
+  return marketplaces.some(m => !marketplaceMatches(harness, m)) ? ['marketplace source drift; expected NexaDuo/mARC unpinned'] : [];
+}
+
+export function sourceHasPointer(source, tag, harness) {
+  const folder = { claude: 'claude-code', copilot: 'copilot', codex: 'codex' }[harness];
+  return source !== null && typeof source === 'object' && source.ref === tag &&
+    source.path === `harnesses/${folder}/marc` && (harness === 'copilot' ?
+      source.source === 'github' && source.repo === 'NexaDuo/mARC' :
+      source.source === 'git-subdir' && source.url === 'NexaDuo/mARC');
 }
 
 // Native lists sometimes expose the catalog checkout root instead of plugin

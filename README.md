@@ -46,9 +46,10 @@ npx @nexaduo/marc install --harness codex
 npx @nexaduo/marc install --harness agy
 ```
 
-Use `--yes` in scripts, `--dry-run --yes` to preview without running any CLI,
-and `--scope project` or `--scope local` for Claude settings in the current
-checkout. The plan names the settings file Claude will edit. The launcher
+Use `--yes` in scripts and `--dry-run` to preview. A Claude update preview
+reads `claude plugin list --json` to list the same installed project settings
+paths as a real update. Use `--scope project` or `--scope local` to select
+Claude scopes. The plan names each settings file Claude will edit. The launcher
 runs the native plugin CLIs; it never writes harness settings itself.
 Antigravity uses a temporary, SHA-verified shallow clone, deleted after install.
 The npm package embeds one release: `v26.11.26` maps to npm `26.1126.0`.
@@ -277,7 +278,7 @@ copilot plugin update marc
 For OpenAI Codex:
 
 ```bash
-codex plugin marketplace upgrade
+codex plugin marketplace upgrade nexaduo
 codex plugin add marc@nexaduo
 ```
 

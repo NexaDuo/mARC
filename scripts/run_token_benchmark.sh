@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eo pipefail
 
+BENCH_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 EVENT_NAME="${GITHUB_EVENT_NAME:-push}"
 CURRENT_REF="${GITHUB_REF_NAME:-main}"
 GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
@@ -1039,6 +1041,18 @@ MSG
     fi
 }
 
+# Prepare temp catalogs for the exact arm tree, never its released remote
+# pointer. Keep copies alive for the run (Claude local sources are live).
+prepare_arm_catalog() {
+    local source_root="$1"
+    if [ -z "${BENCH_CATALOG_ROOT:-}" ]; then
+        BENCH_CATALOG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/marc-bench-catalogs.XXXXXX")"
+        register_exit_cleanup 'rm -rf -- "$BENCH_CATALOG_ROOT"'
+    fi
+    ARM_CATALOG="$(mktemp -d "$BENCH_CATALOG_ROOT/arm.XXXXXX")"
+    python3 "$BENCH_SCRIPT_DIR/local_test_marketplace.py" "$ARM_CATALOG" "$source_root" > /dev/null
+}
+
 # install_codex_plugin: install the plugin from THIS ref's checkout
 # (.agents/plugins/marketplace.json -> harnesses/codex/marc) into the
 # isolated CODEX_HOME, the same two calls the codex-install CI job makes.
@@ -1049,7 +1063,8 @@ install_codex_plugin() {
         return 1
     fi
     name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$root/.agents/plugins/marketplace.json")"
-    CODEX_HOME="$home" codex plugin marketplace add "$root" --json > /dev/null
+    prepare_arm_catalog "$root"
+    CODEX_HOME="$home" codex plugin marketplace add "$ARM_CATALOG" --json > /dev/null
     CODEX_HOME="$home" codex plugin add "marc@$name" --json > /dev/null
 }
 
@@ -1165,7 +1180,9 @@ run_codex_scenario() {
 # own checkout before each run (the same two calls the Claude arms make).
 select_claude_plugin_ref() {
     local root="$1"
-    (cd "$root" && ensure_marketplace_added "./" > /dev/null && claude plugin install marc@nexaduo > /dev/null)
+    prepare_arm_catalog "$root"
+    ensure_marketplace_added "$ARM_CATALOG" > /dev/null
+    claude plugin install marc@nexaduo > /dev/null
 }
 
 main_codex() {
@@ -1314,7 +1331,8 @@ JSON
     TASK_HASH=$(compute_task_hash "$CLAUDE_VERSION" "$MODEL" "$(task_set_blob)" "$ITERATIONS")
 
     if [ "$LOCAL_RUN" = "true" ]; then
-        ensure_marketplace_added "./"
+        prepare_arm_catalog "$PWD"
+        ensure_marketplace_added "$ARM_CATALOG"
         claude plugin install marc@nexaduo
         mkdir -p .agents
         printf '[telemetry]\nenabled = true\n' > .agents/team.toml
@@ -1350,7 +1368,8 @@ JSON
         add_arm_a_worktree "$ARM_A_DIR" "$PREV_TAG"
         pushd "$ARM_A_DIR"
 
-        ensure_marketplace_added "./"
+        prepare_arm_catalog "$PWD"
+        ensure_marketplace_added "$ARM_CATALOG"
         claude plugin install marc@nexaduo
 
         mkdir -p .agents
@@ -1369,7 +1388,8 @@ JSON
     fi
 
     echo "--- RUNNING ARM B ($CURRENT_REF with guard=$ARM_BD_MAX_READ_LINES) ---"
-    ensure_marketplace_added "./"
+    prepare_arm_catalog "$PWD"
+    ensure_marketplace_added "$ARM_CATALOG"
     claude plugin install marc@nexaduo
 
     mkdir -p .agents

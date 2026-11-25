@@ -3,6 +3,7 @@ import { accessSync, constants, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 export const SAFE_VALUE = /^[A-Za-z0-9@._/:#-]+$/;
+const SAFE_GENERATED_PATH = /^[A-Za-z0-9@._/:#~\\-]+$/;
 const FLAGS = new Set(['--json', '--dry-run', '--scope', '--depth', '--branch', '--no-checkout', '--no-optional-locks', '--detach', '--force', '-r']);
 export function safeValue(value) {
   if (typeof value !== 'string' || !SAFE_VALUE.test(value) || /[\r\n]/.test(value) || value.startsWith('-')) throw new Error(`Unsafe value: ${JSON.stringify(value)}`);
@@ -41,9 +42,18 @@ export function resolveExecutable(name, { env = process.env, cwd = process.cwd()
   throw new Error(`${name} was not found on PATH outside the current directory`);
 }
 
-export function spawnSpec(file, args, { platform = process.platform, env = process.env } = {}) {
+export function spawnSpec(file, args, { platform = process.platform, env = process.env, generatedPaths = [] } = {}) {
   if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(file)) return { file, args, options: {} };
-  for (const arg of args) {
+  for (const [index, arg] of args.entries()) {
+    // Only internal call sites mark generated absolute paths. User values
+    // always retain SAFE_VALUE and the constant-only flag check.
+    if (generatedPaths.includes(index)) {
+      if (typeof arg === 'string' && /\s/.test(arg) && !/[\r\n]/.test(arg)) throw new Error('Generated Windows batch path contains whitespace; set TMP/TEMP to a directory without spaces');
+      if (typeof arg !== 'string' || !path.win32.isAbsolute(arg) || !SAFE_GENERATED_PATH.test(arg) || /[\r\n]/.test(arg)) {
+        throw new Error(`Unsafe generated Windows batch path: ${JSON.stringify(arg)}`);
+      }
+      continue;
+    }
     if (typeof arg !== 'string' || !SAFE_VALUE.test(arg) || /[\r\n]/.test(arg) || (arg.startsWith('-') && !FLAGS.has(arg))) {
       throw new Error(`Unsafe Windows batch argument: ${JSON.stringify(arg)}`);
     }
@@ -86,7 +96,7 @@ export function createRunner({ env = process.env, cwd = process.cwd() } = {}) {
         GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath',
         GIT_CONFIG_VALUE_0: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_TERMINAL_PROMPT: '0' });
     }
-    const spec = spawnSpec(file, args, { env: childEnv });
+    const spec = spawnSpec(file, args, { env: childEnv, generatedPaths: options.generatedPaths });
     return new Promise((resolve, reject) => {
       const child = spawn(spec.file, spec.args, { ...spec.options, env: childEnv, cwd: options.cwd || cwd,
         stdio: ['ignore', 'pipe', 'pipe'] });

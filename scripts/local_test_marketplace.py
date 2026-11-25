@@ -25,10 +25,12 @@ def prepare(destination, source=ROOT):
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source / 'harnesses', destination / 'harnesses', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     for harness, catalog in CATALOGS.items():
+        if not (source / catalog).is_file():
+            continue  # Older benchmark arms may predate this harness.
         target = destination / catalog
         target.parent.mkdir(parents=True, exist_ok=True)
         data = json.loads((source / catalog).read_text())
-        for plugin in data['plugins']:
+        for plugin in data.get('plugins', []):
             if plugin['name'] == 'marc':
                 local = f'./harnesses/{harness}/marc'
                 plugin['source'] = {'source': 'local', 'path': local} if harness == 'codex' else local

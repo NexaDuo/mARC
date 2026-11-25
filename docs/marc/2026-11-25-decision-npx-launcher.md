@@ -42,15 +42,19 @@ P1–P4 passed on 2026-11-25 in isolated, deleted config directories: Claude
 |---|---|---|
 | Claude | `git-subdir`, `url: NexaDuo/mARC`, harness path, release `ref` | `marketplace update nexaduo`, then `plugin update marc@nexaduo --scope <s>` for every installed scope |
 | Copilot | `github`, `repo: NexaDuo/mARC`, harness path, release `ref` | `marketplace update nexaduo`, then `plugin update marc` |
-| Codex | `git-subdir`, `url: NexaDuo/mARC`, harness path, release `ref` | `marketplace upgrade`, then `plugin add marc@nexaduo` |
+| Codex | `git-subdir`, `url: NexaDuo/mARC`, harness path, release `ref` | `marketplace upgrade nexaduo`, then `plugin add marc@nexaduo` |
 | Antigravity | no marketplace | shallow tag clone, verify HEAD against embedded SHA, install harness subdirectory, cleanup in `finally` |
 
 Copilot rejects `git-subdir`. Its remote pointers require a git-hosted
 catalog; local-directory catalogs are live sources, unsuitable for probing
 copy-on-install. Codex re-adding an existing marketplace with another
 `--ref` fails; new installations add `NexaDuo/mARC` without a ref and let the
-catalog pointer govern. `doctor` reports legacy pins and gives manual
-guidance. The launcher never runs marketplace removal, including on Codex.
+catalog pointer govern. Install lists marketplaces first, skips add only for
+an expected unpinned registration, and preserves conflicting/local/pinned
+registrations with exact manual re-registration commands. `doctor` checks
+both the marketplace origin and the plugin pointer's repo, path and tag.
+Each harness reports success/failure independently; failures do not abort
+later harnesses. The launcher never runs marketplace removal, including on Codex.
 Antigravity copies its plugin and supports replacement. Reinstall preserves
 disabled state; enable only on a fresh install or when already enabled.
 The real GitHub-hosted catalog remains an end-to-end dogfood gate after landing.
@@ -60,9 +64,11 @@ The real GitHub-hosted catalog remains an end-to-end dogfood gate after landing.
 Top-level `launcher/` is independent of prompt compilation: zero dependencies,
 no lifecycle scripts, Node >=20, `marc` binary, and a package file allowlist.
 Commands: `install`, `update`, `doctor`, `uninstall`; repeatable `--harness`,
-Claude-only `--scope`, `--yes`, `--dry-run`. Non-TTY runs require `--yes`.
-Dry-run starts no subprocess. Project/local plans identify Claude's settings
-file. `doctor` reads native JSON lists for versions and reads cached catalogs for
+Claude-only `--scope`, `--yes`, `--dry-run`. Non-TTY mutations require `--yes`;
+`doctor` and dry-run need no confirmation. Claude update dry-run reads the same
+native installed-scope list as a real update and names every selected settings
+path before consent. Deleted project paths warn, skip that scope and leave a
+non-zero final status while valid scopes and other harnesses continue. `doctor` reads native JSON lists for versions and reads cached catalogs for
 release pointers, reports drift and legacy pins, and exits 1 on drift or an
 unverifiable catalog. Copilot cache lookup follows the locally probed native
 checkout layout; a changed layout fails closed until supported. Uninstall only removes plugins. `--version` accepts the embedded
@@ -72,34 +78,60 @@ Launch with `spawn(file, argv)`, without a shell. Resolve absolute executables
 from PATH/PATHEXT outside cwd; reject relative PATH entries and symlinks into
 cwd. On Windows only known executable extensions qualify. Batch launch uses
 system `cmd.exe /d /s /c`, never COMSPEC, with a strict argument allowlist and
-constant-only options. Batch arguments containing spaces or shell characters
-fail closed, including temporary paths. Git's environment/config is isolated;
+constant-only options. User values retain the strict allowlist. Only internal
+clone/install argv positions are marked as generated paths: absolute paths
+may contain `~`, backslashes and colons but reject cmd metacharacters
+(`& | < > ^ % ! " ( )`, CR/LF) and whitespace. Temp roots are expanded with
+`fs.realpathSync.native` (including 8.3 names), preferring an existing writable
+root without spaces. A generated batch path containing spaces fails with a
+`TMP`/`TEMP` remedy; the launcher never quotes it into acceptance. Git's environment/config is isolated;
 verify SHA before checkout, reject symlinks/submodules, check the manifest,
 and always remove the temporary clone.
 
 ## Publication and verification
 
 Keep `.github/workflows/npm-publish.yml` stable for npm trusted publishing.
-It triggers only on tag pushes, checks out `github.ref`, asserts tag/manifests/
-pointers/package parity, generates `release.json` with tag, GITHUB_SHA and npm
-version, then publishes publicly with provenance. Permissions: contents read,
-id-token write. No npm secret in GitHub. Source `release.json.sha` is null;
+It triggers only on tag pushes. The `test` job has only `contents: read`,
+checks out `github.ref`, asserts tag/manifests/pointers/package parity, embeds
+`release.json`, and runs the launcher suite. It fetches `origin/main`, asserts
+`git merge-base --is-ancestor "$GITHUB_SHA" origin/main`, and requires
+`git rev-parse HEAD` to equal `$GITHUB_SHA` (rejecting a moved-tag checkout).
+The dependent `publish` job runs behind `environment: npm-publish`, has
+`contents: read` plus `id-token: write`, repeats the same cheap assertions and
+rebuilds `release.json`, then publishes. Tests never run with OIDC permission.
+No npm secret in GitHub. Source `release.json.sha` is null;
 Antigravity fails closed until the publish workflow embeds the real commit.
 All actions are SHA-pinned (`actions/checkout` v5.1.0, `actions/setup-node` v5.0.0).
 
 Maintainer bootstrap: there is no placeholder. A maintainer publishes the first
 real launcher version once, from a clean checkout of its tag, with `release.json`
 generated as the workflow does and a short-lived granular token kept outside the
-repository and never in GitHub secrets. That single version has no provenance.
-The maintainer then configures the trusted publisher (`NexaDuo/mARC`,
-`npm-publish.yml`), sets "require 2FA and disallow tokens" and revokes the token.
-Every later version publishes from CI with provenance. A maintainer must
-create a `v*` tag ruleset blocking update and deletion. Neither task is automated
-by this PR. npm provenance helps only when someone verifies signatures; npx
+repository and never in GitHub secrets. Only bootstrap tag `v26.11.26`
+(npm `26.1126.0`) is exempt from attestation, via the explicit
+`BOOTSTRAP_UNATTESTED_TAG` constant in release verification; integrity, latest,
+version and peeled-tag SHA checks still apply. Every later version requires
+provenance. The npm org `nexaduo` ownership was verified by the operator.
+
+Before the first tag push, the maintainer must configure:
+
+- A `v*` tag ruleset restricting **creation, update and deletion** to maintainers.
+- A rule blocking creation of `refs/heads/v*` branches, avoiding branch/tag shadowing.
+- The `npm-publish` environment with required maintainer reviewers.
+- The npm trusted publisher bound to `NexaDuo/mARC`, workflow `npm-publish.yml`
+  **and environment `npm-publish`**; set "require 2FA and disallow tokens" and
+  revoke the bootstrap token after setup.
+
+These external settings are release prerequisites, not configured by this patch.
+Push the tag immediately after merge. Confirm each CLI's missing-ref failure
+mode once during dogfood; no claim is made that the offline tests prove it. npm provenance helps only when someone verifies signatures; npx
 does not verify it automatically.
 
-`release_verify.py` requires the mapped npm version, latest dist-tag,
-provenance presence, tarball integrity, and an embedded SHA matching the locally
+`release_verify.py` applies `npm_published` only when the repo has
+`launcher/package.json` named `@nexaduo/marc` and the tag is at least `v26.11.26`.
+Consumer repos and earlier mARC tags report `not_applicable` without registry
+I/O and do not count against overall `ok`. Applicable checks require the mapped
+npm version, latest dist-tag, provenance presence (with the exact bootstrap
+exception above), tarball integrity, and an embedded SHA matching the locally
 peeled tag commit. It does not cryptographically verify the attestation.
 
 ## Validation and release gates
@@ -108,7 +140,9 @@ Node's offline tests cover version mapping, exact native argv, scopes, no-write,
 no marketplace removal, no shell, non-TTY/dry-run, Windows batch validation,
 Antigravity failure cleanup/state, list fixtures and package contents. Linux
 and Windows CI run these tests. A schema-aware parity gate checks all three
-catalogs against all four manifests. Native CI installation uses temporary
+catalogs against all four manifests and the launcher's package version,
+release tag/npm and null source SHA. Token benchmarks also prepare temporary
+local-source catalogs from each arm's checkout, including older baselines. Native CI installation uses temporary
 copies with local relative sources to test the PR tree. Mocked Python tests
 cover npm verification without network.
 

@@ -1,17 +1,40 @@
 name: Publish npm launcher
 
-# Keep this filename stable: npm's trusted publisher binds to it.
+# Keep this filename stable: npm's trusted publisher binds to it and the
+# npm-publish environment, which must have maintainer required reviewers.
 on:
   push:
     tags: ['v*']
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
+  test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+      - name: Assert reviewed release identity, parity and embed release.json
+        run: bash scripts/prepare_npm_release.sh
+      - name: Test launcher and audit package allowlist
+        run: node --test launcher/
+
+  publish:
+    needs: test
+    environment: npm-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -22,23 +45,8 @@ jobs:
         with:
           node-version: '24'
           registry-url: https://registry.npmjs.org
-      - name: Assert tag, manifests and release pointers; embed release identity
-        run: |
-          python3 scripts/check_catalog_pointers.py
-          node --input-type=module <<'JS'
-          import fs from 'node:fs';
-          import { tagToNpm } from './launcher/lib/version.js';
-          const tag = process.env.GITHUB_REF_NAME;
-          const manifest = JSON.parse(fs.readFileSync('harnesses/claude-code/marc/.claude-plugin/plugin.json'));
-          if (tag !== `v${manifest.version}`) throw new Error('Tag/manifest mismatch');
-          if (!/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA)) throw new Error('Invalid release SHA');
-          const npm = tagToNpm(tag);
-          const pkg = JSON.parse(fs.readFileSync('launcher/package.json'));
-          if (pkg.version !== npm) throw new Error('Package/tag version mismatch');
-          fs.writeFileSync('launcher/release.json', JSON.stringify({ tag, sha: process.env.GITHUB_SHA, npm }, null, 2) + '\n');
-          JS
-      - name: Test launcher and audit package allowlist
-        run: node --test launcher/
+      - name: Reassert reviewed release identity and rebuild release.json
+        run: bash scripts/prepare_npm_release.sh
       - name: Publish with trusted publishing and provenance
         working-directory: launcher
         run: npm publish --access public --provenance

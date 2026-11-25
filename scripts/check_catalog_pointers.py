@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Release parity gate: four versions and three harness-specific pointers."""
 import json
+import re
+from datetime import date
 import sys
 from pathlib import Path
 
@@ -10,6 +12,17 @@ CATALOGS = {
     'copilot': '.github/plugin/marketplace.json',
     'codex': '.agents/plugins/marketplace.json',
 }
+
+
+def tag_to_npm(tag):
+    """Same calendar mapping and validation as launcher/lib/version.js."""
+    match = re.fullmatch(r"v([1-9][0-9])\.([1-9][0-9]?)\.([1-9][0-9]?)(?:\.([1-9][0-9]*))?", tag)
+    if not match:
+        raise ValueError('unsupported calendar tag')
+    y, month, day, n = (int(v or 0) for v in match.groups())
+    if date(2000 + y, month, day) < date(2026, 11, 25) or n > 9007199254740991:
+        raise ValueError('tag below launcher mapping floor or unsafe release number')
+    return f'{y}.{month * 100 + day}.{n}'
 
 
 def check(root=ROOT):
@@ -29,6 +42,12 @@ def check(root=ROOT):
         source.update(path=f'harnesses/{harness}/marc', ref=tag)
         if plugins[0]['source'] != source:
             raise ValueError(f'{catalog}: expected {source}, got {plugins[0]["source"]}')
+    package = json.loads((root / 'launcher/package.json').read_text())
+    release = json.loads((root / 'launcher/release.json').read_text())
+    if package['version'] != tag_to_npm(tag):
+        raise ValueError('launcher/package.json version does not match plugin tag mapping')
+    if release != {'tag': tag, 'npm': package['version'], 'sha': None}:
+        raise ValueError('launcher/release.json must match tag/npm and have a null source SHA')
     return tag
 
 

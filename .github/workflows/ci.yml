@@ -110,7 +110,7 @@ jobs:
         run: python3 scripts/check_catalog_pointers.py
 
       - name: Catalog and npm verification regressions (offline)
-        run: python3 -m unittest scripts/test_catalog_pointers.py core/scripts/test_npm_published.py
+        run: python3 -m unittest scripts/test_catalog_pointers.py scripts/test_npm_release_guards.py core/scripts/test_npm_published.py
 
       - name: Install Claude Code CLI (pinned)
         run: |

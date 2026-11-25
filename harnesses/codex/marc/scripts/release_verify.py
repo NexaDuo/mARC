@@ -36,10 +36,11 @@ Checks (all applicable checks must pass for `ok: true`):
                          draft, and IS marked "Latest" (via `gh release
                          list --json ...,isLatest`).
 
-  4. npm_published    — for tags >= v26.11.25: mapped npm version exists,
-                         is latest, has provenance, and the tarball release SHA
-                         matches the locally peeled tag commit. Older versions
-                         predate the launcher and skip this check.
+  4. npm_published    — only in the launcher source repo, for tags >=
+                         v26.11.26: mapped npm version exists, is latest, has
+                         provenance (except the exact bootstrap tag), and its
+                         tarball SHA matches the locally peeled tag commit.
+                         Consumer repos and older tags are not_applicable.
 
 Decision logic is a pure function, `verify_release()`, taking plain data (no
 I/O) so it's unit-testable offline — see `test_release_verify.py`, mirroring
@@ -73,6 +74,9 @@ from board import RepoConfig, _resolve_config  # noqa: E402
 
 SCHEMA_VERSION = 2
 DEFAULT_WORKFLOW = "release.yml"
+NPM_PUBLICATION_FLOOR = (26, 11, 26)
+# One manual bootstrap publish; all later releases require provenance.
+BOOTSTRAP_UNATTESTED_TAG = "v26.11.26"
 
 
 @dataclass
@@ -96,6 +100,7 @@ class ReleaseRow:
 class CheckResult:
     ok: bool
     notes: str
+    not_applicable: bool = False
 
 
 @dataclass
@@ -124,6 +129,7 @@ def verify_release(
     runs: list[WorkflowRun],
     releases: list[ReleaseRow],
     npm_check: Optional[CheckResult] = None,
+    *, npm_applicable: bool = False,
 ) -> VerifyResult:
     """Pure decision function — no I/O. `runs` and `releases` are assumed
     already filtered to the relevant tag/workflow by the caller (mirrors
@@ -188,14 +194,9 @@ def verify_release(
         )
 
     if npm_check is None:
-        try:
-            mapped_npm_version(expected_tag)
-            npm_check = CheckResult(False, "npm publication not checked")
-        except ValueError:
-            historical = re.fullmatch(r"v(?:0\.[0-9]+\.[0-9]+|[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]+)?)", expected_tag)
-            old = historical and tuple(int(x) for x in expected_tag[1:].split(".")[:3]) < (26, 11, 25)
-            npm_check = CheckResult(bool(old), "not applicable: tag predates launcher version floor" if old else "invalid npm release tag")
-    ok = tag_check.ok and run_check.ok and release_check.ok and npm_check.ok
+        npm_check = CheckResult(False, "npm publication not checked") if npm_applicable else CheckResult(
+            True, "not_applicable: no launcher publication required", not_applicable=True)
+    ok = tag_check.ok and run_check.ok and release_check.ok and (npm_check.not_applicable or npm_check.ok)
     return VerifyResult(
         schema_version=SCHEMA_VERSION,
         version=norm_version,
@@ -236,12 +237,17 @@ def fetch_npm_published(expected_tag: str, repo_root: Path) -> CheckResult:
     npm audit signatures' job. No subprocess executes downloaded code.
     """
     try:
+        manifest = json.loads((repo_root / "launcher/package.json").read_text())
+    except (OSError, ValueError):
+        manifest = {}
+    if not isinstance(manifest, dict) or manifest.get("name") != "@nexaduo/marc":
+        return CheckResult(True, "not_applicable: repository has no matching launcher package", not_applicable=True)
+    parts = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\.[0-9]+)?", expected_tag)
+    if parts and tuple(map(int, parts.groups())) < NPM_PUBLICATION_FLOOR:
+        return CheckResult(True, "not_applicable: tag predates npm publication floor", not_applicable=True)
+    try:
         version = mapped_npm_version(expected_tag)
     except ValueError:
-        # Only historical tags are exempt; malformed modern tags fail closed.
-        historical = re.fullmatch(r"v(?:0\.[0-9]+\.[0-9]+|[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]+)?)", expected_tag)
-        if historical and tuple(int(x) for x in expected_tag[1:].split(".")[:3]) < (26, 11, 25):
-            return CheckResult(True, "not applicable: tag predates launcher version floor")
         return CheckResult(False, "invalid npm release tag")
     try:
         metadata = json.loads(_download("https://registry.npmjs.org/@nexaduo%2fmarc", 16 * 1024 * 1024))
@@ -251,12 +257,13 @@ def fetch_npm_published(expected_tag: str, repo_root: Path) -> CheckResult:
         if metadata.get("dist-tags", {}).get("latest") != version:
             return CheckResult(False, f"npm latest does not point at {version}")
         dist = package["dist"]
-        attestation_url = dist.get("attestations", {}).get("url")
-        if not attestation_url:
-            return CheckResult(False, "npm provenance attestation is missing")
-        attestations = json.loads(_download(attestation_url, 4 * 1024 * 1024)).get("attestations", [])
-        if not any(a.get("predicateType") == "https://slsa.dev/provenance/v1" and a.get("bundle") for a in attestations):
-            return CheckResult(False, "npm provenance attestation is missing")
+        if expected_tag != BOOTSTRAP_UNATTESTED_TAG:
+            attestation_url = dist.get("attestations", {}).get("url")
+            if not attestation_url:
+                return CheckResult(False, "npm provenance attestation is missing")
+            attestations = json.loads(_download(attestation_url, 4 * 1024 * 1024)).get("attestations", [])
+            if not any(a.get("predicateType") == "https://slsa.dev/provenance/v1" and a.get("bundle") for a in attestations):
+                return CheckResult(False, "npm provenance attestation is missing")
         blob = _download(dist["tarball"], 8 * 1024 * 1024)
         integrity = "sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode("ascii")
         if dist.get("integrity") != integrity:
@@ -271,7 +278,8 @@ def fetch_npm_published(expected_tag: str, repo_root: Path) -> CheckResult:
             return CheckResult(False, "npm release.json SHA does not match peeled tag commit")
         if release.get("tag") != expected_tag or release.get("npm") != version or package.get("version") != version:
             return CheckResult(False, "npm release tag/version metadata mismatch")
-        return CheckResult(True, f"npm {version} is latest, attested, and matches {expected_sha}")
+        provenance = "bootstrap provenance exception" if expected_tag == BOOTSTRAP_UNATTESTED_TAG else "attested"
+        return CheckResult(True, f"npm {version} is latest, {provenance}, and matches {expected_sha}")
     except Exception as exc:  # noqa: BLE001
         return CheckResult(False, f"npm publication unreadable: {exc}")
 
@@ -349,7 +357,7 @@ def render_human(result: VerifyResult) -> str:
         f"  [{mark(result.tag_exists.ok)}] tag_exists       — {result.tag_exists.notes}",
         f"  [{mark(result.workflow_run.ok)}] workflow_run     — {result.workflow_run.notes}",
         f"  [{mark(result.release_published.ok)}] release_published — {result.release_published.notes}",
-        f"  [{mark(result.npm_published.ok)}] npm_published     — {result.npm_published.notes}",
+        f"  [{'N/A' if result.npm_published.not_applicable else mark(result.npm_published.ok)}] npm_published     — {result.npm_published.notes}",
         "",
         f"overall: {'OK' if result.ok else 'FAIL'}",
     ]

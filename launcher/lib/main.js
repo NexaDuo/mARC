@@ -1,10 +1,11 @@
-import { mkdtemp, rm, lstat, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, lstat, stat, readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createRunner, resolveExecutable, safeValue } from './process.js';
 import { tagToNpm } from './version.js';
-import { parsePlugins, parseMarketplaces, marketplaceWarnings, sourceHasPointer, readCatalogSource } from './lists.js';
+import { parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from './lists.js';
 
 export const HARNESSES = ['claude', 'copilot', 'codex', 'agy'];
 const SCOPES = ['user', 'project', 'local'];
@@ -48,8 +49,8 @@ export function parseArgs(argv) {
 const listArgs = () => ['plugin', 'list', '--json'];
 const scopeArgs = scope => ['--scope', scope];
 
-// A plan has no side effects. Dry-run exits before list commands; an actual
-// Claude update resolves project paths before interactive consent.
+// A plan has no side effects. Claude update (including dry-run) reads its
+// installed scopes and resolves project paths before interactive consent.
 export function plan(opts) {
   const plans = [];
   for (const h of opts.harnesses) {
@@ -60,11 +61,11 @@ export function plan(opts) {
     }
     else if (h === 'agy' && opts.command !== 'uninstall') commands.push(['plugin', 'list', '--json'], ['<verified shallow tag clone and reinstall; preserve enablement>']);
     else if (opts.command === 'install') {
-      commands.push(['plugin', 'marketplace', 'add', SLUG]);
+      commands.push(['plugin', 'marketplace', 'list', '--json'], ['plugin', 'marketplace', 'add', SLUG]);
       commands.push(['plugin', h === 'codex' ? 'add' : 'install', ID, ...(h === 'claude' ? scopeArgs(opts.scope || 'user') : [])]);
     } else if (opts.command === 'update') {
       if (h === 'claude') commands.push(listArgs(h));
-      commands.push(['plugin', 'marketplace', h === 'codex' ? 'upgrade' : 'update', ...(h === 'codex' ? [] : ['nexaduo'])]);
+      commands.push(['plugin', 'marketplace', h === 'codex' ? 'upgrade' : 'update', 'nexaduo']);
       commands.push(h === 'claude' ? ['plugin', 'update', ID, '--scope', opts.scope || '<each installed scope>'] :
         ['plugin', h === 'codex' ? 'add' : 'update', h === 'codex' ? ID : 'marc']);
     } else commands.push(['plugin', h === 'codex' ? 'remove' : 'uninstall', h === 'agy' ? 'marc' : ID,
@@ -87,12 +88,25 @@ async function checkTree(root, top = true) {
   }
 }
 
-export async function installAgy({ run, release, tmpRoot = os.tmpdir() }) {
+export function tempRoots(tmpRoot, { platform = process.platform, env = process.env, realpath = realpathSync.native } = {}) {
+  const candidates = tmpRoot ? [tmpRoot] : [os.tmpdir(), env.TMP, env.TEMP,
+    ...(platform === 'win32' && env.SystemRoot ? [path.win32.join(env.SystemRoot, 'Temp')] : [])];
+  const roots = [...new Set(candidates.filter(Boolean).flatMap(p => { try { return [realpath(p)]; } catch { return []; } }))];
+  // Prefer an existing root without spaces. Never create a shared root or
+  // weaken the batch check if all available roots contain spaces.
+  return platform === 'win32' ? [...roots.filter(p => !/\s/.test(p)), ...roots.filter(p => /\s/.test(p))] : roots;
+}
+
+export async function installAgy({ run, release, tmpRoot }) {
   if (typeof release.sha !== 'string' || release.sha.length !== 40 || !/^[a-f0-9]{40}$/.test(release.sha)) throw new Error('Release SHA is absent; use a published launcher');
   const installed = parsePlugins('agy', await run('agy', listArgs('agy')));
   if (installed.length > 1 || (installed.length && typeof installed[0].enabled !== 'boolean')) throw new Error('Cannot determine Antigravity enabled state');
   const enable = !installed.length || installed[0].enabled;
-  const temp = await mkdtemp(path.join(tmpRoot, 'marc-'));
+  let temp;
+  for (const root of tempRoots(tmpRoot)) {
+    try { temp = await mkdtemp(path.join(root, 'marc-')); break; } catch { /* Try the next existing root. */ }
+  }
+  if (!temp) throw new Error('Cannot create release directory; set TMP/TEMP to a writable directory without spaces');
   const clone = path.join(temp, 'release');
   // Git config and git's cwd are isolated before clone/checkout: no workspace
   // hooks, URL rewrites, templates or environment-selected repositories.
@@ -100,7 +114,7 @@ export async function installAgy({ run, release, tmpRoot = os.tmpdir() }) {
   const cliPath = p => process.platform === 'win32' ? p.replaceAll('\\', '/') : p;
   try {
     await run('git', ['clone', '--depth', '1', '--branch', release.tag, '--no-checkout',
-      'https://github.com/NexaDuo/mARC.git', cliPath(clone)], gitOptions);
+      'https://github.com/NexaDuo/mARC.git', cliPath(clone)], { ...gitOptions, generatedPaths: [7] });
     const options = { ...gitOptions, cwd: clone };
     const sha = (await run('git', ['rev-parse', 'HEAD'], options)).trim();
     if (sha !== release.sha) throw new Error(`Release SHA mismatch: expected ${release.sha}, got ${sha}`);
@@ -110,11 +124,18 @@ export async function installAgy({ run, release, tmpRoot = os.tmpdir() }) {
     await checkTree(clone);
     const manifest = JSON.parse(await readFile(path.join(clone, 'harnesses/antigravity/marc/plugin.json'), 'utf8'));
     if (`v${manifest.version}` !== release.tag) throw new Error('Antigravity manifest/tag mismatch');
-    await run('agy', ['plugin', 'install', cliPath(path.join(clone, 'harnesses/antigravity/marc'))]);
+    await run('agy', ['plugin', 'install', cliPath(path.join(clone, 'harnesses/antigravity/marc'))], { generatedPaths: [2] });
     if (enable) await run('agy', ['plugin', 'enable', 'marc']);
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
+}
+
+function manualRemedy(h, log, scope = 'user') {
+  log(`${h}: Manual remedy (review first; this removes the marketplace registration):`);
+  log(`${h} plugin marketplace remove nexaduo`);
+  log(`${h} plugin marketplace add NexaDuo/mARC`);
+  log(`${h} plugin ${h === 'codex' ? 'add' : 'install'} marc@nexaduo${h === 'claude' ? ` --scope ${scope}` : ''}`);
 }
 
 async function doctor(h, run, release, log, scope) {
@@ -128,20 +149,15 @@ async function doctor(h, run, release, log, scope) {
   }
   if (h !== 'agy') {
     const markets = parseMarketplaces(h, await run(h, ['plugin', 'marketplace', 'list', '--json']));
-    for (const warning of marketplaceWarnings(markets)) { log(`${h}: ${warning}`); drift = true; }
-    if (marketplaceWarnings(markets).length && h === 'codex') {
-      log('Manual remedy (review first; this removes the marketplace registration):');
-      log('codex plugin marketplace remove nexaduo');
-      log('codex plugin marketplace add NexaDuo/mARC');
-      log('codex plugin add marc@nexaduo');
-    }
+    for (const warning of marketplaceWarnings(markets, h)) { log(`${h}: ${warning}`); drift = true; }
+    if (marketplaceWarnings(markets, h).length) manualRemedy(h, log, scope);
     if (!markets.length) { log(`${h}: nexaduo marketplace missing`); drift = true; }
     const source = await readCatalogSource(h, markets, rows);
     const sources = source !== null ? [source] : rows.map(r => r.source).filter(Boolean);
     if (!sources.length) {
       log(`${h}: catalog pointer unavailable in native lists; cannot verify release source`);
       drift = true;
-    } else if (!sources.every(s => sourceHasPointer(s, release.tag))) {
+    } else if (!sources.every(s => sourceHasPointer(s, release.tag, h))) {
       log(`${h}: main-tracking with no matching release pointer; upgrade the marketplace catalog`);
       drift = true;
     }
@@ -168,20 +184,22 @@ export async function main(argv, { release, run = createRunner(), log = console.
   for (const p of plan(opts)) {
     for (const args of p.commands) log(`${p.harness} ${args.join(' ')}`);
   }
-  if (opts.harnesses.includes('claude') && opts.command !== 'doctor') {
-    const scopes = opts.scope ? [opts.scope] : opts.command === 'update' ? ['project', 'local'] : ['user'];
-    for (const s of scopes) if (s !== 'user') log(`Claude may edit ${path.join(cwd, '.claude', s === 'local' ? 'settings.local.json' : 'settings.json')} (${s} scope)`);
-  }
-  if (opts.dryRun) return 0;
-  let claudeRows;
+  let status = 0, claudeRows, claudeError;
   if (opts.command === 'update' && opts.harnesses.includes('claude')) {
-    claudeRows = parsePlugins('claude', await run('claude', listArgs('claude')));
-    for (const row of claudeRows) if (row.scope !== 'user') {
-      const target = row.projectPath || cwd;
-      if (!path.isAbsolute(target)) throw new Error('Claude: invalid project path');
-      log(`Claude will edit ${path.join(target, '.claude', row.scope === 'local' ? 'settings.local.json' : 'settings.json')}`);
-    }
+    try {
+      claudeRows = parsePlugins('claude', await run('claude', listArgs('claude')))
+        .filter(row => !opts.scope || row.scope === opts.scope);
+      for (const row of claudeRows) if (row.scope !== 'user') {
+        const target = row.projectPath || cwd;
+        if (!path.isAbsolute(target)) throw new Error('Claude: invalid project path');
+        log(`Claude will edit ${path.join(target, '.claude', row.scope === 'local' ? 'settings.local.json' : 'settings.json')}`);
+      }
+    } catch (e) { claudeError = e; status = 1; log(`claude: ${e.message}`); }
+  } else if (opts.harnesses.includes('claude') && opts.command !== 'doctor') {
+    const scope = opts.scope || 'user';
+    if (scope !== 'user') log(`Claude may edit ${path.join(cwd, '.claude', scope === 'local' ? 'settings.local.json' : 'settings.json')} (${scope} scope)`);
   }
+  if (opts.dryRun) return status;
   if (!opts.yes && opts.command !== 'doctor') {
     let accepted;
     if (confirm) accepted = await confirm();
@@ -191,33 +209,51 @@ export async function main(argv, { release, run = createRunner(), log = console.
     }
     if (!accepted) return 1;
   }
-  let status = 0;
+  const results = [];
   for (const h of opts.harnesses) {
-    if (opts.command === 'doctor') {
-      try { status = Math.max(status, await doctor(h, run, release, log, opts.scope)); }
-      catch (e) { log(`${h}: ${e.message}`); status = 1; }
-    } else if (h === 'agy' && ['install', 'update'].includes(opts.command)) {
-      await installAgy({ run, release, tmpRoot });
-    } else if (h === 'claude' && opts.command === 'update') {
-      const rows = claudeRows;
-      const scopes = [...new Set(rows.map(p => p.scope))];
-      if (!scopes.length) throw new Error('Claude: no installed mARC scopes; run install first');
-      if (scopes.some(s => !SCOPES.includes(s))) throw new Error('Claude: unmodifiable/unknown scope; update it manually');
-      if (opts.scope && !scopes.includes(opts.scope)) throw new Error('Claude: requested scope is not installed');
-      // Scope flags apply to every installed scope, including entries belonging
-      // to another project. Run from that project so no install is skipped.
-      const targets = new Map();
-      for (const row of rows) {
-        if (opts.scope && row.scope !== opts.scope) continue;
-        const targetCwd = row.scope === 'user' ? cwd : row.projectPath || cwd;
-        if (!path.isAbsolute(targetCwd)) throw new Error('Claude: invalid project path');
-        targets.set(`${row.scope}\0${targetCwd}`, { scope: row.scope, cwd: targetCwd });
+    let failed = false;
+    try {
+      if (opts.command === 'doctor') {
+        failed = Boolean(await doctor(h, run, release, log, opts.scope));
+      } else if (h === 'agy' && ['install', 'update'].includes(opts.command)) {
+        await installAgy({ run, release, tmpRoot });
+      } else if (h === 'claude' && opts.command === 'update') {
+        if (claudeError) throw claudeError;
+        const scopes = [...new Set(claudeRows.map(p => p.scope))];
+        if (!scopes.length) throw new Error('Claude: no installed mARC scopes; run install first');
+        if (scopes.some(s => !SCOPES.includes(s))) throw new Error('Claude: unmodifiable/unknown scope; update it manually');
+        const targets = new Map();
+        for (const row of claudeRows) {
+          const targetCwd = row.scope === 'user' ? cwd : row.projectPath || cwd;
+          if (!path.isAbsolute(targetCwd)) throw new Error('Claude: invalid project path');
+          targets.set(`${row.scope}\0${targetCwd}`, { scope: row.scope, cwd: targetCwd });
+        }
+        await run(h, ['plugin', 'marketplace', 'update', 'nexaduo']);
+        for (const target of targets.values()) {
+          try {
+            if (!(await stat(target.cwd)).isDirectory()) throw new Error('project path is not a directory');
+            await run(h, ['plugin', 'update', ID, ...scopeArgs(target.scope)], { cwd: target.cwd });
+          } catch (e) {
+            log(`claude: warning: skipped ${target.scope} scope at ${target.cwd}: ${e.message}`);
+            failed = true;
+          }
+        }
+      } else if (opts.command === 'install') {
+        const markets = parseMarketplaces(h, await run(h, ['plugin', 'marketplace', 'list', '--json']));
+        if (markets.length && !markets.every(m => marketplaceMatches(h, m))) {
+          manualRemedy(h, log, opts.scope);
+          throw new Error('nexaduo is registered from a different or unverified source; registration preserved');
+        }
+        if (!markets.length) await run(h, ['plugin', 'marketplace', 'add', SLUG]);
+        else log(`${h}: nexaduo already registered from ${SLUG}; skipping add`);
+        await run(h, ['plugin', h === 'codex' ? 'add' : 'install', ID, ...(h === 'claude' ? scopeArgs(opts.scope || 'user') : [])]);
+      } else {
+        for (const args of plan({ ...opts, harnesses: [h] })[0].commands) await run(h, args);
       }
-      await run(h, ['plugin', 'marketplace', 'update', 'nexaduo']);
-      for (const target of targets.values()) await run(h, ['plugin', 'update', ID, ...scopeArgs(target.scope)], { cwd: target.cwd });
-    } else {
-      for (const args of plan({ ...opts, harnesses: [h] })[0].commands) await run(h, args);
-    }
+    } catch (e) { log(`${h}: ${e.message}`); failed = true; }
+    results.push({ harness: h, failed });
+    if (failed) status = 1;
   }
+  for (const { harness, failed } of results) log(`${harness}: ${failed ? 'FAILED' : 'OK'}`);
   return status;
 }

@@ -16,7 +16,12 @@
 #     the marketplace repo you can inspect at https://github.com/NexaDuo/mARC.
 #   - Every step is echoed before it runs (`run()` prints the command).
 #   - No sudo, no writes outside Claude Code's own plugin store.
-#   - Override the source with:  MARC_SOURCE=./  ./install.sh   (local checkout).
+#   - MARC_SOURCE=./ ./install.sh reads the local catalog, whose pointer now
+#     resolves to the released tag; it does not install uncommitted local code.
+#   - To test local code, prepare a disposable local-source catalog:
+#       python3 scripts/local_test_marketplace.py /tmp/marc-local-catalog .
+#       MARC_SOURCE=/tmp/marc-local-catalog ./install.sh
+#     Keep that catalog while testing; remove it when finished.
 # -----------------------------------------------------------------------------
 set -euo pipefail
 

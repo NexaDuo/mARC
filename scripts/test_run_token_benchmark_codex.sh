@@ -45,7 +45,19 @@ cat > "$WORK/bin/codex" << 'STUB'
 echo "codex $*" >> "$FAKE_CALLS"
 case "$1" in
     --version) echo "codex-cli 0.0.0-fake"; exit 0 ;;
-    plugin) echo "CODEX_HOME=$CODEX_HOME $*" >> "$FAKE_CALLS"; echo '{}'; exit 0 ;;
+    plugin)
+        echo "CODEX_HOME=$CODEX_HOME $*" >> "$FAKE_CALLS"
+        if [ "$2 $3" = "marketplace add" ]; then
+            python3 - "$4" "$CODEX_HOME" >> "$FAKE_CALLS" <<'PYCODE'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+source = json.loads((root / '.agents/plugins/marketplace.json').read_text())['plugins'][0]['source']
+assert source == {'source': 'local', 'path': './harnesses/codex/marc'}, source
+marker = (root / source['path'] / 'version.txt').read_text().strip()
+print(f'CODEX_HOME={sys.argv[2]} installed-arm={marker} from-temp-catalog')
+PYCODE
+        fi
+        echo '{}'; exit 0 ;;
     exec) ;;
     *) exit 2 ;;
 esac
@@ -108,16 +120,16 @@ chmod +x "$WORK/bin/codex" "$WORK/bin/claude"
 # --- a throwaway repo with two refs that both carry a (fake) Codex harness -----
 REPO="$WORK/repo"
 mkdir -p "$REPO/.agents/plugins" "$REPO/harnesses/codex/marc" "$REPO/.claude-plugin"
-echo '{"name": "fakemkt", "plugins": []}' > "$REPO/.agents/plugins/marketplace.json"
+echo '{"name":"fakemkt","plugins":[{"name":"marc","source":{"source":"git-subdir","url":"NexaDuo/mARC","path":"harnesses/codex/marc","ref":"v99.1.1"}}]}' > "$REPO/.agents/plugins/marketplace.json"
 echo '{"name": "fakemkt"}' > "$REPO/.claude-plugin/marketplace.json"
-touch "$REPO/harnesses/codex/marc/.keep"
+echo one > "$REPO/harnesses/codex/marc/version.txt"
 G=(git -C "$REPO" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false)
 "${G[@]}" -c init.defaultBranch=main init -q
 "${G[@]}" add -A
 "${G[@]}" commit -q -m one
 "${G[@]}" tag v1.0.0
-echo two > "$REPO/two.txt"
-"${G[@]}" add two.txt
+echo two > "$REPO/harnesses/codex/marc/version.txt"
+"${G[@]}" add harnesses/codex/marc/version.txt
 "${G[@]}" commit -q -m two
 
 export FAKE_CALLS="$CALLS" FAKE_ROLLOUT="$WORK/rollout.py" TMPDIR="$WORK/tmp"
@@ -197,9 +209,14 @@ grep -q "Codex arm (issue #346)" "$OUT/log.txt" && pass "report ran at the end" 
     && pass "base ref resolved to previous release tag" || fail "manifest/base ref"
 grep -q '"head_ref": "feat-b"' "$RES/codex_manifest.json" && grep -q "\"head_sha\": \"$HEAD_SHA\"" "$RES/codex_manifest.json" \
     && pass "manifest records the real head ref and sha" || { fail "manifest head ref"; cat "$RES/codex_manifest.json"; }
-grep -q "CODEX_HOME=.*codex-home-a plugin marketplace add .*arm-a" "$CALLS" \
-    && grep -q "CODEX_HOME=.*codex-home-b plugin marketplace add $REPO" "$CALLS" \
-    && pass "plugin installed per arm from that ref's checkout" || fail "per-ref plugin install"
+grep -q "CODEX_HOME=.*codex-home-a installed-arm=one from-temp-catalog" "$CALLS" \
+    && grep -q "CODEX_HOME=.*codex-home-b installed-arm=two from-temp-catalog" "$CALLS" \
+    && pass "plugin installed per arm from that ref's local-source catalog" || fail "per-ref plugin install"
+if find "$WORK/tmp" -maxdepth 1 -name 'marc-bench-catalogs.*' | grep -q .; then
+    fail "temporary benchmark catalogs leaked after exit"
+else
+    pass "temporary benchmark catalogs cleaned after exit"
+fi
 SCRATCH="$(find "$WORK/tmp" -maxdepth 1 -name 'marc-local-run.*' | head -1)"
 ok=1
 for arm in a b; do
