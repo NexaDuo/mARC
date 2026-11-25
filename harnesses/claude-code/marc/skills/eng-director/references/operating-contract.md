@@ -34,6 +34,11 @@ machine paths and transport credentials locally. Record observation time and
 source, not just an assumed online flag. A directory lets a team find another
 team's techlead without sharing that team's full context.
 
+The contact adapter binding records the harness, session name or ID, the ordered
+adapter list, the adapter last verified to reach the session, and the observation
+time. The probe's JSON output (`director_contact_probe.py`) is the proposal source;
+the order and rules are in `operations.md`.
+
 Distinguish three operations:
 
 - Compaction of a live conversation: same team and claim owner.

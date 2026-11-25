@@ -26,6 +26,12 @@ Find the user-approved team registry or assemble a session-only inventory from
 provided team locations and read-only discovery. Do not require a new config
 file or install infrastructure. Before persisting new configuration, show the
 content and destination and obtain opt-in; reuse existing approved records.
+On every resume and before contacting a team, run
+`python3 "{{ bundled_scripts_dir }}/director_contact_probe.py" [--team NAME=HARNESS ...] [--list-sessions]`
+(read-only, never sends; `--list-sessions` is opt-in). A stored binding is a
+cache with an observation time: re-verify it against the probe, never trust it
+stale. Persist a new or changed binding in the private workspace only after
+opt-in, showing the content and destination first.
 Read [the operating contract](references/operating-contract.md) to establish:
 
 - team name → repository, techlead identity, current session and contact adapter;
