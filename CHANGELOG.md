@@ -8,6 +8,18 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Added
+- Launcher `--force` / `--force-local` for `install` and `update` (#440): re-register a
+  mismatched or pinned nexaduo marketplace through a shown, consented plan (remove,
+  verify, add, reinstall). Local or unverifiable sources also need `--force-local`.
+
+### Fixed
+- Launcher: a Claude marketplace registered by git URL (`https://github.com/NexaDuo/mARC.git`)
+  is the right source, not a false `FAILED` (#440). A Codex entry with only `name` and
+  `root` is reported as `registered from local root <root>` (still unverified), Codex's
+  `plugin list` source is used when `marketplace list` omits it, and the result table
+  says `not installed` where mARC is absent.
+
 ## [26.11.25.5] - 2026-11-25
 
 ### Added

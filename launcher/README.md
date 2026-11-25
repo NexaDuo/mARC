@@ -33,6 +33,8 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 | `--scope <user\|project\|local>` | Claude Code only: the scope to install, update or uninstall |
 | `--version <tag>` | Must equal the release embedded in this package; otherwise prints the matching `npx` command and exits |
 | `--dry-run` | Print the plan and change nothing (`install` still runs the read-only `plugin list` first) |
+| `--force` | `install`/`update` only: re-register a mismatched nexaduo marketplace (see below). The plan names the registration it removes |
+| `--force-local` | With `--force`: also replace a local-checkout or unverifiable registration (a possible dev clone) |
 | `--yes` | Skip the confirmation prompt. Required for `install`, `update` and `uninstall` when not in a terminal; `doctor` and `--dry-run` never need it |
 
 ## What it does, and what it doesn't
@@ -45,6 +47,21 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 - Antigravity installs from a shallow clone of the release tag, checked against
   the commit embedded in this package, then deletes the clone.
 - `uninstall` never removes a marketplace registration.
+- Without `--force`, a nexaduo marketplace registered from another source is
+  refused with a manual remedy and left untouched. A Claude registration by git
+  URL (`https://github.com/NexaDuo/mARC.git`) counts as the right source. A Codex
+  entry that lists only `name` and `root` (seen on Windows) cannot be verified: it
+  is reported as `registered from local root <root>` and the result says
+  `not installed` when mARC is absent.
+- `--force` re-registers it: the plan (also in `--dry-run`) shows the found source
+  and the exact `marketplace remove nexaduo`, `marketplace add NexaDuo/mARC` and
+  reinstall commands, and nothing runs before your confirmation (`--yes` works
+  without a terminal). Only `nexaduo` and `marc@nexaduo` are touched; if more than
+  one nexaduo registration is listed it refuses. A foreign or pinned source needs
+  only `--force`; a local-checkout or unverifiable source also needs
+  `--force-local`. The registration is re-read after you confirm and nothing is
+  removed if it changed. If `add` fails the old source is not restored, the later
+  harnesses skip their remove, and the exact retry commands are printed.
 - `install` never upgrades an existing install. If the installed version differs
   from the launcher release it prints `STALE` and exits non-zero; run `update`.
 - `doctor` changes nothing and exits non-zero when it finds drift. Claude
