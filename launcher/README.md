@@ -32,7 +32,7 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 | `--harness <claude\|copilot\|codex\|agy>` | Act only on the named harness; repeat for several. Default: every harness on `PATH` |
 | `--scope <user\|project\|local>` | Claude Code only: the scope to install, update or uninstall |
 | `--version <tag>` | Must equal the release embedded in this package; otherwise prints the matching `npx` command and exits |
-| `--dry-run` | Print the plan and change nothing |
+| `--dry-run` | Print the plan and change nothing (`install` still runs the read-only `plugin list` first) |
 | `--yes` | Skip the confirmation prompt. Required for `install`, `update` and `uninstall` when not in a terminal; `doctor` and `--dry-run` never need it |
 
 ## What it does, and what it doesn't
@@ -65,8 +65,8 @@ What a given package version pins:
 
 Use the latest package to keep every harness on the same release.
 
-Releases from `26.1125.4` on are published from GitHub Actions with npm
-provenance. `npx` does not verify provenance for you. To check it, run
+Releases are published from GitHub Actions with npm provenance once the npm
+trusted publisher is bound (#426); until then npm may lag the git tag. `npx` does not verify provenance for you. To check it, run
 `npm audit signatures` in a project that depends on the package; pinning an
 exact version then keeps you on the release you checked.
 

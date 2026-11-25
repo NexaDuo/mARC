@@ -1,4 +1,6 @@
 const VERSION = /\b(?:v)?([0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]+)?)\b/;
+// Native CLI output is untrusted: print only a VERSION-shaped value.
+export const safeVersion = v => /^v?[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]+)?$/.test(String(v ?? '')) ? String(v).replace(/^v/, '') : 'unknown';
 const stripAnsi = s => s.replace(/\x1b\[[0-9;]*m/g, '');
 
 export function parsePlugins(harness, output) {
@@ -14,6 +16,8 @@ export function parsePlugins(harness, output) {
       if (!version) throw new Error('Cannot read Copilot plugin version');
       result.push({ version, scope: '', enabled: !/disabled|enabled:\s*false/i.test(block), source: block.match(/Source:\s*(.+)/i)?.[1] });
     }
+    // Other plugins listed (name@market headers) but not mARC: nothing installed.
+    if (!result.length && blocks.some(b => /^.*\b[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+\b/.test(b))) return [];
     if (!result.length && !/plugins?\s*:\s*0/i.test(text)) throw new Error('Unrecognized Copilot plugin list');
     return result;
   }
@@ -70,13 +74,13 @@ export function marketplaceMatches(harness, market) {
 // Human-readable "sourceType: X, source: Y" for a marketplace row, with control
 // characters stripped (native CLI output is untrusted text).
 export function describeSource(market) {
-  const clean = v => String(v ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, '').slice(0, 200);
+  const clean = v => String(v ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '').slice(0, 200);
   const raw = market.marketplaceSource ?? market.source;
   let type, value;
   if (raw && typeof raw === 'object') {
     type = raw.sourceType ?? raw.source;
     value = raw.sourceType ? raw.source : raw.repo ?? raw.url ?? raw.path;
-  } else if (market.repo) { type = raw; value = market.repo; }
+  } else if (market.repo ?? market.url ?? market.path) { type = raw; value = market.repo ?? market.url ?? market.path; }
   else value = raw;
   return [type != null && `sourceType: ${clean(type)}`, `source: ${clean(value) || 'unknown'}`].filter(Boolean).join(', ');
 }

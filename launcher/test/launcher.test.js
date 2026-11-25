@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { main, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
 import { tagToNpm, npmToTag } from '../lib/version.js';
 import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/process.js';
-import { parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
+import { describeSource, safeVersion, parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const release = { tag: 'v26.11.25.2', sha: 'a'.repeat(40), npm: '26.1125.2' };
@@ -167,7 +167,7 @@ test('matching embedded version, repeated harnesses, discovery and invalid flags
   assert.deepEqual(calls.map(c => c[1]), golden.codex.update);
   for (const args of [['install', '--scope', 'local', '--harness', 'codex'], ['install', '--source', 'evil'], ['install', '--scope', 'admin'], ['install', '--harness']]) assert.throws(() => parseArgs(args));
 });
-test('interactive refusal has no child process', async () => {
+test('interactive refusal runs only the read-only plugin list', async () => {
   const calls = [];
   assert.equal(await invoke(['install', '--harness', 'claude'], calls, { isTTY: true, confirm: async () => false }), 1);
   // Only the read-only installed-list pre-read runs before consent.
@@ -705,10 +705,58 @@ test('Claude install ignores rows from other scopes and other projects', async (
   assert.ok(logs.includes('claude: STALE'));
 });
 test('Claude user-scope install is not satisfied by a project row', async () => {
-  const calls = [];
+  const calls = [], logs = [];
   const rows = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.14', scope: 'project', projectPath: process.cwd() }]);
-  await invoke(['install', '--harness', 'claude', '--yes'], calls, { run: runner(calls, { claude: rows }) });
+  assert.equal(await invoke(['install', '--harness', 'claude', '--yes'], calls, { run: runner(calls, { claude: rows }), log: s => logs.push(s) }), 1);
   assert.equal(mutating(calls).length, 1);
+  assert.ok(logs.includes('claude: marc is not listed after install'));
+});
+test('Claude row without scope counts as user scope', async () => {
+  const calls = [], logs = [];
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.2' }]);
+  assert.equal(await invoke(['install', '--harness', 'claude', '--yes'], calls, { run: runner(calls, { claude: rows }), log: s => logs.push(s) }), 0);
+  assert.deepEqual(mutating(calls), []);
+});
+test('Claude project row matches cwd through a symlink, not a relative path', async t => {
+  const dir = await temp(t), real = path.join(dir, 'real'), link = path.join(dir, 'link');
+  await mkdir(real); await symlink(real, link);
+  const row = projectPath => JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.2', scope: 'project', projectPath }]);
+  let calls = [];
+  assert.equal(await invoke(['install', '--harness', 'claude', '--scope', 'project', '--yes'], calls, { cwd: link, run: runner(calls, { claude: row(real) }) }), 0);
+  assert.deepEqual(mutating(calls), []);
+  calls = [];
+  await invoke(['install', '--harness', 'claude', '--scope', 'project', '--yes'], calls, { cwd: real, run: runner(calls, { claude: row('real') }) });
+  assert.equal(mutating(calls).length, 1);
+});
+test('disabled installed row logs a hint; version is sanitized', async () => {
+  const calls = [], logs = [];
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.2\u202e\nevil', scope: 'user', enabled: false }]);
+  assert.equal(await invoke(['install', '--harness', 'claude', '--yes'], calls, { run: runner(calls, { claude: rows }), log: s => logs.push(s) }), 1);
+  assert.ok(logs.includes('claude: marc is installed but disabled'));
+  assert.ok(logs.some(l => l.includes('already installed at unknown')), logs.join('|'));
+  assert.equal(safeVersion('v26.11.25.2'), '26.11.25.2');
+  assert.equal(safeVersion('1\n2'), 'unknown');
+});
+test('describeSource strips bidi/zero-width/line separators and shows flat path/url shapes', () => {
+  assert.equal(describeSource({ marketplaceSource: { sourceType: 'x\u200b', source: 'a\u202eb\u2028c\u2029d' } }), 'sourceType: x, source: abcd');
+  assert.equal(describeSource({ name: 'nexaduo', source: 'directory', path: '/dev/clone' }), 'sourceType: directory, source: /dev/clone');
+  assert.equal(describeSource({ name: 'nexaduo', source: 'git', url: 'https://example.test/x.git' }), 'sourceType: git, source: https://example.test/x.git');
+});
+test('Copilot list with other plugins but not marc parses empty; fresh install runs', async () => {
+  const text = 'Installed plugins:\n  other@market (v1.2.3)\n    Source: GitHub: a/b\n';
+  assert.deepEqual(parsePlugins('copilot', text), []);
+  assert.throws(() => parsePlugins('copilot', 'garbage with no headers'), /Unrecognized Copilot/);
+  const calls = [], logs = [];
+  let done = false;
+  const run = async (h, args, options) => {
+    calls.push([h, args, options]);
+    if (args[1] === 'install') { done = true; return ''; }
+    if (args[1] === 'list') return done ? fixtures.copilot : text;
+    return args[1] === 'marketplace' ? JSON.stringify(marketFixtures[h]) : '';
+  };
+  assert.equal(await invoke(['install', '--harness', 'copilot', '--yes'], calls, { run, log: s => logs.push(s) }), 0);
+  assert.equal(mutating(calls).length, 1);
+  assert.ok(logs.includes('copilot: OK'));
 });
 test('install with a matching version is OK without install or add', async () => {
   for (const h of ['claude', 'copilot', 'codex']) {

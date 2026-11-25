@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createRunner, resolveExecutable, safeValue } from './process.js';
 import { tagToNpm } from './version.js';
-import { parsePlugins, describeSource, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from './lists.js';
+import { safeVersion, parsePlugins, describeSource, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from './lists.js';
 
 export const HARNESSES = ['claude', 'copilot', 'codex', 'agy'];
 const SCOPES = ['user', 'project', 'local'];
@@ -15,6 +15,7 @@ const HELP = `Usage: marc install|update|doctor|uninstall [--yes] [--dry-run]
   [--harness claude|copilot|codex|agy]... [--scope user|project|local]
   [--version <embedded-tag>]
 No --harness: use every harness found on PATH. Node >=20 required.
+install reads the native plugin list (read-only) before consent, also in --dry-run, and again after installing.
 install never upgrades: an existing install that differs from this release is reported STALE (run update).
 --scope applies to Claude only. Non-TTY install/update/uninstall requires --yes
 (doctor and --dry-run never change anything and need no --yes).
@@ -64,6 +65,7 @@ export function plan(opts) {
     else if (opts.command === 'install') {
       commands.push(listArgs(h), ['plugin', 'marketplace', 'list', '--json'], ['plugin', 'marketplace', 'add', SLUG]);
       commands.push(['plugin', h === 'codex' ? 'add' : 'install', ID, ...(h === 'claude' ? scopeArgs(opts.scope || 'user') : [])]);
+      commands.push(listArgs(h)); // re-list after install to confirm the version
     } else if (opts.command === 'update') {
       if (h === 'claude') commands.push(listArgs(h));
       commands.push(['plugin', 'marketplace', h === 'codex' ? 'upgrade' : 'update', 'nexaduo']);
@@ -163,16 +165,21 @@ const sameVersion = (version, release) => `v${String(version).replace(/^v/, '')}
 
 // Rows that count as "already installed" for this request. Claude is
 // scope-aware; project/local rows from other repos never count.
+function samePath(a, b) {
+  try { return realpathSync.native(a) === realpathSync.native(b); }
+  catch { return path.resolve(a) === path.resolve(b); }
+}
 function installedRows(h, rows, scope, cwd) {
   if (h !== 'claude') return rows;
-  return rows.filter(r => r.scope === scope && (scope === 'user' ||
-    (typeof r.projectPath === 'string' && r.projectPath && path.resolve(r.projectPath) === path.resolve(cwd))));
+  // A Claude row with no scope field is a user-scope install.
+  return rows.filter(r => (r.scope || 'user') === scope && (scope === 'user' ||
+    (typeof r.projectPath === 'string' && path.isAbsolute(r.projectPath) && samePath(r.projectPath, cwd))));
 }
 
 // Compare installed rows with the launcher release. Returns the versions found
 // and whether any of them differs.
 function versionState(rows, release) {
-  const found = [...new Set(rows.map(r => r.version ? String(r.version).replace(/^v/, '') : 'unknown'))];
+  const found = [...new Set(rows.map(r => safeVersion(r.version)))];
   return { found: found.join(', '), stale: rows.some(r => !r.version || !sameVersion(r.version, release)) };
 }
 
@@ -182,7 +189,7 @@ async function doctor(h, run, release, log, scope) {
   if (!rows.length) log(`${h}\tmissing\t-`);
   for (const row of rows) {
     const match = sameVersion(row.version, release);
-    log(`${h}\t${row.version || 'unknown'}\t${row.scope || '-'}\t${row.enabled === false ? 'disabled' : 'enabled'}${match ? '' : '\tDRIFT'}`);
+    log(`${h}\t${safeVersion(row.version)}\t${row.scope || '-'}\t${row.enabled === false ? 'disabled' : 'enabled'}${match ? '' : '\tDRIFT'}`);
     drift ||= !match;
   }
   if (h !== 'agy') {
@@ -301,6 +308,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
           throw new Error(`nexaduo is registered from a different or unverified source (found ${found}); registration preserved`);
         }
         const report = rows => {
+          if (rows.some(r => r.enabled === false)) log(`${h}: marc is installed but disabled`);
           const { found, stale } = versionState(rows, release);
           if (stale) {
             log(`${h}: already installed at ${found} (launcher release ${release.tag}); run \`npx @nexaduo/marc update\``);
