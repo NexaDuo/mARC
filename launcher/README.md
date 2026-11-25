@@ -47,7 +47,13 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 - `uninstall` never removes a marketplace registration.
 - `install` never upgrades an existing install. If the installed version differs
   from the launcher release it prints `STALE` and exits non-zero; run `update`.
-- `doctor` changes nothing and exits non-zero when it finds drift.
+- `doctor` changes nothing and exits non-zero when it finds drift. Claude
+  `project` and `local` rows add the project they belong to as an extra field
+  (`~/repos/app` under your home directory, otherwise the absolute path). A harness whose only
+  problem is an older version, or a marketplace catalog still tracking `main`,
+  is `STALE`: run `npx @nexaduo/marc update`. `FAILED` means something else is
+  wrong (marketplace missing or drifted, plugin missing, release source
+  unverifiable, a native CLI error) and wins over `STALE`.
 
 ## Versions
 
@@ -69,6 +75,19 @@ Releases are published from GitHub Actions with npm provenance once the npm
 trusted publisher is bound (#426); until then npm may lag the git tag. `npx` does not verify provenance for you. To check it, run
 `npm audit signatures` in a project that depends on the package; pinning an
 exact version then keeps you on the release you checked.
+
+## Console colors
+
+Output is colored only when stdout is a terminal. Piped, redirected and CI
+output is plain text with no escape sequences, identical to earlier releases.
+
+- `NO_COLOR=1` (any non-empty value) turns color off.
+- `FORCE_COLOR=1|2|3` turns it on even when piped (`2` implies 256 colors, `3`
+  truecolor); `FORCE_COLOR=0` turns it off. `NO_COLOR` wins over `FORCE_COLOR`.
+- Truecolor is used when `COLORTERM` is `truecolor` or `24bit`, 256 colors when
+  `TERM` contains `256color`, otherwise 16 colors. `TERM=dumb` and legacy
+  Windows consoles stay plain.
+- `COLORFGBG` ending in `7` or `15` selects a light-background palette.
 
 ## Links
 

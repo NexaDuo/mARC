@@ -5,7 +5,8 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { main, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
+import { createStyle, stripControls } from '../lib/style.js';
+import { main, displayProject, makeOut, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
 import { tagToNpm, npmToTag } from '../lib/version.js';
 import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/process.js';
 import { describeSource, safeVersion, parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
@@ -51,7 +52,7 @@ function freshRunner(calls, after = {}) {
   };
 }
 function invoke(args, calls, extra = {}) {
-  return main(args, { release, run: runner(calls), log: silent, isTTY: false, ...extra });
+  return main(args, { release, run: runner(calls), log: silent, isTTY: false, env: {}, stdoutIsTTY: false, ...extra });
 }
 async function temp(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'marc-test-'));
@@ -303,12 +304,12 @@ esac
   const expected = [];
   for (const h of HARNESSES) for (const cmd of Object.keys(golden[h])) {
     const calls = [];
-    assert.equal(await main([cmd, '--harness', h, '--harness', h, '--yes', '--version', release.tag], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd }), 0);
+    assert.equal(await main([cmd, '--harness', h, '--harness', h, '--yes', '--version', release.tag], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd, env: {}, stdoutIsTTY: false }), 0);
     expected.push(...golden[h][cmd].map(a => [h, a]));
   }
   for (const cmd of ['install', 'update']) {
     const calls = [];
-    assert.equal(await main([cmd, '--harness', 'agy', '--yes'], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd, tmpRoot: dir }), 0);
+    assert.equal(await main([cmd, '--harness', 'agy', '--yes'], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd, tmpRoot: dir, env: {}, stdoutIsTTY: false }), 0);
     const clone = calls[1][1].at(-1);
     expected.push(['agy', ['plugin', 'list', '--json']], ['git', ['clone', '--depth', '1', '--branch', release.tag, '--no-checkout', 'https://github.com/NexaDuo/mARC.git', clone]],
       ['git', ['rev-parse', 'HEAD']], ['git', ['ls-tree', '-r', 'HEAD']], ['git', ['checkout', '--detach', '--force', 'HEAD']],
@@ -781,4 +782,292 @@ test('source-mismatch refusal names the found registration, strips control chara
   assert.ok(logs.some(s => s.includes('found sourceType: local, source: /dev/clone[31mevil')), logs.join('|'));
   assert.deepEqual(mutating(calls), []);
   assert.ok(logs.includes('codex plugin marketplace remove nexaduo'));
+});
+
+// ---- console styling (#431) ----
+const ESC = String.fromCharCode(27);
+const SGR = new RegExp(ESC + '\\[[0-9;]*m', 'g');
+const TTY = { isTTY: true, platform: 'linux' };
+const style = (env, extra = {}) => createStyle({ env, ...TTY, ...extra });
+const hasControl = s => [...s].some(c => { const n = c.charCodeAt(0); return n < 32 || (n >= 127 && n <= 159) || n === 0x202e; });
+
+test('color gating: TTY, NO_COLOR, FORCE_COLOR, TERM=dumb and non-TTY', () => {
+  assert.equal(style({}).enabled, true);
+  assert.equal(style({}, { isTTY: false }).enabled, false);
+  assert.equal(style({ TERM: 'dumb' }).enabled, false);
+  assert.equal(style({ NO_COLOR: '1' }).enabled, false);
+  assert.equal(style({ NO_COLOR: '' }).enabled, true, 'empty NO_COLOR is unset');
+  assert.equal(style({ NO_COLOR: '1', FORCE_COLOR: '1' }).enabled, false, 'NO_COLOR beats FORCE_COLOR');
+  for (const v of ['0', 'false']) assert.equal(style({ FORCE_COLOR: v }).enabled, false);
+  for (const v of ['1', '2', '3', 'true']) {
+    assert.equal(style({ FORCE_COLOR: v }, { isTTY: false }).enabled, true, `FORCE_COLOR=${v} beats non-TTY`);
+    assert.equal(style({ FORCE_COLOR: v, TERM: 'dumb' }, { isTTY: false }).enabled, true);
+  }
+  assert.equal(style({ FORCE_COLOR: '' }, { isTTY: false }).enabled, false, 'empty FORCE_COLOR is unset');
+  for (const s of [style({}, { isTTY: false }), style({ NO_COLOR: '1' }), style({ FORCE_COLOR: '0' })]) {
+    for (const role of ['brand', 'ok', 'error', 'info']) assert.equal(s.paint(role, 'x'), 'x');
+    assert.deepEqual(s.deco(['a']), []);
+  }
+});
+
+test('color gating: Windows rule', () => {
+  const win = (env, extra = {}) => style(env, { platform: 'win32', ...extra });
+  assert.equal(win({}).enabled, false, 'legacy conhost stays plain');
+  assert.equal(win({ WT_SESSION: 'x' }).enabled, true);
+  assert.equal(win({ ConEMUANSI: 'ON' }).enabled, true);
+  assert.equal(win({ ConEMUANSI: 'OFF' }).enabled, false);
+  assert.equal(win({ ANSICON: '1' }).enabled, true);
+  assert.equal(win({ TERM_PROGRAM: 'vscode' }).enabled, true);
+  assert.equal(win({ WT_SESSION: 'x' }, { isTTY: false }).enabled, false, 'CI/non-TTY stays plain');
+  const forced = win({ FORCE_COLOR: '1', COLORTERM: 'truecolor' }, { isTTY: false });
+  assert.equal(forced.enabled, true);
+  assert.equal(forced.depth, 4, 'forced legacy conhost is capped at 16 colors');
+  assert.equal(win({ WT_SESSION: 'x', COLORTERM: 'truecolor' }).depth, 24);
+});
+
+test('color depth selection and role table', () => {
+  assert.equal(style({ COLORTERM: 'truecolor' }).depth, 24);
+  assert.equal(style({ COLORTERM: '24bit' }).depth, 24);
+  assert.equal(style({ TERM: 'xterm-256color' }).depth, 8);
+  assert.equal(style({ TERM: 'xterm' }).depth, 4);
+  assert.equal(style({ FORCE_COLOR: '2' }).depth, 8);
+  assert.equal(style({ FORCE_COLOR: '3' }).depth, 24);
+  assert.equal(style({ FORCE_COLOR: '1', TERM: 'xterm' }).depth, 4);
+  assert.equal(style({ COLORTERM: 'truecolor' }).paint('ok', 'a'), `${ESC}[1;38;2;124;255;178ma${ESC}[0m`);
+  assert.equal(style({ TERM: 'xterm-256color' }).paint('stale', 'a'), `${ESC}[1;38;5;222ma${ESC}[0m`);
+  assert.equal(style({}).paint('failed', 'a'), `${ESC}[1;95ma${ESC}[0m`);
+  assert.equal(style({}).paint('warn', 'a'), `${ESC}[93ma${ESC}[0m`);
+  assert.equal(style({}).paint('dim', 'a'), `${ESC}[2ma${ESC}[0m`);
+  assert.equal(style({}).paint('info', 'a'), 'a');
+  // Light backgrounds (COLORFGBG last field 7 or 15) use the normal-intensity 16-color table.
+  for (const bg of ['0;15', '0;7']) {
+    assert.equal(style({ COLORFGBG: bg, COLORTERM: 'truecolor' }).paint('ok', 'a'), `${ESC}[1;32ma${ESC}[0m`);
+  }
+  assert.equal(style({ COLORFGBG: '15;0', COLORTERM: 'truecolor' }).light, false);
+  assert.throws(() => style({}).paint('not-a-role', 'a'), /Unknown style role/);
+});
+
+test('hostile native strings cannot inject SGR or controls', async () => {
+  const bidi = String.fromCharCode(0x202e), c1 = String.fromCharCode(0x9b), nl = String.fromCharCode(10);
+  const hostile = `${ESC}[31mred${ESC}[0m${c1}31m${bidi}evil${nl}next${String.fromCharCode(7)}`;
+  const s = style({ COLORTERM: 'truecolor' });
+  const painted = s.paint('error', hostile);
+  assert.equal(stripControls(hostile), '[31mred[0m31mevilnext');
+  assert.equal([...painted].filter(c => c === ESC).length, 2, 'only the two constant SGR sequences');
+  assert.ok(!hasControl(painted.replace(SGR, '')), 'no control characters survive in the body');
+  // End to end: a native CLI failure message carrying escapes, in color mode.
+  const logs = [];
+  const run = async (h, args) => { if (args[1] === 'list') throw new Error(hostile); return ''; };
+  const code = await main(['doctor', '--harness', 'codex'], { release, run, log: l => logs.push(l), isTTY: false, style: s });
+  assert.equal(code, 1);
+  const all = logs.join(nl);
+  assert.ok(all.includes(ESC), 'color mode is on');
+  assert.ok(!hasControl(all.replace(SGR, '').split(nl).join('')), 'only our own SGR sequences contain controls');
+  assert.ok(!all.includes(`${ESC}[31m`) && !all.includes(c1) && !all.includes(bidi), all);
+});
+
+test('plain install --dry-run output is pinned byte for byte, with no escapes', async () => {
+  const rel = { tag: 'v26.11.25.4', sha: 'a'.repeat(40), npm: '26.1125.4' };
+  const expected = ["mARC v26.11.25.4 (26.1125.4); install","claude plugin list --json","claude plugin marketplace list --json","claude plugin marketplace add NexaDuo/mARC","claude plugin install marc@nexaduo --scope user","claude plugin list --json","codex plugin list --json","codex plugin marketplace list --json","codex plugin marketplace add NexaDuo/mARC","codex plugin add marc@nexaduo","codex plugin list --json"];
+  const argv = ['install', '--dry-run', '--harness', 'claude', '--harness', 'codex'];
+  for (const [env, stdoutIsTTY] of [[{}, false], [{ TERM: 'dumb' }, true], [{ NO_COLOR: '1' }, true], [{ FORCE_COLOR: '0' }, true], [{ FORCE_COLOR: '3', NO_COLOR: '1' }, true]]) {
+    const logs = [];
+    assert.equal(await main(argv, { release: rel, run: async () => '[]', log: l => logs.push(l), isTTY: false, env, stdoutIsTTY, cwd: '/work/project' }), 0);
+    assert.deepEqual(logs, expected);
+    assert.ok(!logs.join('').includes(ESC));
+  }
+});
+
+test('color mode re-lays out the same text: headings, prompt glyph, remedy block, result table', async () => {
+  const rel = { tag: 'v26.11.25.4', sha: 'a'.repeat(40), npm: '26.1125.4' };
+  const logs = [];
+  const run = async (h, args) => args[1] === 'marketplace' && args[2] === 'list' ? JSON.stringify([{ name: 'nexaduo', source: 'github', repo: 'evil/x' }]) :
+    args[1] === 'list' ? '[]' : '';
+  const code = await main(['install', '--yes', '--harness', 'claude'],
+    { release: rel, run, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false });
+  assert.equal(code, 1);
+  const text = logs.map(l => l.replace(SGR, ''));
+  assert.equal(text[0], 'mARC v26.11.25.4 (26.1125.4); install');
+  assert.ok(text.includes('# claude'));
+  assert.ok(text.includes('  $ claude plugin list --json'));
+  assert.ok(text.some(l => l.startsWith('  +- claude: Manual remedy (review first;')));
+  assert.ok(text.includes('  |  $ claude plugin marketplace remove nexaduo'));
+  assert.ok(text.some(l => l.startsWith('  x claude: nexaduo is registered from a different')));
+  assert.ok(text.includes('* result'));
+  assert.ok(text.some(l => /^ {2}claude {3}FAILED {2}nexaduo is registered/.test(l)), text.join('|'));
+  assert.ok(text.every(l => [...l].every(c => c.charCodeAt(0) < 128)), 'ASCII only');
+  assert.ok(logs.some(l => l.includes(`${ESC}[1;95mFAILED`)));
+});
+
+test('doctor rows paint every column: hostile scope and version cannot reach the terminal', async () => {
+  const BEL = String.fromCharCode(7), nl = String.fromCharCode(10);
+  const hostile = `pro${ESC}[2Jject${ESC}]0;pwned${BEL}`;
+  const rel = { tag: 'v26.11.25.4', sha: 'a'.repeat(40), npm: '26.1125.4' };
+  const run = async (h, args) => args[1] === 'list' ? JSON.stringify([{ id: 'marc@nexaduo', version: `1.${ESC}[2J${BEL}`, scope: hostile, enabled: true }]) : '[]';
+  const logs = [];
+  await main(['doctor', '--harness', 'claude'], { release: rel, run, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false });
+  const all = logs.join(nl);
+  assert.ok(all.includes(ESC), 'color mode is on');
+  assert.ok(!hasControl(all.replace(SGR, '').split(nl).join('')), all);
+  assert.ok(!all.includes(`${ESC}[2J`) && !all.includes(`${ESC}]`), all);
+  assert.ok(all.includes('pro[2Jject]0;pwned'), 'sanitized text is kept visible');
+});
+
+test('strip regex covers ALM, Mongolian vowel separator and word-joiner range', () => {
+  for (const cp of [0x061c, 0x180e, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064]) {
+    assert.equal(stripControls(`a${String.fromCharCode(cp)}b`), 'ab', cp.toString(16));
+  }
+});
+
+test('buffered color mode keeps a line for a harness not registered via begin()', () => {
+  const logs = [];
+  const out = makeOut(l => logs.push(l), createStyle({ env: { FORCE_COLOR: '1' }, isTTY: false }));
+  out.begin(['claude']);
+  out.line('codex', 'warn', 'codex: late');
+  out.line('claude', 'warn', 'claude: early');
+  out.flush();
+  const text = logs.map(l => l.replace(SGR, ''));
+  assert.deepEqual(text.filter(l => /late|early/.test(l)), ['  ! claude: early', '  ! codex: late']);
+});
+
+test('result detail reflects the outcome, not a pre-consent warning; doctor exceptions show the error', async () => {
+  const rel = { tag: 'v26.11.25.4', sha: 'a'.repeat(40), npm: '26.1125.4' };
+  const cwd = os.tmpdir();
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.4', scope: 'project', projectPath: cwd }]);
+  let logs = [];
+  const opts = { release: rel, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false, cwd };
+  assert.equal(await main(['update', '--yes', '--harness', 'claude'], { ...opts, run: async (h, a) => a[1] === 'list' ? rows : '' }), 0);
+  let text = logs.map(l => l.replace(SGR, ''));
+  assert.ok(text.some(l => l.startsWith('  ! Claude will edit')), 'pre-consent warning was shown');
+  assert.ok(text.some(l => /^ {2}claude {3}OK {6}done$/.test(l)), text.join('|'));
+  logs = [];
+  assert.equal(await main(['doctor', '--harness', 'codex'], { ...opts, run: async () => { throw new Error('boom'); } }), 1);
+  text = logs.map(l => l.replace(SGR, ''));
+  assert.ok(text.some(l => /^ {2}codex {4}FAILED {2}boom$/.test(l)), text.join('|'));
+});
+
+// #435: doctor project column and STALE/FAILED classification.
+const claudeRow = (scope, projectPath, version = '26.11.25.2') => ({ id: 'marc@nexaduo', version, scope, enabled: true, ...(projectPath === undefined ? {} : { projectPath }),
+  source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } });
+async function doctorRun(h, opts = {}, extra = {}) {
+  const logs = [];
+  const run = async (name, a) => a[1] === 'marketplace' ? JSON.stringify(opts.markets ?? marketFixtures[h]) : opts.list ?? fixtures[h];
+  const code = await main(['doctor', '--harness', h], { release, run, log: l => logs.push(l), isTTY: false, env: {}, stdoutIsTTY: false, platform: 'linux', home: '/home/user', ...extra });
+  return { code, logs, text: logs.map(l => l.replace(SGR, '')) };
+}
+
+test('doctor Claude project/local rows show ~-relative, absolute and sanitized project paths', async () => {
+  const BEL = String.fromCharCode(7);
+  const list = JSON.stringify([claudeRow('user'), claudeRow('project', '/home/user/repos/app'), claudeRow('local', '/home/user/repos/other'),
+    claudeRow('project', '/srv/work/x'), claudeRow('project', `/home/user/${ESC}[2Jhost${BEL}`), claudeRow('project', '/home/username/evil')]);
+  const { code, logs, text } = await doctorRun('claude', { list });
+  assert.equal(code, 0);
+  const rows = logs.filter(l => l.startsWith('claude\t'));
+  assert.deepEqual(rows.map(r => r.split('\t')), [
+    ['claude', '26.11.25.2', 'user', 'enabled'],
+    ['claude', '26.11.25.2', 'project', 'enabled', '~/repos/app'],
+    ['claude', '26.11.25.2', 'local', 'enabled', '~/repos/other'],
+    ['claude', '26.11.25.2', 'project', 'enabled', '/srv/work/x'],
+    ['claude', '26.11.25.2', 'project', 'enabled', '~/[2Jhost'],
+    ['claude', '26.11.25.2', 'project', 'enabled', '/home/username/evil']]);
+  assert.ok(!logs.join('').includes(ESC) && !logs.join('').includes(BEL));
+  assert.deepEqual(text.slice(-1), ['claude: OK']);
+  // Color mode keeps the same data, painted, with no stray controls.
+  const color = await doctorRun('claude', { list }, { env: { FORCE_COLOR: '1' } });
+  const ctext = color.text.filter(l => /^ {2}claude /.test(l));
+  assert.ok(ctext.some(l => /project {1,}enabled {1,}~\/repos\/app$/.test(l)), ctext.join('|'));
+  assert.ok(!hasControl(color.logs.join('\n').replace(SGR, '').split('\n').join('')));
+  assert.ok(color.text.every(l => [...l].every(c => c.charCodeAt(0) < 128)));
+});
+
+test('doctor project column appends after DRIFT and the home option defaults from env', async () => {
+  const list = JSON.stringify([claudeRow('project', '/home/me/repos/app', '26.11.25.1')]);
+  const { logs } = await doctorRun('claude', { list }, { home: undefined, env: { HOME: '/home/me' } });
+  assert.ok(logs.includes('claude\t26.11.25.1\tproject\tenabled\tDRIFT\t~/repos/app'), logs.join('|'));
+});
+
+test('doctor project column on win32 uses win32 path rules and ~/ output', async () => {
+  const list = JSON.stringify([claudeRow('project', 'C:\\Users\\u\\repos\\app'), claudeRow('local', 'D:\\work\\app'), claudeRow('project', 'c:\\users\\U')]);
+  const { logs } = await doctorRun('claude', { list }, { platform: 'win32', home: 'C:\\Users\\u' });
+  const rows = logs.filter(l => l.startsWith('claude\t')).map(r => r.split('\t').pop());
+  assert.deepEqual(rows, ['~/repos/app', 'D:\\work\\app', '~']);
+  const env = await doctorRun('claude', { list }, { platform: 'win32', home: undefined, env: { USERPROFILE: 'C:\\Users\\u', HOME: '/ignored' } });
+  assert.ok(env.logs.some(l => l.endsWith('\t~/repos/app')), env.logs.join('|'));
+});
+
+const staleHint = 'run `npx @nexaduo/marc update`';
+for (const h of ['claude', 'codex', 'agy']) {
+  test(`doctor ${h} version-only drift is STALE with the update hint and a non-zero exit`, async () => {
+    const list = fixtures[h].replaceAll('26.11.25.2', '26.11.25.1');
+    const { code, text } = await doctorRun(h, { list });
+    assert.equal(code, 1);
+    assert.ok(text.includes(`${h}: STALE`), text.join('|'));
+    assert.ok(text.some(l => l.includes(staleHint)));
+    assert.ok(!text.includes(`${h}: FAILED`));
+    const color = await doctorRun(h, { list }, { env: { FORCE_COLOR: '1' } });
+    assert.ok(color.logs.some(l => l.includes(`${ESC}[1;93mSTALE`)), 'STALE uses the amber role');
+    assert.ok(color.text.some(l => new RegExp(`^ {2}${h} +STALE +out of date; run`).test(l)));
+  });
+}
+
+test('doctor codex catalog behind (main-tracking, version matches) is STALE', async () => {
+  const list = fixtures.codex.replace(release.tag, 'main');
+  const { code, text } = await doctorRun('codex', { list });
+  assert.equal(code, 1);
+  assert.ok(text.includes('codex: STALE') && text.some(l => l.includes('main-tracking')), text.join('|'));
+});
+
+test('doctor source classification: only a ref-only difference is STALE, foreign sources are FAILED', async () => {
+  const good = claudeRow('user').source;
+  const cases = [[{ ...good, ref: 'main' }, 'STALE'], [{ source: 'git-subdir', url: 'NexaDuo/mARC', path: good.path }, 'STALE'],
+    [{ ...good, url: 'Evil/mARC' }, 'FAILED'], [{ source: 'directory', path: '/tmp/x' }, 'FAILED'], ['NexaDuo/mARC', 'FAILED'],
+    [{ ...good, path: 'harnesses/other/marc' }, 'FAILED'], [{ ...good, source: 'github', ref: 'main' }, 'FAILED']];
+  for (const [source, want] of cases) {
+    const { text } = await doctorRun('claude', { list: JSON.stringify([{ ...claudeRow('user'), source }]) });
+    assert.ok(text.includes(`claude: ${want}`), `${JSON.stringify(source)}: ${text.join('|')}`);
+    if (want === 'FAILED') assert.ok(text.some(l => l.includes('does not match the expected release source')), text.join('|'));
+  }
+});
+
+test('doctor row with a missing or empty version is FAILED (version unreported)', async () => {
+  for (const version of [undefined, '', '  ']) {
+    const { code, text } = await doctorRun('claude', { list: JSON.stringify([{ ...claudeRow('user'), version }]) });
+    assert.equal(code, 1);
+    assert.ok(text.includes('claude: FAILED') && text.some(l => l.includes('claude: version unreported')), text.join('|'));
+  }
+});
+
+test('displayProject: empty after stripping is "-", and a root home is never shortened', () => {
+  assert.equal(displayProject(String.fromCharCode(7), '/home/u', 'linux'), '-');
+  assert.equal(displayProject('/srv/app', '/', 'linux'), '/srv/app');
+  assert.equal(displayProject('C:\\work\\app', 'C:\\', 'win32'), 'C:\\work\\app');
+  assert.equal(displayProject('/home/u/app', '/home/u', 'linux'), '~/app');
+});
+
+test('doctor FAILED cases: codex local source, missing marketplace, missing plugin, unverifiable, errors', async () => {
+  const local = [{ name: 'nexaduo', marketplaceSource: { sourceType: 'local', source: '/home/user/mARC' } }];
+  let r = await doctorRun('codex', { markets: { marketplaces: local } });
+  assert.equal(r.code, 1); assert.ok(r.text.includes('codex: FAILED'), r.text.join('|'));
+  r = await doctorRun('codex', { markets: { marketplaces: [] } });
+  assert.ok(r.text.includes('codex: FAILED') && r.text.some(l => l.includes('marketplace missing')));
+  r = await doctorRun('codex', { list: '{"installed":[]}' });
+  assert.equal(r.code, 1); assert.ok(r.text.includes('codex: FAILED'));
+  assert.ok(r.text.some(l => l.includes('run `npx @nexaduo/marc install`')), r.text.join('|'));
+  r = await doctorRun('agy', { list: '[]' });
+  assert.ok(r.text.includes('agy: FAILED'));
+  r = await doctorRun('codex', { list: JSON.stringify({ installed: [{ pluginId: 'marc@nexaduo', version: '26.11.25.2', installed: true, enabled: true }] }) });
+  assert.ok(r.text.includes('codex: FAILED'), 'release source unverifiable: ' + r.text.join('|'));
+  r = await doctorRun('codex', { list: 'garbage' });
+  assert.ok(r.text.includes('codex: FAILED'));
+});
+
+test('doctor mixed STALE and FAILED reports FAILED, in the magenta role', async () => {
+  const local = [{ name: 'nexaduo', marketplaceSource: { sourceType: 'local', source: '/home/user/mARC' } }];
+  const list = fixtures.codex.replaceAll('26.11.25.2', '26.11.25.1');
+  const r = await doctorRun('codex', { list, markets: { marketplaces: local } });
+  assert.equal(r.code, 1);
+  assert.ok(r.text.includes('codex: FAILED') && !r.text.includes('codex: STALE'), r.text.join('|'));
+  assert.ok(r.logs.every(l => [...l].every(c => c.charCodeAt(0) < 128)));
+  const c = await doctorRun('codex', { list, markets: { marketplaces: local } }, { env: { FORCE_COLOR: '1' } });
+  assert.ok(c.logs.some(l => l.includes(`${ESC}[1;95mFAILED`)));
 });

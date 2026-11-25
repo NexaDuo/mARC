@@ -31,6 +31,18 @@ date whose `YY.M.D` is already taken.
   (source type and source, control characters stripped). It still never removes
   or alters the registration (#428).
 
+### Added
+- Colored, structured launcher output in the mARC palette (#431): per-harness
+  headings, `$` command lines, a manual-remedy block and a result table. Color
+  is on only for a TTY (`NO_COLOR`, `FORCE_COLOR` and `COLORTERM` are honored,
+  legacy Windows consoles stay plain), native-CLI text is stripped of control
+  characters before it is painted, and plain/piped output is unchanged.
+
+- `doctor` shows the project for Claude project/local rows (`~`-relative under
+  home) and reports version-only or catalog-behind drift as `STALE` with the
+  `update` hint instead of `FAILED`; real errors still win, including a foreign
+  marketplace source or an unreported version (#435).
+
 ### Changed
 - All four harnesses and the catalog pointers move to `v26.11.25.4` (npm
   `26.1125.4`).
@@ -46,9 +58,10 @@ date whose `YY.M.D` is already taken.
 - All four harnesses and the catalog pointers move to `v26.11.25.3` (npm
   `26.1125.3`). This is the first release published entirely by the
   `Release` workflow with npm trusted publishing and provenance.
-- Addendum (26.11.25.4): that claim did not hold. `v26.11.25.3` was tagged, but its
-  npm publish failed (E404 on PUT: the trusted publisher was not yet bound, #426),
-  so npm `26.1125.3` never reached the registry.
+- Addendum (26.11.25.4): the first publish of `v26.11.25.3` failed (E404 on
+  PUT, because the trusted publisher was not yet bound, #426). After the
+  binding, a re-run of the `Release` job published npm `26.1125.3` with
+  provenance.
 
 ## [26.11.25.2] - 2026-11-25
 
