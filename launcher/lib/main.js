@@ -198,13 +198,14 @@ export function makeOut(log, st) {
       for (const c of cmds) put(h, `  ${p('remedy', '|')}  ${p('dim', '$ ')}${p('cmd', c)}`);
       put(h, `  ${p('remedy', '+-')}`);
     },
-    row(h, cols, drift) {
-      if (!st.enabled) return log(cols.join('\t') + (drift ? '\tDRIFT' : ''));
+    row(h, cols, drift, project) {
+      const extra = project === undefined ? '' : stripControls(project);
+      if (!st.enabled) return log(cols.join('\t') + (drift ? '\tDRIFT' : '') + (extra ? `\t${extra}` : ''));
       const widths = [7, 10, 7, 8];
       // Every column is painted (so sanitized) and padded on its stripped length.
       const cell = (c, n, role) => p(role, pad(stripControls(c), n));
       const body = cols.slice(1).map((c, i) => cell(c, widths[i + 1], 'info')).join('  ');
-      put(h, `  ${cell(cols[0], widths[0], 'harness')}  ${body}${drift ? `  ${p('drift', 'DRIFT')}` : ''}`.trimEnd());
+      put(h, `  ${cell(cols[0], widths[0], 'harness')}  ${body}${drift ? `  ${p('drift', 'DRIFT')}` : extra ? `  ${' '.repeat(5)}` : ''}${extra ? `  ${p('info', extra)}` : ''}`.trimEnd());
     },
     detail(h) { const t = last.get(h) || 'done';
       return t.startsWith(`${h}: `) ? t.slice(h.length + 2) : t; },
@@ -250,40 +251,80 @@ function versionState(rows, release) {
   return { found: found.join(', '), stale: rows.some(r => !r.version || !sameVersion(r.version, release)) };
 }
 
-async function doctor(h, run, release, out, scope) {
+// Project column for Claude project/local rows: ~-relative under home, else
+// absolute. Control characters are stripped. Path semantics follow the injected
+// platform (path.win32 vs path.posix), not the host, and the ~-relative form
+// always uses forward slashes ("~/repos/app") on every platform.
+export function displayProject(projectPath, home, platform = process.platform) {
+  if (typeof projectPath !== 'string' || !projectPath) return '-';
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  const clean = stripControls(projectPath);
+  if (!clean) return '-';
+  const h = typeof home === 'string' ? stripControls(home) : '';
+  // A filesystem-root home would turn every path into "~/..."; print absolute.
+  if (h && P.dirname(h) !== h && P.isAbsolute(clean)) {
+    const rel = P.relative(h, clean);
+    if (rel === '') return '~';
+    if (rel !== '..' && !rel.startsWith(`..${P.sep}`) && !P.isAbsolute(rel)) return `~/${rel.split(P.sep).join('/')}`;
+  }
+  return clean;
+}
+
+// Returns { state: OK|STALE|FAILED, detail }. STALE: the only problems are a
+// version mismatch and/or a catalog that tracks main. Anything else is FAILED.
+async function doctor(h, run, release, out, scope, home, platform) {
   const rows = parsePlugins(h, await run(h, listArgs(h))).filter(p => h !== 'claude' || !scope || p.scope === scope);
-  let drift = !rows.length;
+  let failed = !rows.length, stale = false;
   if (!rows.length) out.alt(h, `${h}\tmissing\t-`, 'error', `${h}: missing`);
   for (const row of rows) {
     const match = sameVersion(row.version, release);
-    out.row(h, [h, safeVersion(row.version), row.scope || '-', row.enabled === false ? 'disabled' : 'enabled'], !match);
-    drift ||= !match;
+    const project = h === 'claude' && ['project', 'local'].includes(row.scope) ? displayProject(row.projectPath, home, platform) : undefined;
+    out.row(h, [h, safeVersion(row.version), row.scope || '-', row.enabled === false ? 'disabled' : 'enabled'], !match, project);
+    if (!row.version || !String(row.version).trim()) { out.line(h, 'warn', `${h}: version unreported`); failed = true; }
+    else stale ||= !match;
   }
   if (h !== 'agy') {
     const markets = parseMarketplaces(h, await run(h, ['plugin', 'marketplace', 'list', '--json']));
     const warnings = marketplaceWarnings(markets, h);
-    for (const warning of warnings) { out.line(h, 'warn', `${h}: ${warning}`); drift = true; }
+    for (const warning of warnings) { out.line(h, 'warn', `${h}: ${warning}`); failed = true; }
     if (warnings.length) manualRemedy(h, out, scope);
     if (['codex', 'copilot'].includes(h) && markets.some(m => marketplaceMatches(h, m))) {
       out.line(h, 'dim', `${h}: pin state unverifiable from native list`);
     }
-    if (!markets.length) { out.line(h, 'warn', `${h}: nexaduo marketplace missing`); drift = true; }
+    if (!markets.length) { out.line(h, 'warn', `${h}: nexaduo marketplace missing`); failed = true; }
     const source = await readCatalogSource(h, markets, rows);
     const sources = source !== null ? [source] : rows.map(r => r.source).filter(Boolean);
     if (!sources.length) {
       out.line(h, 'warn', `${h}: catalog pointer unavailable in native lists; cannot verify release source`);
-      drift = true;
+      failed = true;
     } else if (!sources.every(s => sourceHasPointer(s, release.tag, h))) {
-      out.line(h, 'warn', `${h}: main-tracking with no matching release pointer; upgrade the marketplace catalog`);
-      drift = true;
+      // STALE only when the source matches the expected release source in every
+      // field except ref; anything else (foreign repo/type/path) is FAILED.
+      if (sources.every(s => s !== null && typeof s === 'object' && sourceHasPointer({ ...s, ref: release.tag }, release.tag, h))) {
+        out.line(h, 'warn', `${h}: main-tracking with no matching release pointer; upgrade the marketplace catalog`);
+        stale = true;
+      } else {
+        out.line(h, 'warn', `${h}: marketplace source does not match the expected release source`);
+        failed = true;
+      }
     }
   }
-  return drift ? 1 : 0;
+  if (failed) {
+    const detail = rows.length ? 'drift' : `plugin missing; run \`npx @nexaduo/marc install\``;
+    if (!rows.length) out.line(h, 'warn', `${h}: run \`npx @nexaduo/marc install\``);
+    return { state: 'FAILED', detail };
+  }
+  if (stale) {
+    out.line(h, 'warn', `${h}: out of date; run \`npx @nexaduo/marc update\``);
+    return { state: 'STALE', detail: 'out of date; run `npx @nexaduo/marc update`' };
+  }
+  return { state: 'OK', detail: 'in sync' };
 }
 
 export async function main(argv, { release, run = createRunner(), log = console.log,
   isTTY = Boolean(process.stdin.isTTY), discover = h => resolveExecutable(h), confirm, cwd = process.cwd(), tmpRoot,
-  env = process.env, stdoutIsTTY = Boolean(process.stdout.isTTY), platform = process.platform,
+  env = process.env, platform = process.platform,
+  home = (platform === 'win32' ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir(), stdoutIsTTY = Boolean(process.stdout.isTTY),
   style = createStyle({ env, isTTY: stdoutIsTTY, platform }) } = {}) {
   const opts = parseArgs(argv);
   if (opts.help) { log(HELP); return 0; }
@@ -344,10 +385,11 @@ export async function main(argv, { release, run = createRunner(), log = console.
   }
   const results = [];
   for (const h of opts.harnesses) {
-    let failed = false, outcome, threw = false;
+    let failed = false, outcome, threw = false, detail;
     try {
       if (opts.command === 'doctor') {
-        failed = Boolean(await doctor(h, run, release, out, opts.scope));
+        const d = await doctor(h, run, release, out, opts.scope, home, platform);
+        outcome = d.state === 'FAILED' ? undefined : d.state; failed = d.state === 'FAILED'; detail = d.detail;
       } else if (h === 'agy' && ['install', 'update'].includes(opts.command)) {
         await installAgy({ run, release, tmpRoot });
       } else if (h === 'claude' && opts.command === 'update') {
@@ -405,7 +447,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
       }
     } catch (e) { out.line(h, 'error', `${h}: ${e.message}`); failed = true; threw = true; }
     const state = failed ? 'FAILED' : outcome || 'OK';
-    results.push({ harness: h, state, detail: opts.command === 'doctor' && !threw ? (failed ? 'drift' : 'in sync') : out.detail(h) });
+    results.push({ harness: h, state, detail: opts.command === 'doctor' && !threw ? detail : out.detail(h) });
     if (state !== 'OK') status = 1;
   }
   out.results(results);

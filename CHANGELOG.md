@@ -30,6 +30,11 @@ date whose `YY.M.D` is already taken.
   legacy Windows consoles stay plain), native-CLI text is stripped of control
   characters before it is painted, and plain/piped output is unchanged.
 
+- `doctor` shows the project for Claude project/local rows (`~`-relative under
+  home) and reports version-only or catalog-behind drift as `STALE` with the
+  `update` hint instead of `FAILED`; real errors still win, including a foreign
+  marketplace source or an unreported version (#435).
+
 ### Changed
 - All four harnesses and the catalog pointers move to `v26.11.25.4` (npm
   `26.1125.4`).
