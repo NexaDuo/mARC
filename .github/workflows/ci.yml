@@ -276,7 +276,7 @@ jobs:
 
       # 5. Anti-anchoring gate: the reusable, cross-repo agent/skill ROLE prose
       #    must not hardcode this-repo/consumer specifics. The NexaDuo name is
-      #    allowed in the manifests / README / install.sh (branding); the gate is
+      #    allowed in the manifests / README / launcher (branding); the gate is
       #    scoped to agents/ + skills/ prose only.
       - name: Anti-anchoring grep gate
         run: |
@@ -448,12 +448,6 @@ jobs:
           fi
           rm -f "$tmp"
           echo "Rule-origin gate: OK (all governed rules tagged; negative test caught stripped tags)."
-
-      # 6. Installer script static checks.
-      - name: shellcheck + bash -n install.sh
-        run: |
-          shellcheck install.sh
-          bash -n install.sh
 
       # 6a2. Release-benchmark script self-test (issue #281, PR #283 review).
       #      scripts/run_token_benchmark.sh's release-only path (model pin,
@@ -716,9 +710,8 @@ jobs:
           echo "invariants-card hook: OK (shellcheck-clean; emits on compact only; silent on missing card)."
 
       # 7. Wordmark parity gate: the block-letter "mARC" wordmark is a copy-paste
-      #    duplicate across three surfaces (README banner, install.sh banner,
-      #    docs/index.html hero). They MUST stay byte-identical so the brand mark
-      #    never drifts. (Decision on issue #11, REVISED 2026-07-04 by maintainer:
+      #    duplicate across two surfaces (README banner and docs/index.html hero).
+      #    They MUST stay byte-identical so the brand mark never drifts. (Decision on issue #11, REVISED 2026-07-04 by maintainer:
       #    the leading glyph is now a bespoke lowercase x-height "m" (Candidate A)
       #    rendered in the ANSI Shadow idiom (█ fills + ╗║╚═╝ edges) beside the
       #    full-height "ARC" — m-width 11, total 38 cols, all unchanged from the
@@ -730,7 +723,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import sys
-          FILES = ["README.md", "install.sh", "docs/index.html"]
+          FILES = ["README.md", "docs/index.html"]
           def block(path):
               lines = open(path, encoding="utf-8").read().split("\n")
               # first row of the block is the "A" apex "█████╗": the leading
@@ -987,8 +980,7 @@ jobs:
           # actionlint's embedded shellcheck/pyflakes integrations (-shellcheck=
           # / -pyflakes=): those impose shell/python STYLE on run: scripts (e.g.
           # SC2015 on the intentional `check … || { echo; exit 1; }` pattern used
-          # throughout this file) and are out of scope here — install.sh already
-          # has a dedicated shellcheck step. Expression checks (e.g. an empty
+          # throughout this file) and are out of scope here. Expression checks (e.g. an empty
           # Actions expression) are unaffected and still fail the gate.
           ./actionlint -color -shellcheck= -pyflakes=
 

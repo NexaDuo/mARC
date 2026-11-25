@@ -18,16 +18,16 @@ mARC/                                    # repo root
 ├── docs/
 │   ├── ARCHITECTURE.md                  # this file
 │   └── team.toml.example
-└── install.sh  README.md  LICENSE  CHANGELOG.md  .gitignore
+├── launcher/                            # npx launcher for native plugin CLIs
+└── README.md  LICENSE  CHANGELOG.md  .gitignore
 ```
 
 The root `marketplace.json` and the plugin's own `plugin.json` live in **separate**
 `.claude-plugin/` directories (root vs. `harnesses/claude-code/marc/`). The
-marketplace points at the plugin with a full relative `source`
-(`"./harnesses/claude-code/marc"`), so `/plugin marketplace add NexaDuo/mARC`
-followed by `/plugin install marc@nexaduo` resolves the nested plugin unchanged.
-(Do **not** use `metadata.pluginRoot` — it is version-dependent; the full `source`
-path is the portable mechanism.)
+marketplace points at a released plugin under `harnesses/claude-code/marc/`.
+`npx @nexaduo/marc install` delegates marketplace registration and installation
+to the native plugin CLIs; the launcher never writes configuration itself.
+(Do **not** use `metadata.pluginRoot` — it is version-dependent.)
 
 ## Axis 1 — Leaders are *skills*
 

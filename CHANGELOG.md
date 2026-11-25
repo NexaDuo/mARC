@@ -31,7 +31,8 @@ date whose `YY.M.D` is already taken.
   using each CLI's supported source schema; CI installs from temporary local
   catalogs so it continues testing the PR tree. npm version: `26.1126.0`.
 - #161's rejection of a self-owned npx installer is partially superseded;
-  third-party installer rejections stand. README includes clone-free Codex setup.
+  third-party installer rejections stand. `npx` is the documented install path;
+  declarative per-repo Claude team setup remains available.
 - Install reuses verified unpinned marketplaces; conflicting sources are preserved
   with manual remedies. Harness failures are isolated, Codex upgrade targets only
   `nexaduo`, Claude previews list actual settings paths, and deleted projects skip.
@@ -48,6 +49,16 @@ date whose `YY.M.D` is already taken.
   plus environment `npm-publish`. Push the tag immediately after merge.
   Tests have only `contents: read`; the dependent publish job gets OIDC after
   environment approval and repeats checkout-SHA and `origin/main` ancestor gates.
+
+### Fixed
+
+- Release tagging matches exact remote refs and ignores suffix decoys.
+- Release verification prefers the latest successful matching main run, including
+  later push retries; unrelated runs do not consume the five-candidate limit.
+
+### Removed
+
+- `install.sh` and native install/update command guides; use the npx launcher.
 
 ## [26.11.25.1] - 2026-11-25
 

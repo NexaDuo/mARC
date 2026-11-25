@@ -18,6 +18,10 @@ only for the self-owned npx option.
 
 ## Options and decision
 
+On 2026-11-25, the user decided that `npx` is the only documented install path
+and that `install.sh` is removed, reversing the `marc:arch` "keep install.sh"
+item. Declarative per-repo Claude team setup remains available.
+
 Use one npm package per release, rather than independent semver with runtime
 tag resolution. `vYY.M.D[.N]` maps to `YY.(M*100+D).N`, defaulting N to zero:
 `v26.11.26` becomes `26.1126.0`. Mapping rejects tags below `v26.11.25`, old

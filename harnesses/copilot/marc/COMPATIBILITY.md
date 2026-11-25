@@ -3,6 +3,10 @@
 This document tracks compatibility findings and implementation gaps for a
 first-class **GitHub Copilot** harness in `harnesses/copilot/marc/`.
 
+Install with `npx @nexaduo/marc install --harness copilot`; update with
+`npx @nexaduo/marc update --harness copilot`. The launcher delegates to the
+native plugin CLI. The commands below record compatibility probes.
+
 ## Runtime discoveries (validated locally)
 
 Validated on **GitHub Copilot CLI 1.0.71**:

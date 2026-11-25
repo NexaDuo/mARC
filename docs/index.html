@@ -76,10 +76,10 @@
         },
         {
           "@type": "Question",
-          "name": "How do I install mARC on Claude Code?",
+          "name": "How do I install mARC?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Add the marketplace with '/plugin marketplace add NexaDuo/mARC', install with '/plugin install marc@nexaduo', and convene the team with '/marc:tech-lead'."
+            "text": "Run 'npx @nexaduo/marc install' to install on detected harnesses, then convene the team with '/marc:tech-lead'."
           }
         },
         {
@@ -314,43 +314,6 @@
   .note{color:var(--dim);font-size:.85rem;margin:14px 0 0}
   .note code{color:var(--amber)}
 
-  /* ---- install tabs ---- */
-  .install-tabs{
-    display:flex;
-    flex-wrap:wrap;
-    background:rgba(0,0,0,.2);
-    border-bottom:1px solid var(--line);
-  }
-  .tab-btn{
-    font-family:var(--mono);
-    font-size:.85rem;
-    font-weight:700;
-    padding:10px 20px;
-    background:transparent;
-    border:none;
-    border-right:1px solid var(--line);
-    color:var(--dim);
-    cursor:pointer;
-    transition:background .2s, color .2s;
-    outline:none;
-  }
-  .tab-btn:hover, .tab-btn:focus-visible{
-    color:#fff;
-    background:rgba(255,255,255,.05);
-  }
-  .tab-btn.active{
-    color:var(--cyan);
-    background:var(--panel2);
-    border-bottom:2px solid var(--cyan);
-    margin-bottom:-1px;
-  }
-  .tab-panel{
-    display:none;
-  }
-  .tab-panel.active{
-    display:block;
-  }
-
   /* ---- footer ---- */
   footer{
     margin-top:52px;padding-top:22px;border-top:1px solid var(--line);
@@ -550,8 +513,8 @@
           <span class="chtopic">Cross-harness peer operators coordinate via association-checked <code>## marc:techlead claim</code> markers, <code>git worktree list</code> inspection, and safe dead-worktree remedies.</span>
         </li>
         <li>
-          <span class="chname">install-sh</span><span class="tag">auditable</span>
-          <span class="chtopic">The install script runs completely locally. It outputs every command before running, uses no remote downloads, and relies on built-in plugin mechanisms.</span>
+          <span class="chname">launcher</span><span class="tag">auditable</span>
+          <span class="chtopic">The launcher runs only native plugin CLIs and never writes configuration itself. Every command is shown before it runs. The npm package is published from CI with provenance.</span>
         </li>
       </ul>
     </div>
@@ -562,126 +525,19 @@
   <section class="win install" aria-labelledby="install">
     <div class="titlebar">
       <span class="chan">#marc</span>
-      <span class="topic" id="install-topic">paste these into Claude Code</span>
-    </div>
-    <div class="install-tabs" role="tablist">
-      <button class="tab-btn active" id="tab-claude" role="tab" aria-selected="true" aria-controls="panel-claude" data-topic="paste these into Claude Code">Claude Code</button>
-      <button class="tab-btn" id="tab-antigravity" role="tab" aria-selected="false" aria-controls="panel-antigravity" data-topic="setup commands for Google Antigravity">Google Antigravity</button>
-      <button class="tab-btn" id="tab-copilot" role="tab" aria-selected="false" aria-controls="panel-copilot" data-topic="paste these into GitHub Copilot CLI">GitHub Copilot CLI</button>
+      <span class="topic">install from your terminal</span>
     </div>
     <div class="body">
-
-      <div id="panel-claude" class="tab-panel active" role="tabpanel" aria-labelledby="tab-claude">
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 1) · add the marketplace</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">&gt;</span>
-            <code id="cmd-mkt">/plugin marketplace add NexaDuo/mARC</code>
-            <button class="copy" type="button" id="copy-btn-mkt" data-copy="cmd-mkt" aria-label="Copy: add the mARC marketplace">copy</button>
-          </div>
+      <div class="irc-line">
+        <span class="meta"><span class="you">you</span> · install mARC</span>
+        <div class="cmd">
+          <span class="prompt" aria-hidden="true">$</span>
+          <code id="cmd-install">npx @nexaduo/marc install</code>
+          <button class="copy" type="button" id="copy-btn-install" data-copy="cmd-install" aria-label="Copy: install mARC">copy</button>
         </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 2) · install the plugin (user scope)</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">&gt;</span>
-            <code id="cmd-install">/plugin install marc@nexaduo</code>
-            <button class="copy" type="button" id="copy-btn-install" data-copy="cmd-install" aria-label="Copy: install the marc plugin">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="who">@techlead</span> has joined · op the channel with</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">&gt;</span>
-            <code id="cmd-invoke">/marc:tech-lead</code>
-            <button class="copy" type="button" id="copy-btn-invoke" data-copy="cmd-invoke" aria-label="Copy: invoke the tech-lead skill">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="you">shell</span> · prefer a terminal? clone and install</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-shell">git clone https://github.com/NexaDuo/mARC && cd mARC && ./install.sh</code>
-            <button class="copy" type="button" id="copy-btn-shell" data-copy="cmd-shell" aria-label="Copy: clone and run install.sh">copy</button>
-          </div>
-        </div>
-
-        <p class="note">The shell path runs the repo's own <a href="https://github.com/NexaDuo/mARC/blob/main/install.sh" target="_blank" rel="noopener noreferrer"><code>install.sh</code></a>. It echoes every command before running it, fetches no remote code, and uses only Claude Code's built-in plugin mechanism. Read it before you run it.</p>
       </div>
-
-      <div id="panel-antigravity" class="tab-panel" role="tabpanel" aria-labelledby="tab-antigravity">
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 1) · install the agy CLI tool</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-cli">bash <(curl -fsSL https://antigravity.google/cli/install.sh)</code>
-            <button class="copy" type="button" id="copy-btn-agy-cli" data-copy="cmd-agy-cli" aria-label="Copy: install agy CLI">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 2) · clone the repo (agy installs from a local directory)</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-clone">git clone https://github.com/NexaDuo/mARC.git</code>
-            <button class="copy" type="button" id="copy-btn-agy-clone" data-copy="cmd-agy-clone" aria-label="Copy: clone mARC repository">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 3) · install the mARC plugin from the harness directory</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-plugin">agy plugin install ./mARC/harnesses/antigravity/marc</code>
-            <button class="copy" type="button" id="copy-btn-agy-plugin" data-copy="cmd-agy-plugin" aria-label="Copy: install mARC plugin on Antigravity">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 4) · invoke the tech-lead skill</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">$</span>
-            <code id="cmd-agy-invoke">agy /marc:tech-lead</code>
-            <button class="copy" type="button" id="copy-btn-agy-invoke" data-copy="cmd-agy-invoke" aria-label="Copy: invoke tech-lead skill">copy</button>
-          </div>
-        </div>
-
-        <p class="note">This registers the mARC plugin on the Google Antigravity harness. The agent team runs locally in your environment, utilizing the configured workspace directory.</p>
-      </div>
-
-      <div id="panel-copilot" class="tab-panel" role="tabpanel" aria-labelledby="tab-copilot">
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 1) · add the marketplace</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">&gt;</span>
-            <code id="cmd-copilot-mkt">copilot plugin marketplace add NexaDuo/mARC</code>
-            <button class="copy" type="button" id="copy-btn-copilot-mkt" data-copy="cmd-copilot-mkt" aria-label="Copy: add the mARC marketplace to Copilot">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="you">you</span> (step 2) · install the plugin</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">&gt;</span>
-            <code id="cmd-copilot-install">copilot plugin install marc@nexaduo</code>
-            <button class="copy" type="button" id="copy-btn-copilot-install" data-copy="cmd-copilot-install" aria-label="Copy: install marc plugin on Copilot">copy</button>
-          </div>
-        </div>
-
-        <div class="irc-line">
-          <span class="meta"><span class="who">@techlead</span> has joined · op the channel with</span>
-          <div class="cmd">
-            <span class="prompt" aria-hidden="true">&gt;</span>
-            <code id="cmd-copilot-invoke">/marc:tech-lead</code>
-            <button class="copy" type="button" id="copy-btn-copilot-invoke" data-copy="cmd-copilot-invoke" aria-label="Copy: invoke tech-lead in Copilot">copy</button>
-          </div>
-        </div>
-
-        <p class="note">Installs the mARC plugin on GitHub Copilot CLI using custom agents (<code>marc:*</code>) and native task dispatch.</p>
-      </div>
-
+      <p class="note">Requires Node.js 20+ and harness CLIs on PATH. For Antigravity, use its <a href="https://antigravity.google/cli/" target="_blank" rel="noopener noreferrer">CLI installer</a> first. Claude Code, Copilot, Codex and Antigravity are detected automatically; select one with <code>--harness &lt;claude|copilot|codex|agy&gt;</code>.</p>
+      <p class="note">Use <code>npx @nexaduo/marc doctor</code> to check your install. Then convene <b class="nick">@techlead</b> with <code>/marc:tech-lead</code>. See the <a href="https://github.com/NexaDuo/mARC#readme" target="_blank" rel="noopener noreferrer">README</a> for options, team setup and Codex compatibility limits.</p>
     </div>
   </section>
 
@@ -748,35 +604,6 @@
     });
   });
 
-  // Tab switching logic
-  document.querySelectorAll(".tab-btn").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var targetId = btn.getAttribute("aria-controls");
-      var container = btn.closest(".install");
-      if (!container) return;
-
-      container.querySelectorAll(".tab-btn").forEach(function (t) {
-        t.classList.remove("active");
-        t.setAttribute("aria-selected", "false");
-      });
-      btn.classList.add("active");
-      btn.setAttribute("aria-selected", "true");
-
-      container.querySelectorAll(".tab-panel").forEach(function (p) {
-        p.classList.remove("active");
-      });
-      var panel = document.getElementById(targetId);
-      if (panel) {
-        panel.classList.add("active");
-      }
-
-      var topicText = btn.getAttribute("data-topic") || "installing mARC";
-      var topicEl = document.getElementById("install-topic");
-      if (topicEl) {
-        topicEl.textContent = topicText;
-      }
-    });
-  });
 })();
 </script>
 </body>

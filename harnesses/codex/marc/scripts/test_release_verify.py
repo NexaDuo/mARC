@@ -117,27 +117,80 @@ class WorkflowLookup(unittest.TestCase):
                     patch.object(rv, '_run', side_effect=[json.dumps([bad]), '[]', '[]']):
                 self.assertEqual(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG), [])
 
-    def test_dispatch_manifest_api_calls_are_bounded(self):
-        dispatches = [self.row('workflow_dispatch', sha=f'{i:040x}') for i in range(1, 101)]
-        manifest = {'content': base64.b64encode(b'{"version":"26.11.27"}').decode()}
-        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
-                '[]', json.dumps(dispatches), *[json.dumps(manifest)] * 5, '[]']) as run:
-            self.assertEqual(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG), [])
-            lookups = [call for call in run.call_args_list if '/contents/' in ' '.join(call.args[0])]
-            self.assertEqual(len(lookups), 5)
-            self.assertEqual(run.call_count, 8)
+    def manifest(self, version='26.11.26'):
+        return json.dumps({'content': base64.b64encode(json.dumps({'version': version}).encode()).decode()})
 
-    def test_dispatch_stops_after_first_match(self):
-        dispatches = [self.row('workflow_dispatch', sha=self.LATER)] * 100
-        manifest = {'content': base64.b64encode(b'{"version":"26.11.26"}').decode()}
+    def test_later_main_push_same_version_wins_over_old_failure(self):
+        failed = self.row(); failed['conclusion'] = 'failure'
+        later = self.row(sha=self.LATER, createdAt='2026-11-25T13:00:00Z')
         with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
-                '[]', json.dumps(dispatches), json.dumps(manifest)]) as run:
-            self.assertEqual(len(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)), 1)
-            self.assertEqual(run.call_count, 3)
+                json.dumps([failed]), json.dumps([later]), self.manifest()]) as run:
+            runs = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
+            self.assertEqual([r.conclusion for r in runs], ['success', 'failure'])
+            self.assertNotIn('--event', run.call_args_list[1].args[0])
+            result = verify_release('26.11.26', True, runs, [ReleaseRow(self.TAG, False, True)])
+            self.assertTrue(result.workflow_run.ok)
+
+    def test_unrelated_later_main_push_is_not_credited(self):
+        failed = self.row(); failed['conclusion'] = 'failure'
+        later = self.row(sha=self.LATER, createdAt='2026-11-25T13:00:00Z')
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                json.dumps([failed]), json.dumps([later]), self.manifest('26.11.27')]):
+            runs = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
+            self.assertEqual([r.conclusion for r in runs], ['failure'])
+
+    def test_unrelated_runs_do_not_consume_five_candidate_cap(self):
+        for event in ('push', 'workflow_dispatch'):
+            with self.subTest(event=event):
+                unrelated = [self.row(event, sha=f'{i:040x}') for i in range(1, 7)]
+                matching = self.row(event, sha=self.LATER)
+                with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                        '[]', json.dumps(unrelated + [matching]),
+                        *[self.manifest('26.11.27')] * 6, self.manifest()]) as run:
+                    runs = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
+                    self.assertEqual([r.conclusion for r in runs], ['success'])
+                    lookups = [c for c in run.call_args_list if '/contents/' in ' '.join(c.args[0])]
+                    self.assertEqual(len(lookups), 7)
+
+    def test_only_five_matching_candidates_are_collected(self):
+        matches = [self.row('workflow_dispatch', sha=f'{i:040x}') for i in range(1, 8)]
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                '[]', json.dumps(matches), *[self.manifest()] * 5]) as run:
+            self.assertEqual(len(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)), 5)
+            self.assertEqual(run.call_count, 7)
+
+    def test_latest_successful_candidate_wins(self):
+        failed = self.row(); failed['conclusion'] = 'failure'
+        newer_failed = self.row('workflow_dispatch', sha=self.LATER, createdAt='2026-11-25T16:00:00Z')
+        newer_failed['conclusion'] = 'failure'
+        latest = self.row('push', sha=self.LATER, createdAt='2026-11-25T15:00:00Z')
+        earlier = self.row('workflow_dispatch', sha=self.LATER, createdAt='2026-11-25T14:00:00Z')
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                json.dumps([failed]), json.dumps([newer_failed, latest, earlier]), self.manifest()]):
+            runs = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
+            self.assertEqual(runs[0].created_at, latest['createdAt'])
+            self.assertEqual(runs[0].conclusion, 'success')
+
+    def test_latest_successful_exact_tag_commit_run_wins(self):
+        failed = self.row(); failed['conclusion'] = 'failure'
+        older = self.row(createdAt='2026-11-25T13:00:00Z')
+        latest = self.row('workflow_dispatch', createdAt='2026-11-25T14:00:00Z')
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                json.dumps([failed, older, latest]), '[]']):
+            runs = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
+            self.assertEqual(runs[0].created_at, latest['createdAt'])
+
+    def test_manifest_lookup_scan_is_bounded_by_hundred_run_api_limit(self):
+        unrelated = [self.row('push', sha=f'{i:040x}') for i in range(1, 101)]
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                '[]', json.dumps(unrelated), *[self.manifest('26.11.27')] * 100, '[]']) as run:
+            self.assertEqual(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG), [])
+            self.assertEqual(run.call_count, 103)
+            self.assertIn('100', run.call_args_list[1].args[0])
 
     def test_missing_dispatch_manifest_is_consumer_safe(self):
         with patch.object(rv, '_run', side_effect=RuntimeError('not found')):
-            self.assertFalse(rv._dispatch_matches_tag('owner/consumer', self.row('workflow_dispatch'), self.TAG))
+            self.assertFalse(rv._main_run_matches_tag('owner/consumer', self.row('workflow_dispatch'), self.TAG))
 
 
 _failures: list[str] = []

@@ -29,7 +29,7 @@ Checks (all applicable checks must pass for `ok: true`):
   1. tag_exists       — `vX.Y.Z` tag exists in the repo (via `gh api
                          .../git/refs/tags/vX.Y.Z`, no local clone required).
   2. workflow_run      — the release workflow has a successful completed run
-                         for the tag commit (push on main or dispatch). Dispatch
+                         for the tag commit (push on main or dispatch). Both
                          can run from later main commits with the same manifest
                          version. Tag-branch lookup remains a consumer fallback.
   3. release_published — a GitHub Release exists for the tag, is NOT a
@@ -149,8 +149,8 @@ def verify_release(
                   f"(has release automation completed yet?)",
         )
     else:
-        # Most recent run wins (list is assumed newest-first, matching `gh run
-        # list`'s default ordering).
+        # The fetcher prefers the latest successful matching main run; consumer
+        # tag-triggered workflows retain newest-first ordering.
         latest = runs[0]
         if latest.status != "completed":
             run_check = CheckResult(
@@ -331,11 +331,11 @@ def fetch_tag_commit(repo: str, expected_tag: str) -> Optional[str]:
     return None
 
 
-def _dispatch_matches_tag(repo: str, run: dict, expected_tag: str) -> bool:
-    """A dispatch checks out main, but can release an older existing tag.
+def _main_run_matches_tag(repo: str, run: dict, expected_tag: str) -> bool:
+    """Main pushes and dispatches can release an older existing tag.
 
-    Only accept later-head dispatches whose immutable main manifest names this
-    version. Never credit an unrelated release's successful dispatch.
+    Only accept later-head runs whose immutable main manifest names this
+    version. Never credit an unrelated release's successful run.
     """
     sha = run.get("headSha", "")
     if not re.fullmatch(r"[a-f0-9]{40}", sha):
@@ -364,22 +364,37 @@ def fetch_workflow_runs(repo: Optional[str], workflow: str, expected_tag: str) -
             candidates = [r for r in lookup("--commit", sha, "--branch", "main")
                           if r.get("headSha") == sha and r.get("headBranch") == "main"
                           and r.get("event") in ("push", "workflow_dispatch")]
-            # On dispatch, GITHUB_SHA is main's current head, while plan may target
-            # the existing tag's older commit. Include such bootstrap retries too.
-            # Bound manifest lookups even for dispatch-heavy consumer workflows.
-            # gh returns newest first; only the newest matching dispatch matters.
-            for run in lookup("--branch", "main", "--event", "workflow_dispatch")[:5]:
-                if (run.get("headBranch") == "main" and run.get("event") == "workflow_dispatch"
-                        and (run.get("headSha") == sha or _dispatch_matches_tag(repo, run, expected_tag))):
+            # Both push and dispatch can retry publication for an existing tag
+            # from a later main commit with the same manifest version. Scan at
+            # most 100 rows; the five-candidate cap excludes unrelated runs.
+            matching = 0
+            manifest_matches = {}
+            for run in lookup("--branch", "main"):
+                if (run.get("headBranch") != "main"
+                        or run.get("event") not in ("push", "workflow_dispatch")):
+                    continue
+                head = run.get("headSha")
+                if head != sha:
+                    if head not in manifest_matches:
+                        manifest_matches[head] = _main_run_matches_tag(repo, run, expected_tag)
+                    if not manifest_matches[head]:
+                        continue
+                if run not in candidates:
                     candidates.append(run)
+                matching += 1
+                if matching == 5:
                     break
     except Exception:  # noqa: BLE001 — fall back for consumer workflow APIs
         candidates = []
+    main_candidates = bool(candidates)
     if not candidates:
         # Consumers can retain their own tag-triggered workflows (any branch
         # naming scheme); no launcher or registry dependency is introduced.
         candidates = lookup("--branch", expected_tag)
-    candidates.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
+    candidates.sort(key=lambda r: (
+        main_candidates and r.get("status") == "completed" and r.get("conclusion") == "success",
+        r.get("createdAt") or "",
+    ), reverse=True)
     return [WorkflowRun(status=r.get("status"), conclusion=r.get("conclusion"),
                         url=r.get("url"), created_at=r.get("createdAt")) for r in candidates]
 

@@ -106,11 +106,11 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           remote_tags="$(git ls-remote --tags git@github.com:NexaDuo/mARC.git "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
-          if [[ -n "$remote_tags" ]]; then
-            remote_sha="$(awk '$2 ~ /\^\{\}$/ {print $1}' <<< "$remote_tags")"
-            if [[ -z "$remote_sha" ]]; then
-              remote_sha="$(awk '{print $1}' <<< "$remote_tags")"
-            fi
+          remote_sha="$(awk -v tag="$RELEASE_TAG" '$2 == "refs/tags/" tag "^{}" {print $1}' <<< "$remote_tags")"
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha="$(awk -v tag="$RELEASE_TAG" '$2 == "refs/tags/" tag {print $1}' <<< "$remote_tags")"
+          fi
+          if [[ -n "$remote_sha" ]]; then
             if [[ "$remote_sha" == "$RELEASE_SHA" ]]; then
               echo 'Tag already exists at RELEASE_SHA; successful no-op.'
               exit 0

@@ -143,6 +143,39 @@ class TagPushRaces(unittest.TestCase):
         self.assertEqual(self.git(self.origin, 'cat-file', '-t', 'refs/tags/v26.11.26').strip(), 'tag')
         self.assertEqual(self.git(self.origin, 'rev-parse', 'v26.11.26^{commit}').strip(), self.sha)
 
+    def test_suffix_decoy_refs_are_ignored(self):
+        # ls-remote patterns also match ref tails, so these decoys really are
+        # returned by git. Neither an annotated peeled row nor a lightweight
+        # tag may masquerade as the requested full ref.
+        self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+        for annotated in (True, False):
+            with self.subTest(annotated=annotated):
+                decoy = 'x/refs/tags/v26.11.26'
+                args = ('-a', '-m', 'decoy') if annotated else ()
+                self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', *args, decoy, self.sha)
+                rows = self.git(self.repo, 'ls-remote', '--tags', str(self.origin),
+                                'refs/tags/v26.11.26', 'refs/tags/v26.11.26^{}')
+                self.assertIn('refs/tags/' + decoy, rows)
+                result = self.run_tag()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('successful no-op', result.stdout)
+                self.assertEqual(self.git(self.origin, 'rev-parse', 'v26.11.26^{commit}').strip(), self.sha)
+                self.git(self.repo, 'tag', '-d', 'v26.11.26')
+                self.git(self.origin, 'tag', '-d', 'v26.11.26', decoy)
+
+    def test_decoy_peeled_ref_cannot_override_exact_tag(self):
+        self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+        self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', 'v26.11.26', self.sha)
+        (self.repo / 'file').write_text('decoy commit')
+        self.git(self.repo, 'commit', '-qam', 'decoy')
+        other = self.git(self.repo, 'rev-parse', 'HEAD').strip()
+        self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/other')
+        self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', '-a',
+                 'x/refs/tags/v26.11.26', other, '-m', 'decoy')
+        result = self.run_tag()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('successful no-op', result.stdout)
+
     def test_remote_tag_appearing_after_plan_is_never_replaced(self):
         # The runner has not fetched this new remote tag; its local creation
         # succeeds, so the explicit remote recheck has to catch the race.
