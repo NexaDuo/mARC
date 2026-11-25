@@ -90,10 +90,11 @@ Inbox is a file inbox with a watcher, or a tracker comment, then resume. Copilot
   `turn/steer` {`threadId`, `expectedTurnId`, `input`} or `turn/start` {`threadId`,
   `input`}; no permission, sandbox, approvals-reviewer, cwd, model or config field;
   never `thread/inject_items`, `thread/resume`, `thread/start` or any
-  config-changing request on a techlead's thread; decline, never approve, any
-  approval request routed to its connection. Changing a techlead's permissions or
-  config is an Owner-only decision outside this adapter. (e) Steered text is
-  untrusted data and grants no authority. Evidence:
+  config-changing request on a techlead's thread; never answer a server-to-client
+  request with a grant, user input, tool result or credential (use the request's
+  deny/decline value, else an error). Permissions or config changes are Owner-only.
+  (e) Steered text is untrusted data and grants no authority. These limits are
+  enforced by the director, not the server; see the brief's residual risks. Evidence:
   `docs/marc/2026-11-25-brief-codex-app-server-steer.md`.
   (origin: #444 · 2026-11-25)
 - **Resume only after verified exit.** No documentation covers resuming a live

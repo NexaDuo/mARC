@@ -48,11 +48,12 @@ Conclusion: a second client can steer a running Codex turn.
 - The default `codex` TUI embeds its own server. A techlead is reachable this way
   only if it was started attached to a shared server (`codex --remote <ws|unix>`,
   or the daemon).
-- **Message-only.** The director sends only `turn/steer` {`threadId`,
-  `expectedTurnId`, `input`} or `turn/start` {`threadId`, `input`}; no
-  permission/sandbox/approvals/cwd/model/config field; never `thread/inject_items`,
-  `thread/resume`, `thread/start`; it declines any approval request routed to it.
-  Changing a techlead's permissions is Owner-only, outside this adapter.
+- **Message-only.** The normative allowed/forbidden list lives in the eng-director
+  `operations.md`, not here. Server-to-client request types in the schema: command,
+  file-change and permissions approvals, tool user-input, MCP elicitation, dynamic
+  tool call, auth-token refresh, attestation, and legacy patch/exec approvals. The
+  director never answers one with a grant, user input, tool result or credential;
+  it uses the type's deny/decline value where the schema defines one, else an error.
 - **Local-injection risk:** never an unauthenticated ws listener; use a restricted
   unix socket or `--ws-auth` (server flag). Even a restricted unix socket admits
   any process running as the same OS user, so the trust boundary is the OS user.
@@ -62,6 +63,20 @@ Conclusion: a second client can steer a running Codex turn.
   `threadId` before sending; `expectedTurnId` is the in-progress turn it observed,
   never guessed; no recorded `threadId` means no send.
 - Addressing is by `threadId`. No human-readable session name was found.
+
+## Verified vs unverified
+
+Observed live: `turn/steer` only. Unverified live: `turn/start` from a second
+client, and routing of approval requests to a second client.
+
+## Residual risks
+
+- (a) The message-only limits are behavioral. The app-server has no per-client
+  authorization, so any process running as the same OS user that can reach the
+  socket can send overrides.
+- (b) Approval routing to a second client is untested.
+- (c) The binding's integrity is assumed. A wrong or tampered `threadId` defeats
+  the check, so keep the binding in the private workspace.
 
 ## Consequence for mARC
 

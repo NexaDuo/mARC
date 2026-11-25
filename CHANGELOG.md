@@ -28,8 +28,10 @@ date whose `YY.M.D` is already taken.
 - Codex app-server live contact adapter for the engineering director (#444): the
   probe detects `codex app-server` and `--remote` from `--help` only (new
   `harnesses.codex.app_server`, output `schema` 3) and proposes `app-server-steer`
-  first for Codex; `eng-director` documents it as message-only (turn/steer, turn/start; no permission or
-  config changes) with transport, auth, thread-verification and untrusted-input rules, and a brief records the evidence.
+  first for Codex; `eng-director` documents it as message-only (turn/steer,
+  turn/start; no permission or config changes) with transport, auth,
+  thread-verification, server-request and untrusted-input rules, and a brief
+  records the evidence and residual risks.
 
 ## [26.11.25.5] - 2026-11-25
 
