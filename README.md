@@ -344,6 +344,15 @@ install.sh                       # installer for Claude Code
 
 The plugin is structured so that the core logic under `core/` compiles into platform-specific configurations in the `harnesses/` directory. This allows the project to grow sideways into new harnesses or upward into further leader skills like `founder` without restructuring the repository. Detailed growth plans are documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Releases
+
+Merging a version bump to `main` releases mARC automatically through
+`release.yml`: tests, an Actions-created annotated tag, GitHub Release notes,
+and trusted npm publishing. Humans and agents do not create `v*` tags. To batch
+several PRs into one daily version, bump only in the last PR. After merge, verify
+with `python3 core/scripts/release_verify.py`; retry missing surfaces with
+`workflow_dispatch` on `main`. See the [release decision and bootstrap](docs/marc/2026-11-25-decision-npx-launcher.md#release-on-merge-user-decision-2026-11-25).
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

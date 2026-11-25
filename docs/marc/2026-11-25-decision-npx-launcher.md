@@ -30,7 +30,7 @@ A stable branch would require destructive marketplace re-registration, while
 main-tracking plugin sources could install unreleased content under an old
 version. A release PR moves all pointers and all four manifest versions
 atomically. Pointers use tags, because a commit cannot embed its own SHA.
-Installs fail closed between merging the release PR and pushing the tag.
+Installs fail closed between merging the release PR and automation creating the tag.
 
 ## Probes and native flows
 
@@ -88,43 +88,92 @@ root without spaces. A generated batch path containing spaces fails with a
 verify SHA before checkout, reject symlinks/submodules, check the manifest,
 and always remove the temporary clone.
 
-## Publication and verification
+## Release-on-merge (user decision 2026-11-25)
 
-Keep `.github/workflows/npm-publish.yml` stable for npm trusted publishing.
-It triggers only on tag pushes. The `test` job has only `contents: read`,
-checks out `github.ref`, asserts tag/manifests/pointers/package parity, embeds
-`release.json`, and runs the launcher suite. It fetches `origin/main`, asserts
-`git merge-base --is-ancestor "$GITHUB_SHA" origin/main`, and requires
-`git rev-parse HEAD` to equal `$GITHUB_SHA` (rejecting a moved-tag checkout).
-The dependent `publish` job runs behind `environment: npm-publish`, has
-`contents: read` plus `id-token: write`, repeats the same cheap assertions and
-rebuilds `release.json`, then publishes. Tests never run with OIDC permission.
-No npm secret in GitHub. Source `release.json.sha` is null;
-Antigravity fails closed until the publish workflow embeds the real commit.
-All actions are SHA-pinned (`actions/checkout` v5.1.0, `actions/setup-node` v5.0.0).
+Merging a version bump to `main` is the release action. To batch multiple PRs
+into one daily version, bump only in the last PR. Humans and agents no longer
+create `v*` tags; only GitHub Actions does. This supersedes the original
+manual-tag publication design and closes the tag half of `marc:sec` SEC-9.
 
-Maintainer bootstrap: there is no placeholder. A maintainer publishes the first
-real launcher version once, from a clean checkout of its tag, with `release.json`
-generated as the workflow does and a short-lived granular token kept outside the
-repository and never in GitHub secrets. Only bootstrap tag `v26.11.26`
-(npm `26.1126.0`) is exempt from attestation, via the explicit
-`BOOTSTRAP_UNATTESTED_TAG` constant in release verification; integrity, latest,
-version and peeled-tag SHA checks still apply. Every later version requires
-provenance. The npm org `nexaduo` ownership was verified by the operator.
+One SHA-pinned workflow, `.github/workflows/release.yml`, runs on `push` to
+`main` or input-free `workflow_dispatch` on `main`, never on tags or PRs.
+`concurrency: release` with cancellation disabled serializes active releases.
+A tag pushed with `GITHUB_TOKEN` cannot trigger another workflow, so the
+release and trusted publication jobs must live together:
 
-Before the first tag push, the maintainer must configure:
+- `plan` (contents read) reads the main event commit's manifest, maps tag/npm,
+  checks origin, GitHub Releases and npm, and outputs what remains to do.
+  npm is required only from `v26.11.26`. Existing tags never move: a push
+  targeting a different commit fails loudly. Dispatch reuses the existing
+  tag's commit, or the main event SHA if no tag exists. Targets must be
+  ancestors of `origin/main`. Registry/API errors other than 404 fail closed.
+- `test` (contents read) checks out the target commit and runs launcher tests,
+  catalog parity, and tag/manifest/package/ancestry assertions when any work
+  remains. A failure prevents tagging and both publication jobs.
+- `tag` (contents write) creates an annotated tag on the target SHA using
+  `github-actions[bot]`, checks again that the remote tag is absent, and
+  pushes without force using `GITHUB_TOKEN`. Only this checkout persists
+  credentials. A competing creator causes failure rather than replacement.
+- `github-release` (contents write) uses CHANGELOG and its section extractor
+  from the default branch, passes notes only through `--notes-file`, and
+  creates or updates idempotently when the release is missing at planning.
+  It also runs when the tag already existed and the tag job was skipped.
+- `publish` (contents read plus id-token write) uses environment `npm-publish`,
+  checks out the tag, reasserts HEAD equals its peeled commit and the planned
+  SHA, ancestry and parity, embeds `{tag, sha, npm}` in `launcher/release.json`,
+  and runs `npm publish --access public --provenance` only if npm is missing.
+  Tests never execute with OIDC permission. No npm token lives in GitHub.
 
-- A `v*` tag ruleset restricting **creation, update and deletion** to maintainers.
-- A rule blocking creation of `refs/heads/v*` branches, avoiding branch/tag shadowing.
-- The `npm-publish` environment with required maintainer reviewers.
-- The npm trusted publisher bound to `NexaDuo/mARC`, workflow `npm-publish.yml`
-  **and environment `npm-publish`**; set "require 2FA and disallow tokens" and
-  revoke the bootstrap token after setup.
+Source `release.json.sha` stays null; Antigravity fails closed until the
+publish job embeds the real commit. Actions use pinned checkout v5.1.0 and
+setup-node v5.0.0. SEC-8's merge-to-tag missing-ref window is now seconds in
+a healthy run; scheduling or test failures can extend it. Confirm actual
+CLI failure behavior during dogfood; offline tests do not prove it.
 
-These external settings are release prerequisites, not configured by this patch.
-Push the tag immediately after merge. Confirm each CLI's missing-ref failure
-mode once during dogfood; no claim is made that the offline tests prove it. npm provenance helps only when someone verifies signatures; npx
-does not verify it automatically.
+The operator configures these server-side prerequisites:
+
+- The `v*` tag ruleset allows **only the GitHub Actions integration** to create
+  tags and protects tags against update/deletion. Human and agent tokens
+  cannot create them, including the maintainer's normal token.
+- Block creation of `refs/heads/v*` branches to prevent branch/tag shadowing.
+- Restrict environment `npm-publish` to the **main branch**, with **no required
+  reviewer**; the workflow executes on main even when publish checks out a tag.
+- Bind npm trusted publishing to `NexaDuo/mARC`, workflow **release.yml** and
+  environment **npm-publish**. After bootstrap, require 2FA and disallow tokens.
+
+These settings are external prerequisites; this patch does not configure them.
+Residual risk: anyone who can merge to main can release. `marc:sec` SEC-9
+identifies the merge gate and a non-admin agent token as the remaining controls.
+No manual approval or maintainer tag push remains on the normal release path.
+
+### Bootstrap
+
+The first run's `publish` job fails by design when the npm package does not
+yet exist: trusted publishing cannot create the initial package. It prints
+a pointer to this section. OIDC refusal also fails with that pointer.
+The maintainer publishes the first real launcher version once from a clean
+checkout of the **Actions-created tag**, generating `release.json` with
+`RELEASE_TAG`, `RELEASE_SHA` and `REQUIRE_RELEASE_TAG=true` passed to
+`scripts/prepare_npm_release.sh`, then publishes with a short-lived granular
+token kept outside the repository and never in GitHub secrets. Configure the
+trusted publisher above and revoke the bootstrap token. Re-run via
+`workflow_dispatch` on main or wait for the next release. Dispatch skips
+surfaces that already exist; if the exact bootstrap version was manually
+published, its npm job correctly skips too.
+
+Only bootstrap tag `v26.11.26` (npm `26.1126.0`) is exempt from attestation,
+through `BOOTSTRAP_UNATTESTED_TAG`; integrity, latest, embedded version and
+peeled-tag SHA checks still apply. Every later version requires provenance.
+The npm org `nexaduo` ownership was verified by the operator. npm provenance
+helps only when someone verifies signatures; npx does not verify it automatically.
+
+Two quick merges are serialized while running, but Actions may replace a
+pending run with a newer one. A surviving run tags its own event SHA. If a
+later push keeps an already-tagged version at another commit, planning fails
+rather than moving the tag; use dispatch to retry that release. If tests fail
+after merge, no tag or publication is created: repair through a reviewed PR
+and dispatch on main. A skipped pending version can be recovered by re-running
+its original push run; do not create its tag manually.
 
 `release_verify.py` applies `npm_published` only when the repo has
 `launcher/package.json` named `@nexaduo/marc` and the tag is at least `v26.11.26`.

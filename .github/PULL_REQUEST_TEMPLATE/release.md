@@ -1,5 +1,7 @@
 ## Release
 
+Merging a version bump to `main` cuts a release automatically. To batch several
+PRs into one daily version, bump the version only in the last PR.
 Version/tag and editable release date:
 
 - [ ] Bump all four harness manifests to the same version; update CHANGELOG.
@@ -7,22 +9,22 @@ Version/tag and editable release date:
   `.claude-plugin/marketplace.json`, `.github/plugin/marketplace.json`,
   `.agents/plugins/marketplace.json` (Copilot uses github; others git-subdir).
 - [ ] Update launcher/package.json mapped npm version and release.json tag/npm;
-  leave source SHA null (npm-publish.yml embeds the actual tag commit SHA).
+  leave source SHA null (`release.yml` embeds the actual tag commit SHA).
 - [ ] Run catalog parity, launcher tests, compilation check, and green CI.
 - [ ] Independent `marc:sec review` and `marc:rev review` cover current HEAD.
 - [ ] Dogfood all four real CLIs through terminal success, preserving scopes
   and disabled state. Record commands, versions and results here.
-- [ ] Maintainer prerequisites before the first tag push: `v*` tag ruleset
-  restricts create/update/delete to maintainers; a rule blocks creation of
-  `refs/heads/v*` branches; `npm-publish` environment has required reviewers.
-- [ ] Verify action SHA pins and npm trusted publisher bound to
-  `NexaDuo/mARC`, workflow `npm-publish.yml`, environment `npm-publish`.
-- [ ] Bootstrap only: manually publish `v26.11.26` / npm `26.1126.0` once
-  from its clean tag with a short-lived token; revoke it after publisher setup.
-  That exact version alone is exempt from the `npm_published` attestation
-  check; integrity, latest, embedded version and peeled-tag SHA must still pass.
-- [ ] Push the tag immediately after merge; confirm each CLI's missing-ref
-  failure mode once and record the result (offline fixtures cannot prove it).
-- [ ] After tagging, release_verify.py passes, including npm_published when
-  applicable (matching launcher package, tags >= `v26.11.26`); consumer repos
-  and older tags report `not_applicable`.
+- [ ] Operator prerequisites: `v*` tag ruleset permits only the GitHub Actions
+  integration to create tags and protects against update/delete; a rule blocks
+  creation of `refs/heads/v*` branches. Humans and agents never create `v*` tags.
+- [ ] `npm-publish` environment allows only `main`, with no required reviewer;
+  npm trusted publisher binds `NexaDuo/mARC`, `release.yml`, `npm-publish`.
+- [ ] Bootstrap only: follow the decision record's [bootstrap section](../../docs/marc/2026-11-25-decision-npx-launcher.md#bootstrap).
+  The first publish job fails by design; publish once with a short-lived token,
+  configure the trusted publisher, revoke the token, then dispatch on `main`.
+- [ ] SEC-8: the merge-to-tag missing-ref window is now seconds in a healthy run;
+  confirm each CLI fails closed during that window. Scheduling delays or failed
+  tests can extend it; preserve the concrete dogfood result.
+- [ ] After merge, monitor `release.yml` to terminal completion and verify with
+  `python3 core/scripts/release_verify.py`, including `npm_published` when
+  applicable. Consumer repos and older tags report `not_applicable`.

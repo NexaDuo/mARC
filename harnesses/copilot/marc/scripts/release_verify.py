@@ -2,12 +2,12 @@
 """Release-verification operator script (origin: #113).
 
 ONE-call replacement for the `@techlead` skill's hand-rolled post-release
-`gh` sequence (does the tag exist? did the tag-triggered `Release` workflow
+`gh` sequence (does the tag exist? did the release workflow
 run go green? did GitHub Release publish and get marked Latest?) that
 `release_gate.py` (#75) deliberately does NOT cover — `release_gate.py`
 answers "is this version released at all" on a daily schedule; this script
 answers "did THIS release just go through cleanly, right now" on demand,
-right after a tag push, with the workflow-run result included.
+right after release automation runs, with the workflow-run result included.
 
 Usage:
     python3 release_verify.py [VERSION] [--json] [--repo-root PATH]
@@ -21,17 +21,17 @@ Usage:
     --repo    OWNER/REPO override; default resolution mirrors
               `board.py`: team.toml `gh_repo`, then `gh repo view`
               zero-config fallback.
-    --workflow  the tag-triggered release workflow's file name (default:
+    --workflow  the release workflow's file name (default:
               "release.yml", this repo's actual workflow — override for a
               consumer repo with a differently named release workflow).
 
 Checks (all applicable checks must pass for `ok: true`):
   1. tag_exists       — `vX.Y.Z` tag exists in the repo (via `gh api
                          .../git/refs/tags/vX.Y.Z`, no local clone required).
-  2. workflow_run      — the tag-triggered release workflow has a run for
-                         this tag with `status == completed` and
-                         `conclusion == success` (via `gh run list
-                         --workflow <name> --branch vX.Y.Z`).
+  2. workflow_run      — the release workflow has a successful completed run
+                         for the tag commit (push on main or dispatch). Dispatch
+                         can run from later main commits with the same manifest
+                         version. Tag-branch lookup remains a consumer fallback.
   3. release_published — a GitHub Release exists for the tag, is NOT a
                          draft, and IS marked "Latest" (via `gh release
                          list --json ...,isLatest`).
@@ -146,7 +146,7 @@ def verify_release(
         run_check = CheckResult(
             ok=False,
             notes=f"no release-workflow run found for tag {expected_tag} "
-                  f"(has it been pushed yet?)",
+                  f"(has release automation completed yet?)",
         )
     else:
         # Most recent run wins (list is assumed newest-first, matching `gh run
@@ -313,22 +313,72 @@ def fetch_tag_exists(repo: Optional[str], expected_tag: str) -> bool:
         return False
 
 
+def fetch_tag_commit(repo: str, expected_tag: str) -> Optional[str]:
+    """Peel annotated tags via GitHub; consumer verification needs no clone."""
+    try:
+        obj = json.loads(_run(["gh", "api", f"repos/{repo}/git/refs/tags/{expected_tag}"]))["object"]
+        for _ in range(8):
+            sha = obj["sha"]
+            if not re.fullmatch(r"[a-f0-9]{40}", sha):
+                return None
+            if obj["type"] == "commit":
+                return sha
+            if obj["type"] != "tag":
+                return None
+            obj = json.loads(_run(["gh", "api", f"repos/{repo}/git/tags/{sha}"]))["object"]
+    except Exception:  # noqa: BLE001 — legacy tag-branch lookup can still work
+        return None
+    return None
+
+
+def _dispatch_matches_tag(repo: str, run: dict, expected_tag: str) -> bool:
+    """A dispatch checks out main, but can release an older existing tag.
+
+    Only accept later-head dispatches whose immutable main manifest names this
+    version. Never credit an unrelated release's successful dispatch.
+    """
+    sha = run.get("headSha", "")
+    if not re.fullmatch(r"[a-f0-9]{40}", sha):
+        return False
+    try:
+        path = "harnesses/claude-code/marc/.claude-plugin/plugin.json"
+        response = json.loads(_run(["gh", "api", f"repos/{repo}/contents/{path}?ref={sha}"]))
+        manifest = json.loads(base64.b64decode(response["content"], validate=False))
+        return "v" + manifest["version"] == expected_tag
+    except Exception:  # noqa: BLE001 — consumers may have no such manifest
+        return False
+
+
 def fetch_workflow_runs(repo: Optional[str], workflow: str, expected_tag: str) -> list[WorkflowRun]:
-    cmd = ["gh", "run", "list", "--workflow", workflow, "--branch", expected_tag,
-           "--json", "status,conclusion,url,createdAt", "--limit", "10"]
-    if repo:
-        cmd += ["--repo", repo]
-    raw = _run(cmd)
-    payload = json.loads(raw)
-    return [
-        WorkflowRun(
-            status=r.get("status"),
-            conclusion=r.get("conclusion"),
-            url=r.get("url"),
-            created_at=r.get("createdAt"),
-        )
-        for r in payload
-    ]
+    def lookup(*filters):
+        cmd = ["gh", "run", "list", "--workflow", workflow, *filters,
+               "--json", "status,conclusion,url,createdAt,headSha,headBranch,event", "--limit", "100"]
+        if repo:
+            cmd += ["--repo", repo]
+        return json.loads(_run(cmd))
+
+    candidates = []
+    sha = fetch_tag_commit(repo, expected_tag) if repo else None
+    try:
+        if sha:
+            candidates = [r for r in lookup("--commit", sha, "--branch", "main")
+                          if r.get("headSha") == sha and r.get("headBranch") == "main"
+                          and r.get("event") in ("push", "workflow_dispatch")]
+            # On dispatch, GITHUB_SHA is main's current head, while plan may target
+            # the existing tag's older commit. Include such bootstrap retries too.
+            for run in lookup("--branch", "main", "--event", "workflow_dispatch"):
+                if (run.get("headBranch") == "main" and run.get("event") == "workflow_dispatch"
+                        and (run.get("headSha") == sha or _dispatch_matches_tag(repo, run, expected_tag))):
+                    candidates.append(run)
+    except Exception:  # noqa: BLE001 — fall back for consumer workflow APIs
+        candidates = []
+    if not candidates:
+        # Consumers can retain their own tag-triggered workflows (any branch
+        # naming scheme); no launcher or registry dependency is introduced.
+        candidates = lookup("--branch", expected_tag)
+    candidates.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
+    return [WorkflowRun(status=r.get("status"), conclusion=r.get("conclusion"),
+                        url=r.get("url"), created_at=r.get("createdAt")) for r in candidates]
 
 
 def fetch_releases(repo: Optional[str]) -> list[ReleaseRow]:
@@ -373,7 +423,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--team-toml", default=None, help="override team.toml path")
     parser.add_argument("--repo", default=None, help="OWNER/REPO override (default: resolved like board.py)")
     parser.add_argument("--workflow", default=DEFAULT_WORKFLOW,
-                         help=f"tag-triggered release workflow file name (default: {DEFAULT_WORKFLOW})")
+                         help=f"release workflow file name (default: {DEFAULT_WORKFLOW})")
     parser.add_argument("--manifest", default=None, help="override plugin.json path")
     args = parser.parse_args(argv)
 

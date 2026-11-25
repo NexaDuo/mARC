@@ -42,8 +42,7 @@ class NpmReleaseGuards(unittest.TestCase):
 
     def gate(self, sha=None, tag='v26.11.26'):
         return subprocess.run(['bash', 'scripts/prepare_npm_release.sh'], cwd=self.repo,
-                              env={**os.environ, 'GITHUB_SHA': sha or self.sha,
-                                   'GITHUB_REF_NAME': tag, 'GITHUB_REF': 'refs/tags/' + tag},
+                              env={**os.environ, 'RELEASE_SHA': sha or self.sha, 'RELEASE_TAG': tag},
                               capture_output=True, text=True)
 
     def next_commit(self):
@@ -76,23 +75,41 @@ class NpmReleaseGuards(unittest.TestCase):
         self.next_commit()
         result = self.gate()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Checkout/event SHA mismatch', result.stderr)
+        self.assertIn('Checkout/release SHA mismatch', result.stderr)
 
     def test_wrong_tag_is_rejected(self):
         result = self.gate(tag='v26.11.27')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Tag/manifest mismatch', result.stderr)
 
-    def test_workflow_keeps_tests_out_of_oidc_job(self):
-        workflow = (ROOT / '.github/workflows/npm-publish.yml').read_text()
-        test_job, publish_job = workflow.split('  publish:\n')
-        self.assertNotIn('id-token:', test_job)
-        self.assertIn('node --test launcher/', test_job)
-        self.assertIn('needs: test', publish_job)
-        self.assertIn('environment: npm-publish', publish_job)
-        self.assertIn('id-token: write', publish_job)
-        self.assertNotIn('node --test', publish_job)
-        self.assertEqual(workflow.count('run: bash scripts/prepare_npm_release.sh'), 2)
+    def publish_gate(self):
+        return subprocess.run(['bash', 'scripts/prepare_npm_release.sh'], cwd=self.repo,
+                              env={**os.environ, 'RELEASE_SHA': self.sha, 'RELEASE_TAG': 'v26.11.26',
+                                   'REQUIRE_RELEASE_TAG': 'true'}, capture_output=True, text=True)
+
+    def test_publish_requires_existing_tag(self):
+        self.assertNotEqual(self.publish_gate().returncode, 0)
+
+    def test_publish_accepts_annotated_tag_at_target(self):
+        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.26', '-m', 'release', self.sha)
+        result = self.publish_gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_publish_rejects_tag_moved_to_different_commit(self):
+        later = self.next_commit()
+        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.26', '-m', 'moved', later)
+        self.git('checkout', '-q', '--detach', self.sha)
+        result = self.publish_gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Tag/release SHA mismatch', result.stderr)
+        self.assertIsNone(json.loads((self.repo / 'launcher/release.json').read_text())['sha'])
+
+    def test_wrong_package_version_is_rejected(self):
+        path = self.repo / 'launcher/package.json'
+        pkg = json.loads(path.read_text())
+        pkg['version'] = '26.1127.0'
+        path.write_text(json.dumps(pkg))
+        self.assertNotEqual(self.gate().returncode, 0)
 
 
 if __name__ == '__main__':

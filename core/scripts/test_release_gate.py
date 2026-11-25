@@ -50,7 +50,7 @@ def main() -> int:
     check(result.ok is True, "released-ok fixture: is_released() == True")
     check(result.tag_found and result.release_found, "released-ok fixture: both tag_found and release_found True")
 
-    # --- missing-tag: version bumped, no tag pushed at all -> FAIL ----------
+    # --- missing-tag: version bumped, tag not created -> FAIL ----------
     result = is_released(
         "0.16.6",
         tags=["v0.16.4", "v0.16.5"],
@@ -62,6 +62,10 @@ def main() -> int:
     check(result.ok is False, "missing-tag fixture: is_released() == False")
     check(result.tag_found is False, "missing-tag fixture: tag_found False")
     check("no git tag" in result.reason, f"missing-tag fixture: reason mentions missing tag ({result.reason!r})")
+
+    check("do not tag manually" in result.reason, "missing-tag: respects merge-triggered automation")
+    check("documented release process" in result.reason, "missing-tag: preserves consumer release process")
+    check("git push" not in result.reason, "missing-tag: does not prescribe a manual tag push")
 
     # --- tag exists, no release at all -> FAIL -------------------------------
     result = is_released(

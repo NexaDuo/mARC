@@ -23,16 +23,104 @@ Covers the three acceptance-criteria checks from #113:
 from __future__ import annotations
 
 import os
+import base64
+import json
+import unittest
+from unittest.mock import patch
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+
+import release_verify as rv
 
 from release_verify import (  # noqa: E402
     ReleaseRow,
     WorkflowRun,
     verify_release,
 )
+
+class WorkflowLookup(unittest.TestCase):
+    SHA = 'a' * 40
+    LATER = 'b' * 40
+    TAG = 'v26.11.26'
+
+    def row(self, event='push', sha=None, branch='main', **values):
+        return dict(status='completed', conclusion='success', url='https://x/runs/1',
+                    createdAt=values.pop('createdAt', '2026-11-25T12:00:00Z'),
+                    headSha=sha or self.SHA, headBranch=branch, event=event, **values)
+
+    def test_annotated_tag_is_peeled(self):
+        with patch.object(rv, '_run', side_effect=[
+                json.dumps({'object': {'type': 'tag', 'sha': self.LATER}}),
+                json.dumps({'object': {'type': 'commit', 'sha': self.SHA}})]) as run:
+            self.assertEqual(rv.fetch_tag_commit('owner/repo', self.TAG), self.SHA)
+            self.assertIn(f'repos/owner/repo/git/tags/{self.LATER}', run.call_args.args[0])
+
+    def test_unpeelable_tag_returns_none(self):
+        for obj in [{'type': 'tree', 'sha': self.SHA}, {'type': 'commit', 'sha': 'bad'}]:
+            with patch.object(rv, '_run', return_value=json.dumps({'object': obj})):
+                self.assertIsNone(rv.fetch_tag_commit('owner/repo', self.TAG))
+
+    def test_main_push_and_exact_commit_dispatch(self):
+        for event in ['push', 'workflow_dispatch']:
+            with self.subTest(event=event), patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), \
+                    patch.object(rv, '_run', side_effect=[json.dumps([self.row(event)]), '[]']) as run:
+                result = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
+                self.assertEqual(result[0].conclusion, 'success')
+                cmd = run.call_args_list[0].args[0]
+                self.assertIn('--commit', cmd)
+                self.assertIn(self.SHA, cmd)
+                self.assertIn('release.yml', cmd)
+
+    def test_later_dispatch_same_version_wins_over_failed_push(self):
+        manifest = {'content': base64.b64encode(json.dumps({'version': '26.11.26'}).encode()).decode()}
+        failed = self.row(); failed['conclusion'] = 'failure'
+        dispatch = self.row('workflow_dispatch', sha=self.LATER, createdAt='2026-11-25T13:00:00Z')
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                json.dumps([failed]), json.dumps([dispatch]), json.dumps(manifest)]):
+            runs = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
+            self.assertEqual([r.conclusion for r in runs], ['success', 'failure'])
+
+    def test_unrelated_dispatch_cannot_hide_failed_push(self):
+        manifest = {'content': base64.b64encode(b'{"version":"26.11.27"}').decode()}
+        failed = self.row(); failed['conclusion'] = 'failure'
+        dispatch = self.row('workflow_dispatch', sha=self.LATER, createdAt='2026-11-25T13:00:00Z')
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                json.dumps([failed]), json.dumps([dispatch]), json.dumps(manifest)]):
+            runs = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
+            self.assertEqual([r.conclusion for r in runs], ['failure'])
+
+    def test_tag_triggered_consumer_fallback_and_custom_workflow(self):
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                '[]', '[]', json.dumps([self.row('push', branch=self.TAG)])]) as run:
+            runs = rv.fetch_workflow_runs('owner/consumer', 'publish.yaml', self.TAG)
+            self.assertEqual(runs[0].conclusion, 'success')
+            cmd = run.call_args_list[-1].args[0]
+            self.assertEqual(cmd[cmd.index('--branch') + 1], self.TAG)
+            self.assertIn('publish.yaml', cmd)
+
+    def test_unavailable_tag_lookup_still_uses_legacy_branch(self):
+        with patch.object(rv, 'fetch_tag_commit', return_value=None), \
+                patch.object(rv, '_run', return_value=json.dumps([self.row('push', branch=self.TAG)])) as run:
+            self.assertEqual(len(rv.fetch_workflow_runs('owner/consumer', 'release.yml', self.TAG)), 1)
+            self.assertIn(self.TAG, run.call_args.args[0])
+
+    def test_commit_lookup_failure_still_uses_consumer_tag_branch(self):
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                RuntimeError('commit filter unavailable'), json.dumps([self.row('push', branch=self.TAG)])]):
+            self.assertEqual(len(rv.fetch_workflow_runs('owner/consumer', 'release.yml', self.TAG)), 1)
+
+    def test_pr_or_other_branch_is_not_credited(self):
+        for bad in [self.row('pull_request'), self.row(branch='feature'), self.row(sha=self.LATER)]:
+            with self.subTest(row=bad), patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), \
+                    patch.object(rv, '_run', side_effect=[json.dumps([bad]), '[]', '[]']):
+                self.assertEqual(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG), [])
+
+    def test_missing_dispatch_manifest_is_consumer_safe(self):
+        with patch.object(rv, '_run', side_effect=RuntimeError('not found')):
+            self.assertFalse(rv._dispatch_matches_tag('owner/consumer', self.row('workflow_dispatch'), self.TAG))
+
 
 _failures: list[str] = []
 
@@ -127,4 +215,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(WorkflowLookup)
+    lookup_result = unittest.TextTestRunner(verbosity=2).run(suite)
+    sys.exit(main() or (0 if lookup_result.wasSuccessful() else 1))

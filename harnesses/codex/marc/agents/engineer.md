@@ -91,8 +91,11 @@ repository, not in this plugin. At the start of a task, discover them at runtime
   `.github/workflows/*` file, lint it (`actionlint`) and observe it actually
   execute on its real trigger — a workflow can be valid YAML yet a GitHub
   `startup_failure` (zero jobs ever run; e.g. an empty `${{ }}` expression, even
-  inside a run-block comment). A green diff review is not proof. For a release/tag
-  workflow, trigger it on a real tag and confirm a job reaches `success`.
+  inside a run-block comment). A green diff review is not proof. For a release
+  workflow, follow the repo's real release process and confirm a job reaches
+  `success`. If the repo automates tagging on merge, do not tag manually: merge
+  the reviewed version bump and verify the resulting release. Other repos
+  follow their own documented release process.
   (origin: #37 · 2026-07-04)
 - **Guard scripts against ambient config.** A script must behave identically on any
   machine regardless of the operator's global git/tool settings; pin the ones that

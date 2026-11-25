@@ -21,6 +21,9 @@ date whose `YY.M.D` is already taken.
 
 ### Changed
 
+- Releases run automatically when a version bump merges to main: one workflow
+  tests, creates an immutable annotated tag, publishes GitHub notes and uses
+  trusted npm publishing. Dispatch retries only missing release surfaces.
 - All four harnesses ship 26.11.26. Marketplace catalogs point at `v26.11.26`
   using each CLI's supported source schema; CI installs from temporary local
   catalogs so it continues testing the PR tree. npm version: `26.1126.0`.
