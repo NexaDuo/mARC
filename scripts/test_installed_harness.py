@@ -65,6 +65,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import compile_prompts  # noqa: E402
+from local_test_marketplace import prepare  # noqa: E402
 
 MARKER = "MARC-INSTALLED-367"
 FAKE_REMOTE_VERSION = "999.0.0"
@@ -144,7 +145,13 @@ class Adapter:
 
     def __init__(self, tmp: str):
         self.tmp = tmp
+        self.marketplace = None
         self.ctx: dict = {}  # install-context env (HOME, CODEX_HOME, ...) the user's shell also has
+
+    def local_marketplace(self) -> str:
+        if self.marketplace is None:
+            self.marketplace = prepare(os.path.join(self.tmp, "marketplace"))
+        return self.marketplace
 
     def install(self) -> str:
         raise NotImplementedError
@@ -190,7 +197,7 @@ class ClaudeCode(Adapter):
         for d in self.ctx.values():
             os.makedirs(d, exist_ok=True)
         env = base_env(self.ctx)
-        sh(["claude", "plugin", "marketplace", "add", ROOT], env=env, cwd=self.tmp, check=True)
+        sh(["claude", "plugin", "marketplace", "add", self.local_marketplace()], env=env, cwd=self.tmp, check=True)
         sh(["claude", "plugin", "install", "marc@nexaduo"], env=env, cwd=self.tmp, check=True)
         listing = json.loads(sh(["claude", "plugin", "list", "--json"], env=env, cwd=self.tmp, check=True).stdout)
         return next(p["installPath"] for p in listing if p.get("id") == "marc@nexaduo")
@@ -233,7 +240,7 @@ class Codex(Adapter):
         for d in self.ctx.values():
             os.makedirs(d, exist_ok=True)
         env = base_env(self.ctx)
-        sh(["codex", "plugin", "marketplace", "add", ROOT, "--json"], env=env, cwd=self.tmp, check=True)
+        sh(["codex", "plugin", "marketplace", "add", self.local_marketplace(), "--json"], env=env, cwd=self.tmp, check=True)
         out = sh(["codex", "plugin", "add", "marc@nexaduo", "--json"], env=env, cwd=self.tmp, check=True).stdout
         return json.loads(out)["installedPath"]
 
@@ -260,7 +267,7 @@ class Copilot(Adapter):
         os.makedirs(home)
         self.ctx = {"HOME": home, "COPILOT_HOME": os.path.join(home, ".copilot")}
         env = base_env(self.ctx)
-        sh(["copilot", "plugin", "marketplace", "add", ROOT], env=env, cwd=self.tmp, check=True)
+        sh(["copilot", "plugin", "marketplace", "add", self.local_marketplace()], env=env, cwd=self.tmp, check=True)
         sh(["copilot", "plugin", "install", "marc@nexaduo"], env=env, cwd=self.tmp, check=True)
         listing = sh(["copilot", "plugin", "list"], env=env, cwd=self.tmp).stdout
         check("marc@nexaduo" in listing, "copilot: marc@nexaduo installed into the temp COPILOT_HOME")

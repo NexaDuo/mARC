@@ -1,5 +1,7 @@
 # Decision record: the Claude Code plugin marketplace remains mARC's only supported install channel
 
+> **Superseded in part by [#424](https://github.com/NexaDuo/mARC/issues/424) (2026-11-25).** The rejection of a self-owned `npx` installer no longer holds. None of the revisit conditions below fired: this is a user decision on new facts (four harnesses, Antigravity still clone-only, measured cross-harness version drift, and since #419 a correctness need for lockstep). The security note's premise does not apply to the new launcher, which only runs each harness's native plugin CLI and never writes settings itself. The `skills.sh` and `npx claude-plugins` rejections stand unchanged.
+
 - **Type:** decision record
 - **Date:** 2026-07-24
 - **Attribution:** operator + user decision on
@@ -10,7 +12,7 @@
   [#160](https://github.com/NexaDuo/mARC/issues/160#issuecomment-5073523899)
   (third-party plugin registries, a self-owned `npx` installer, MCP
   distribution, and cross-harness channels).
-- **Status:** accepted (docs-only; no plugin version bump)
+- **Status:** accepted; partially superseded 2026-11-25 by #424 (self-owned npx installer option only)
 
 ## Context
 

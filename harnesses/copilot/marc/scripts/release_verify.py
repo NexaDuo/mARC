@@ -25,7 +25,7 @@ Usage:
               "release.yml", this repo's actual workflow — override for a
               consumer repo with a differently named release workflow).
 
-Checks (all three must pass for `ok: true`):
+Checks (all applicable checks must pass for `ok: true`):
   1. tag_exists       — `vX.Y.Z` tag exists in the repo (via `gh api
                          .../git/refs/tags/vX.Y.Z`, no local clone required).
   2. workflow_run      — the tag-triggered release workflow has a run for
@@ -35,6 +35,11 @@ Checks (all three must pass for `ok: true`):
   3. release_published — a GitHub Release exists for the tag, is NOT a
                          draft, and IS marked "Latest" (via `gh release
                          list --json ...,isLatest`).
+
+  4. npm_published    — for tags >= v26.11.25: mapped npm version exists,
+                         is latest, has provenance, and the tarball release SHA
+                         matches the locally peeled tag commit. Older versions
+                         predate the launcher and skip this check.
 
 Decision logic is a pure function, `verify_release()`, taking plain data (no
 I/O) so it's unit-testable offline — see `test_release_verify.py`, mirroring
@@ -48,6 +53,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import base64
+import hashlib
+import io
+import re
+import tarfile
+import urllib.request
+from datetime import date
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -59,7 +71,7 @@ sys.path.insert(0, str(HERE))
 
 from board import RepoConfig, _resolve_config  # noqa: E402
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_WORKFLOW = "release.yml"
 
 
@@ -94,6 +106,7 @@ class VerifyResult:
     tag_exists: CheckResult
     workflow_run: CheckResult
     release_published: CheckResult
+    npm_published: CheckResult
     ok: bool
 
     def to_dict(self) -> dict:
@@ -110,6 +123,7 @@ def verify_release(
     tag_exists: bool,
     runs: list[WorkflowRun],
     releases: list[ReleaseRow],
+    npm_check: Optional[CheckResult] = None,
 ) -> VerifyResult:
     """Pure decision function — no I/O. `runs` and `releases` are assumed
     already filtered to the relevant tag/workflow by the caller (mirrors
@@ -173,7 +187,15 @@ def verify_release(
             notes=f"Release {expected_tag} is published and marked 'Latest'",
         )
 
-    ok = tag_check.ok and run_check.ok and release_check.ok
+    if npm_check is None:
+        try:
+            mapped_npm_version(expected_tag)
+            npm_check = CheckResult(False, "npm publication not checked")
+        except ValueError:
+            historical = re.fullmatch(r"v(?:0\.[0-9]+\.[0-9]+|[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]+)?)", expected_tag)
+            old = historical and tuple(int(x) for x in expected_tag[1:].split(".")[:3]) < (26, 11, 25)
+            npm_check = CheckResult(bool(old), "not applicable: tag predates launcher version floor" if old else "invalid npm release tag")
+    ok = tag_check.ok and run_check.ok and release_check.ok and npm_check.ok
     return VerifyResult(
         schema_version=SCHEMA_VERSION,
         version=norm_version,
@@ -181,8 +203,77 @@ def verify_release(
         tag_exists=tag_check,
         workflow_run=run_check,
         release_published=release_check,
+        npm_published=npm_check,
         ok=ok,
     )
+
+
+def mapped_npm_version(tag: str) -> str:
+    """Mirror launcher/lib/version.js; no runtime Node dependency."""
+    match = re.fullmatch(r"v([1-9][0-9])\.([1-9][0-9]?)\.([1-9][0-9]?)(?:\.([1-9][0-9]*))?", tag)
+    if not match:
+        raise ValueError("unsupported calendar tag")
+    y, m, d, n = (int(v or 0) for v in match.groups())
+    if date(2000 + y, m, d) < date(2026, 11, 25) or n > 9007199254740991:
+        raise ValueError("tag below launcher floor or release number too large")
+    return f"{y}.{m * 100 + d}.{n}"
+
+
+def _download(url: str, limit: int) -> bytes:
+    if not url.startswith("https://registry.npmjs.org/"):
+        raise ValueError("unexpected npm registry URL")
+    with urllib.request.urlopen(url, timeout=30) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("npm response too large")
+    return data
+
+
+def fetch_npm_published(expected_tag: str, repo_root: Path) -> CheckResult:
+    """Read registry metadata, attestation and tarball; never extract files.
+
+    Presence of provenance is checked here; cryptographic verification remains
+    npm audit signatures' job. No subprocess executes downloaded code.
+    """
+    try:
+        version = mapped_npm_version(expected_tag)
+    except ValueError:
+        # Only historical tags are exempt; malformed modern tags fail closed.
+        historical = re.fullmatch(r"v(?:0\.[0-9]+\.[0-9]+|[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]+)?)", expected_tag)
+        if historical and tuple(int(x) for x in expected_tag[1:].split(".")[:3]) < (26, 11, 25):
+            return CheckResult(True, "not applicable: tag predates launcher version floor")
+        return CheckResult(False, "invalid npm release tag")
+    try:
+        metadata = json.loads(_download("https://registry.npmjs.org/@nexaduo%2fmarc", 16 * 1024 * 1024))
+        package = metadata.get("versions", {}).get(version)
+        if not package:
+            return CheckResult(False, f"npm version {version} is missing")
+        if metadata.get("dist-tags", {}).get("latest") != version:
+            return CheckResult(False, f"npm latest does not point at {version}")
+        dist = package["dist"]
+        attestation_url = dist.get("attestations", {}).get("url")
+        if not attestation_url:
+            return CheckResult(False, "npm provenance attestation is missing")
+        attestations = json.loads(_download(attestation_url, 4 * 1024 * 1024)).get("attestations", [])
+        if not any(a.get("predicateType") == "https://slsa.dev/provenance/v1" and a.get("bundle") for a in attestations):
+            return CheckResult(False, "npm provenance attestation is missing")
+        blob = _download(dist["tarball"], 8 * 1024 * 1024)
+        integrity = "sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode("ascii")
+        if dist.get("integrity") != integrity:
+            return CheckResult(False, "npm tarball integrity mismatch")
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as archive:
+            members = [m for m in archive.getmembers() if m.name == "package/release.json"]
+            if len(members) != 1 or not members[0].isfile() or members[0].size > 4096:
+                return CheckResult(False, "npm release.json missing, duplicated or unsafe")
+            release = json.load(archive.extractfile(members[0]))
+        expected_sha = _run(["git", "-C", str(repo_root), "rev-parse", f"{expected_tag}^{{commit}}"]).strip()
+        if not re.fullmatch(r"[a-f0-9]{40}", expected_sha) or release.get("sha") != expected_sha:
+            return CheckResult(False, "npm release.json SHA does not match peeled tag commit")
+        if release.get("tag") != expected_tag or release.get("npm") != version or package.get("version") != version:
+            return CheckResult(False, "npm release tag/version metadata mismatch")
+        return CheckResult(True, f"npm {version} is latest, attested, and matches {expected_sha}")
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(False, f"npm publication unreadable: {exc}")
 
 
 # --- I/O: fetch real state via `gh`/`git` ------------------------------------
@@ -258,6 +349,7 @@ def render_human(result: VerifyResult) -> str:
         f"  [{mark(result.tag_exists.ok)}] tag_exists       — {result.tag_exists.notes}",
         f"  [{mark(result.workflow_run.ok)}] workflow_run     — {result.workflow_run.notes}",
         f"  [{mark(result.release_published.ok)}] release_published — {result.release_published.notes}",
+        f"  [{mark(result.npm_published.ok)}] npm_published     — {result.npm_published.notes}",
         "",
         f"overall: {'OK' if result.ok else 'FAIL'}",
     ]
@@ -312,7 +404,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"::warning::release_verify: gh release list failed: {e}", file=sys.stderr)
         releases = []
 
-    result = verify_release(version, tag_exists, runs, releases)
+    npm_check = fetch_npm_published(expected_tag, repo_root)
+    result = verify_release(version, tag_exists, runs, releases, npm_check)
 
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))

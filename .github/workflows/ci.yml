@@ -83,6 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Verify compiled prompts are up-to-date
         run: |
@@ -100,6 +102,15 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+
+      - name: Launcher tests (offline stubs)
+        run: node --test launcher/
+
+      - name: Catalog release-pointer parity
+        run: python3 scripts/check_catalog_pointers.py
+
+      - name: Catalog and npm verification regressions (offline)
+        run: python3 -m unittest scripts/test_catalog_pointers.py core/scripts/test_npm_published.py
 
       - name: Install Claude Code CLI (pinned)
         run: |
@@ -991,6 +1002,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Prepare PR-tree local marketplaces
+        run: |
+          python3 scripts/local_test_marketplace.py "$RUNNER_TEMP/marc-pr-marketplace"
+          echo "MARC_TEST_MARKETPLACE=$RUNNER_TEMP/marc-pr-marketplace" >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
@@ -1013,7 +1029,7 @@ jobs:
           mkdir -p "$CLAUDE_CONFIG_DIR"
           # These three are the whole Tier-2 chain; if install needed a key it
           # would fail here with the key unset.
-          claude plugin marketplace add ./
+          claude plugin marketplace add "$MARC_TEST_MARKETPLACE"
           claude plugin install marc@nexaduo
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo")' > /dev/null
           echo "AUTH-BOUNDARY: plugin install SUCCEEDED with no ANTHROPIC_API_KEY."
@@ -1030,7 +1046,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$CLAUDE_CONFIG_DIR"
-          claude plugin marketplace add ./
+          claude plugin marketplace add "$MARC_TEST_MARKETPLACE"
           claude plugin install marc@nexaduo
 
           echo "== assert plugin marc@nexaduo installed (list --json | jq -e) =="
@@ -1235,7 +1251,7 @@ jobs:
           copilot --version
 
           echo "Adding local marketplace and installing marc@nexaduo..."
-          copilot plugin marketplace add ./
+          copilot plugin marketplace add "$MARC_TEST_MARKETPLACE"
           copilot plugin install marc@nexaduo
 
           echo "== assert plugin marc@nexaduo installed (plugin list) =="
@@ -1311,7 +1327,7 @@ jobs:
           echo "consumer sandbox: $SANDBOX (outside $MARC_CHECKOUT)"
 
           # Point the marketplace at the mARC checkout by absolute path.
-          claude plugin marketplace add "$MARC_CHECKOUT"
+          claude plugin marketplace add "$MARC_TEST_MARKETPLACE"
           claude plugin install marc@nexaduo
 
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
@@ -1355,13 +1371,14 @@ jobs:
           fi
 
           echo "== Install previous version from origin/main =="
-          claude plugin marketplace add "$PREV_DIR"
+          python3 "$MARC_CHECKOUT/scripts/local_test_marketplace.py" "${RUNNER_TEMP}/marc-prev-local" "$PREV_DIR"
+          claude plugin marketplace add "${RUNNER_TEMP}/marc-prev-local"
           claude plugin install marc@nexaduo
 
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
 
           echo "== Point marketplace to the current checkout and upgrade =="
-          claude plugin marketplace add "$MARC_CHECKOUT"
+          claude plugin marketplace add "$MARC_TEST_MARKETPLACE"
           claude plugin update marc@nexaduo
 
           echo "== Assert upgraded plugin details =="
@@ -1372,3 +1389,15 @@ jobs:
               || { echo "::error::upgrade: component '$component' not registered after upgrade"; exit 1; }
           done
           echo "Upgrade path: plugin successfully upgrades from main release to PR version."
+
+  launcher-windows:
+    name: Launcher — Windows batch stubs
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - run: node --test launcher/

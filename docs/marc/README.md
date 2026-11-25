@@ -55,7 +55,7 @@ practice).
 - [2026-07-06-decision-team-config-toml.md](2026-07-06-decision-team-config-toml.md) — decision record: per-repo team binding moves from `team.config` to `team.toml` (#51).
 - [2026-07-21-brief-agy-marketplace-clone-free-install.md](2026-07-21-brief-agy-marketplace-clone-free-install.md) — research brief: no clone-free `agy` (Antigravity) marketplace install exists (#151).
 - [2026-07-21-brief-loop-engineering-guardrails.md](2026-07-21-brief-loop-engineering-guardrails.md) — research brief on loop-engineering guardrails (#154).
-- [2026-07-24-decision-distribution-channel-marketplace-only.md](2026-07-24-decision-distribution-channel-marketplace-only.md) — decision record: the Claude Code plugin marketplace remains mARC's only supported install channel; `skills.sh`, `npx claude-plugins`, and a self-owned `npx` installer considered and rejected (#159, #160, #161).
+- [2026-07-24-decision-distribution-channel-marketplace-only.md](2026-07-24-decision-distribution-channel-marketplace-only.md) — decision record: the Claude Code plugin marketplace remains mARC's only supported install channel; `skills.sh`, `npx claude-plugins`, and a self-owned `npx` installer considered and rejected (#159, #160, #161); the self-owned option is partially superseded by #424.
 - [2026-07-29-decision-ai-memory-rejected.md](2026-07-29-decision-ai-memory-rejected.md) — decision record: mARC does not adopt `akitaonrails/ai-memory` (install-channel conflict, no PR-review gate on its writes); three of its conventions tracked separately as a follow-up (#175, #176).
 - [2026-08-12-decision-context-advisory-retired.md](2026-08-12-decision-context-advisory-retired.md) — decision record: the token sentinel's context-size advisory is retired (not fixed) — Claude Code's own harness already auto-compacts against the real per-model window; the runaway-loop (#71) and model-switch (#73) guards survive (#181).
 - [2026-08-12-brief-harness-context-management.md](2026-08-12-brief-harness-context-management.md) — research brief: how Claude Code, Antigravity (`agy`) and Copilot CLI each handle context windows and auto-compaction natively. Claude Code and Copilot CLI have confirmed native mechanisms; Antigravity's could not be confirmed from primary sources, which is the gap tracked in #186 (#181).
@@ -68,6 +68,8 @@ practice).
 - [2026-10-08-decision-review-token-efficiency.md](2026-10-08-decision-review-token-efficiency.md) — decision record: review and dispatch token efficiency (conditional optional review passes, compact handoffs, git-computed re-review deltas).
 - [2026-10-18-decision-agy-hook-dispatcher.md](2026-10-18-decision-agy-hook-dispatcher.md) — decision record: Antigravity hooks run as `bash hooks/agy-hook.sh <id> <Event>`, a dispatcher that follows the host contract probed on agy 1.3.5/1.3.2: `cmd /c`/`sh -c`, cwd = plugin root, no `AGY_*` env, workspace in stdin, JSON on stdout (#343, PR #363).
 - [2026-11-23-decision-team-coordination-contract.md](2026-11-23-decision-team-coordination-contract.md) — engineering-director proposal: operational recovery, delegated authority and minimal contracts; live adapter capabilities require validation (#411).
+
+- [2026-11-25-decision-npx-launcher.md](2026-11-25-decision-npx-launcher.md) — accepted release-bound npx launcher, native flows refined by P1–P4 probes, publication trust model and #161 partial supersession (#424).
 
 ## Landing process (write policy)
 

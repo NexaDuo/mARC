@@ -69,8 +69,10 @@ class CodexRegression(unittest.TestCase):
         market = json.loads((ROOT / '.agents/plugins/marketplace.json').read_text())
         self.assertEqual(market['name'], 'nexaduo')
         marc = next(p for p in market['plugins'] if p['name'] == 'marc')
-        self.assertEqual(marc['source']['source'], 'local')
+        self.assertEqual(marc['source']['source'], 'git-subdir')
+        self.assertEqual(marc['source']['url'], 'NexaDuo/mARC')
         self.assertEqual((ROOT / marc['source']['path']).resolve(), CODEX)
+        self.assertEqual(marc['source']['ref'], 'v' + json.loads((CODEX / 'plugin.json').read_text())['version'])
 
     def test_entrypoint_budget_all_harnesses(self):
         for path in (ROOT / 'harnesses').glob('*/marc/skills/tech-lead/SKILL.md'):
@@ -145,7 +147,9 @@ def cli_smoke():
         def run(*args):
             result = subprocess.run(['codex', *args], cwd=consumer, env=env, text=True, capture_output=True, check=True)
             return json.loads(result.stdout)
-        run('plugin', 'marketplace', 'add', str(ROOT), '--json')
+        from local_test_marketplace import prepare
+        market = prepare(base / 'marketplace')
+        run('plugin', 'marketplace', 'add', market, '--json')
         installed = run('plugin', 'add', 'marc@nexaduo', '--json')
         assert installed['pluginId'] == 'marc@nexaduo'
         path = Path(installed['installedPath'])

@@ -30,6 +30,32 @@
 
 ## Try it in two minutes
 
+With Node.js 20+ and your harness CLIs already on PATH, install the same release
+across every detected harness:
+
+```bash
+npx @nexaduo/marc install
+```
+
+Or select one or more harnesses (repeat `--harness` to select several):
+
+```bash
+npx @nexaduo/marc install --harness claude
+npx @nexaduo/marc install --harness copilot
+npx @nexaduo/marc install --harness codex
+npx @nexaduo/marc install --harness agy
+```
+
+Use `--yes` in scripts, `--dry-run --yes` to preview without running any CLI,
+and `--scope project` or `--scope local` for Claude settings in the current
+checkout. The plan names the settings file Claude will edit. The launcher
+runs the native plugin CLIs; it never writes harness settings itself.
+Antigravity uses a temporary, SHA-verified shallow clone, deleted after install.
+The npm package embeds one release: `v26.11.26` maps to npm `26.1126.0`.
+Use `npx @nexaduo/marc@26.1126.0 install` for that exact launcher release.
+
+Native installation remains available:
+
 ### Claude Code
 
 Run these commands inside Claude Code to add the marketplace, install the plugin, and start:
@@ -65,19 +91,18 @@ copilot plugin install marc@nexaduo
 
 ### OpenAI Codex
 
-From the repository root, run these commands to register the local marketplace,
-install the plugin, and start Codex:
+Run these commands to add the GitHub marketplace, install the plugin, and start
+Codex; no clone is needed:
 
 ```bash
-codex plugin marketplace add .
+codex plugin marketplace add NexaDuo/mARC
 codex plugin add marc@nexaduo
 codex
 ```
 
-Then invoke `/marc:tech-lead` in Codex. The marketplace file lives at
-`.agents/plugins/marketplace.json`; the selected marketplace root must therefore
-be the repository root, not the `.agents/plugins` subdirectory. Codex installs
-the local plugin under the `marc@nexaduo` identifier.
+Then invoke `/marc:tech-lead` in Codex. The unpinned marketplace reads
+`.agents/plugins/marketplace.json`; its release pointer selects the tagged
+plugin under the `marc@nexaduo` identifier.
 
 Initial support is verified with CLI 0.156.1 for marketplace installation and
 bundled-helper execution from a fresh consumer without `team.toml`. Writers use
@@ -165,6 +190,8 @@ mARC is built by the team it ships. Every spec, dispatch, security review, and d
 
 ## Install
 
+For any of the four harnesses, start with `npx @nexaduo/marc install` above.
+
 The quick-start block above covers the interactive path: `/plugin marketplace add` and `/plugin install` run inside a Claude Code session. If you are using Claude Code, you can also run the installer script, which does the same two steps non-interactively:
 
 ```bash
@@ -213,8 +240,12 @@ For Claude Code, enabling auto-update for the `nexaduo` marketplace is recommend
 To update Claude Code manually at any time:
 
 ```
-claude plugin update marc@nexaduo
+claude plugin marketplace update nexaduo
+claude plugin update marc@nexaduo --scope user
 ```
+
+Repeat the update for every installed scope (`user`, `project`, `local`), as
+reported by `claude plugin list --json`.
 
 Or run these commands inside Claude Code:
 
@@ -223,17 +254,31 @@ Or run these commands inside Claude Code:
 /reload-plugins
 ```
 
-For Google Antigravity, pull the latest sources and re-run the install from the local directory:
+To update all detected harnesses to the launcher's embedded release:
 
 ```bash
-git -C mARC pull
-agy plugin install ./mARC/harnesses/antigravity/marc
+npx @nexaduo/marc update
+npx @nexaduo/marc doctor --yes
 ```
+
+This also handles Antigravity's verified clone and preserves disabled plugins.
+`doctor` is read-only and exits 1 on drift or legacy marketplace pins. An old
+Codex `marketplace add --ref` registration needs a manual re-registration
+without `--ref`; the launcher prints guidance and never removes a marketplace.
+Use `npx @nexaduo/marc uninstall` to remove plugins while keeping marketplaces.
 
 For GitHub Copilot CLI:
 
 ```bash
-copilot plugin update marc@nexaduo
+copilot plugin marketplace update nexaduo
+copilot plugin update marc
+```
+
+For OpenAI Codex:
+
+```bash
+codex plugin marketplace upgrade
+codex plugin add marc@nexaduo
 ```
 
 **Update notifications:** mARC ships a `SessionStart` hook that checks whether your installed version is behind the version on `main` once per session. If a new major or minor version is available, it prints a one-line update reminder. This check is silent and does not block the session if you are offline or if the check times out.

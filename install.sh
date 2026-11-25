@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
 # mARC (Multi-Agent Relay Control) — installer
+# All four harnesses: npx @nexaduo/marc install
 # -----------------------------------------------------------------------------
 # What this does, in order, and NOTHING else:
 #   1. Prints the mARC banner.

@@ -8,6 +8,25 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.26] - 2026-11-26
+
+### Added
+
+- `npx @nexaduo/marc` launcher (#424): install, update, doctor and uninstall
+  through native Claude Code, Copilot, Codex and Antigravity plugin CLIs.
+  The dependency-free package embeds a release tag and commit SHA, supports
+  dry-run and explicit scopes, and never writes harness configuration.
+- Trusted npm publish workflow, catalog-pointer parity gate, launcher tests
+  on Linux and Windows, and attested npm publication checks in release verification.
+
+### Changed
+
+- All four harnesses ship 26.11.26. Marketplace catalogs point at `v26.11.26`
+  using each CLI's supported source schema; CI installs from temporary local
+  catalogs so it continues testing the PR tree. npm version: `26.1126.0`.
+- #161's rejection of a self-owned npx installer is partially superseded;
+  third-party installer rejections stand. README includes clone-free Codex setup.
+
 ## [26.11.25.1] - 2026-11-25
 
 ### Changed
