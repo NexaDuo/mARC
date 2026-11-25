@@ -191,6 +191,17 @@ class ProbeTest(unittest.TestCase):
         d = self.data("--list-sessions")
         self.assertEqual(d["multiplexer"]["sessions"], {"tmux": [], "zellij": []})
 
+    def test_list_sessions_tmux_connect_errors(self):
+        fake(self.bin, "tmux",
+             'echo "error connecting to /tmp/tmux-1/default (Permission denied)" >&2; exit 1')
+        d = self.data("--list-sessions")
+        self.assertEqual(d["multiplexer"]["sessions"]["tmux"], [])
+        self.assertIn("tmux: exit 1", d["multiplexer"]["sessions"]["error"])
+        fake(self.bin, "tmux",
+             'echo "error connecting to /tmp/tmux-1/default (No such file or directory)" >&2; exit 1')
+        d = self.data("--list-sessions")
+        self.assertEqual(d["multiplexer"]["sessions"], {"tmux": [], "zellij": []})
+
     def test_no_writes(self):
         fake(self.bin, "claude", 'echo "2.1.230"')
         fake(self.bin, "tmux", "echo s")

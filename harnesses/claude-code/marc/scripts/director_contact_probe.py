@@ -56,7 +56,15 @@ LIST_SESSIONS_CMDS = {
     "zellij": ["zellij", "list-sessions", "--short", "--no-formatting"],
 }
 # exit-1 messages that mean "none running", not a failure (tmux, zellij)
-NO_SESSIONS = ("no server running", "error connecting to", "no active", "no sessions")
+# "error connecting to" counts only with "no such file or directory" (a missing
+# socket); other causes such as "Permission denied" are real failures.
+NO_SESSIONS = ("no server running", "no active zellij sessions")
+
+
+def none_running(msg):
+    msg = msg.lower()
+    return (any(m in msg for m in NO_SESSIONS)
+            or ("error connecting to" in msg and "no such file or directory" in msg))
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 ADAPTER_ORDER = {
@@ -150,8 +158,8 @@ def list_sessions(available):
             out[name] = {"sessions": [], "error": type(e).__name__}
             continue
         if r.returncode != 0:
-            msg = (r.stderr + r.stdout).lower()
-            if any(m in msg for m in NO_SESSIONS):
+            msg = r.stderr + r.stdout
+            if none_running(msg):
                 out[name] = {"sessions": []}
                 continue
             out[name] = {"sessions": [], "error": f"exit {r.returncode}"}

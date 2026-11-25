@@ -19,6 +19,10 @@ date whose `YY.M.D` is already taken.
   `root` is reported as `registered from local root <root>` (still unverified), Codex's
   `plugin list` source is used when `marketplace list` omits it, and the result table
   says `not installed` where mARC is absent.
+- The director contact probe's `--list-sessions` no longer reports a tmux
+  `error connecting to ... (Permission denied)` as "no sessions": that text now
+  counts as none running only with `No such file or directory`, and any other
+  exit-1 output returns an empty list plus an `error` (#443).
 
 ## [26.11.25.5] - 2026-11-25
 
