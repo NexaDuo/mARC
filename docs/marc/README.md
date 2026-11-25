@@ -70,6 +70,7 @@ practice).
 - [2026-11-23-decision-team-coordination-contract.md](2026-11-23-decision-team-coordination-contract.md) — engineering-director proposal: operational recovery, delegated authority and minimal contracts; live adapter capabilities require validation (#411).
 
 - [2026-11-25-decision-npx-launcher.md](2026-11-25-decision-npx-launcher.md) — accepted release-bound npx launcher, native flows refined by P1–P4 probes, publication trust model and #161 partial supersession (#424).
+- [2026-11-25-research-director-contact-adapters.md](2026-11-25-research-director-contact-adapters.md) — research brief: how each harness reaches or resumes a session, and harness-neutral fallbacks; basis of the director's contact-adapter model (#433).
 
 ## Landing process (write policy)
 

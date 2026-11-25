@@ -53,18 +53,51 @@ last pipeline command's success. Failure is never equivalent to a passed check.
    transcript or native status, not config. Never report success at process
    launch alone.
 
-No default command assumes a terminal multiplexer, operating system, local path,
-fixed pane number or CLI flag. If an adapter is absent, explain the missing
-capability and prepare its requirements; don't pretend a tracker comment wakes
-an idle session or silently install a service.
+No default command assumes an operating system, local path, fixed pane number
+or CLI flag. If an adapter is absent, explain the missing capability and prepare
+its requirements; don't silently install a service. Contact adapters and their
+order are in [Contact adapters](#contact-adapters).
+
+## Contact adapters
+
+Per team, the first adapter that is verified for that session wins. The
+discovery probe (`director_contact_probe.py`) proposes this order from what is
+installed; the director verifies before using it. Evidence:
+mARC issue #433 research brief (`docs/marc/2026-11-25-research-director-contact-adapters.md`).
+
+| Harness | 1. Live (native) | 2. Resume after exit | 3. Fallback | Optional |
+|---|---|---|---|---|
+| Claude Code | `SendMessage` to a session named with `--name` (v2.1.224+) | `claude --resume <name\|id>` (pin `--model`) | inbox | multiplexer |
+| Codex | none documented | `codex exec resume <id> "<prompt>"` | inbox | multiplexer |
+| Copilot CLI | none documented locally | `copilot --resume <id>` | inbox | multiplexer |
+| Antigravity | none documented locally | `agy --conversation <id>` (not `-c`) | inbox | multiplexer |
+
+Inbox is a file inbox with a watcher, or a tracker comment, then resume. Codex
+`app-server` and Copilot `--acp` are inferred, not verified for this use, and are
+not used by default.
+
+<!-- rules:origin-required -->
+- **Resume only after verified exit.** No documentation covers resuming a live
+  process; keep the liveness checks above. (origin: #433 · 2026-11-25)
+- **A tracker comment never wakes an idle session.** It is a durable record and a
+  poll target only. (origin: #433 · 2026-11-25)
+- **A multiplexer is discovered, never assumed.** Use it only after the native and
+  resume paths, with an explicit pane id captured at discovery and a verified
+  target that is not a shell or a permission dialog; never the focused or active
+  pane by default. (origin: #433 · 2026-11-25)
+- **Remote Control is only for cross-machine reach.** Same-machine Claude Code
+  delivery uses cross-session messaging, which needs no Remote Control on either
+  side. A `-p` session needs `crossSessionInbound: accept` to take messages
+  unattended, and a message never approves a permission prompt.
+  (origin: #433 · 2026-11-25)
+<!-- /rules:origin-required -->
 
 ## Delivery and idle sessions
 
-Resolve a logical recipient to a currently verified destination. Prefer a native
-message API when it actually reaches that session. A locally approved terminal
-adapter is permitted; check the target is the intended harness input, not a shell,
-permission dialog or another session. Send data via the adapter's safe input path,
-not executable shell interpolation. Unsupported/ambiguous target: do not send.
+Resolve a logical recipient to a currently verified destination through the
+first verified adapter in [Contact adapters](#contact-adapters). Send data via the
+adapter's safe input path, not executable shell interpolation. Unsupported or
+ambiguous target: do not send.
 
 Every forwarded message starts with a coordination envelope: director identity,
 recipient, work/message reference, existing mandate reference and requested action.
