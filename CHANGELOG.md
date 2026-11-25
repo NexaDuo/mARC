@@ -8,13 +8,28 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.25.5] - 2026-11-25
+
 ### Added
+- Colored, structured launcher output in the mARC palette (#431): per-harness
+  headings, `$` command lines, a manual-remedy block and a result table. Color
+  is on only for a TTY (`NO_COLOR`, `FORCE_COLOR` and `COLORTERM` are honored,
+  legacy Windows consoles stay plain), native-CLI text is stripped of control
+  characters before it is painted, and plain/piped output is unchanged.
+- `doctor` shows the project for Claude project/local rows (`~`-relative under
+  home) and reports version-only or catalog-behind drift as `STALE` with the
+  `update` hint instead of `FAILED`; real errors still win, including a foreign
+  marketplace source or an unreported version (#435).
 - Harness-agnostic contact adapters for the engineering director (#433): an ordered
   per-harness adapter model in `eng-director` (native message, multiplexer-hosted
   interactive session, headless resume plus inbox) and a
   read-only probe, `director_contact_probe.py`, re-run on every resume and before
   contact (everyday discovery; stored bindings are re-verified caches) that
   proposes a binding per team without writing anything. Research brief in `docs/marc/`.
+
+### Changed
+- All four harnesses and the catalog pointers move to `v26.11.25.5` (npm
+  `26.1125.5`).
 
 ## [26.11.25.4] - 2026-11-25
 
@@ -31,21 +46,10 @@ date whose `YY.M.D` is already taken.
   (source type and source, control characters stripped). It still never removes
   or alters the registration (#428).
 
-### Added
-- Colored, structured launcher output in the mARC palette (#431): per-harness
-  headings, `$` command lines, a manual-remedy block and a result table. Color
-  is on only for a TTY (`NO_COLOR`, `FORCE_COLOR` and `COLORTERM` are honored,
-  legacy Windows consoles stay plain), native-CLI text is stripped of control
-  characters before it is painted, and plain/piped output is unchanged.
-
-- `doctor` shows the project for Claude project/local rows (`~`-relative under
-  home) and reports version-only or catalog-behind drift as `STALE` with the
-  `update` hint instead of `FAILED`; real errors still win, including a foreign
-  marketplace source or an unreported version (#435).
-
 ### Changed
 - All four harnesses and the catalog pointers move to `v26.11.25.4` (npm
   `26.1125.4`).
+- The v26.11.25.4 tag was cut at #429's merge, before the stacked #431/#435 PRs landed; they ship in 26.11.25.5.
 
 ## [26.11.25.3] - 2026-11-25
 
