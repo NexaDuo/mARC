@@ -5,8 +5,10 @@
       "name": "marc",
       "description": "mARC multi-agent engineering team for OpenAI Codex.",
       "source": {
-        "source": "local",
-        "path": "./harnesses/codex/marc"
+        "source": "git-subdir",
+        "url": "NexaDuo/mARC",
+        "path": "harnesses/codex/marc",
+        "ref": "v26.11.25.2"
       }
     }
   ]

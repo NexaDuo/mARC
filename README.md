@@ -28,56 +28,37 @@
 
 **mARC (Multi-Agent Relay Control)** packages a full software-delivery agent team, dressed in a retro/vaporwave **IRC** console aesthetic. Rather than building separate agent systems for every platform, mARC defines a single core team in `core/` and compiles it into plugins for different developer tools, which we call **harnesses**. Today, mARC ships four harnesses: Claude Code, OpenAI Codex, Google Antigravity, and GitHub Copilot CLI. It relies on the host tool to run and isolate subagents, providing a consistent team that you install once and reuse across your projects.
 
-## Try it in two minutes
+## Install
 
-### Claude Code
-
-Run these commands inside Claude Code to add the marketplace, install the plugin, and start:
-
-```
-/plugin marketplace add NexaDuo/mARC
-/plugin install marc@nexaduo
-/marc:tech-lead
-```
-
-### Google Antigravity
-
-Run these commands in your terminal to install the Google Antigravity CLI, install the plugin, and start:
+Prerequisites: Node.js 20+ and your harness CLIs on PATH. For Antigravity,
+use its [CLI installer](https://antigravity.google/cli/) first.
 
 ```bash
-bash <(curl -fsSL https://antigravity.google/cli/install.sh)
-git clone https://github.com/NexaDuo/mARC.git
-agy plugin install ./mARC/harnesses/antigravity/marc
-agy /marc:tech-lead
+npx @nexaduo/marc install
 ```
 
-Note that the binary is installed to `~/.local/bin/agy`, so the path should be in `$PATH`. `agy plugin install` takes a **local directory**, so the repository is cloned first and the plugin is installed from its harness subdirectory.
+The launcher detects Claude Code, Copilot, Codex and Antigravity. It runs each
+harness's own plugin CLI and never writes configuration itself. Every command
+is shown before it runs.
 
-### GitHub Copilot CLI
+| Command | Purpose |
+|---|---|
+| `npx @nexaduo/marc install` | Install on detected harnesses |
+| `npx @nexaduo/marc update` | Update installed plugins to the launcher's release |
+| `npx @nexaduo/marc doctor` | Check versions and marketplace pointers (read-only) |
+| `npx @nexaduo/marc uninstall` | Remove plugins, keeping marketplaces |
 
-Run these commands in your terminal to add the marketplace, install the plugin, and start:
+Flags: `--harness <claude|copilot|codex|agy>` selects a harness (repeatable);
+`--scope <user|project|local>` selects a Claude scope only; `--dry-run` previews;
+`--yes` confirms mutations in scripts. Claude update previews list the actual
+settings paths that its CLI will edit. Antigravity uses a temporary,
+SHA-verified clone that is deleted afterwards.
 
-```bash
-copilot plugin marketplace add NexaDuo/mARC
-copilot plugin install marc@nexaduo
-/marc:tech-lead
-```
+The npm package embeds one release: `v26.11.25.2` maps to npm `26.1125.2`.
+Use `npx @nexaduo/marc@26.1125.2 install` for that exact launcher release.
+After installation, invoke `/marc:tech-lead` in your harness.
 
-### OpenAI Codex
-
-From the repository root, run these commands to register the local marketplace,
-install the plugin, and start Codex:
-
-```bash
-codex plugin marketplace add .
-codex plugin add marc@nexaduo
-codex
-```
-
-Then invoke `/marc:tech-lead` in Codex. The marketplace file lives at
-`.agents/plugins/marketplace.json`; the selected marketplace root must therefore
-be the repository root, not the `.agents/plugins` subdirectory. Codex installs
-the local plugin under the `marc@nexaduo` identifier.
+### Codex compatibility
 
 Initial support is verified with CLI 0.156.1 for marketplace installation and
 bundled-helper execution from a fresh consumer without `team.toml`. Writers use
@@ -163,80 +144,36 @@ mARC is built by the team it ships. Every spec, dispatch, security review, and d
 - the [issues](https://github.com/NexaDuo/mARC/issues?q=is%3Aissue) and [pull requests](https://github.com/NexaDuo/mARC/pulls?q=is%3Apr), with inline spec details and security reviews,
 - [`docs/marc/`](docs/marc/), the durable decision records and research briefs.
 
-## Install
+## For teams
 
-The quick-start block above covers the interactive path: `/plugin marketplace add` and `/plugin install` run inside a Claude Code session. If you are using Claude Code, you can also run the installer script, which does the same two steps non-interactively:
-
-```bash
-./install.sh
-```
-
-### Non-interactive install (CLI)
-
-Claude Code also exposes the marketplace-add and plugin-install steps as shell commands, useful for scripting or for onboarding a machine without an interactive session:
-
-```bash
-claude plugin marketplace add NexaDuo/mARC
-claude plugin install marc@nexaduo
-```
-
-`claude plugin install` installs to user scope by default; pass `--scope project` to share the install with collaborators via the repo's `.claude/settings.json`, or `--scope local` to keep it local to your checkout only. This requires Claude Code 2.1.321 or later (the `minimumVersion` declared in [`harnesses/claude-code/marc/.claude-plugin/plugin.json`](harnesses/claude-code/marc/.claude-plugin/plugin.json)).
-
-### Zero-command install (declarative, for teams)
-
-To have mARC install itself for every collaborator with no command at all, declare the marketplace and the plugin in the project's `.claude/settings.json`:
+For a zero-command, per-repo Claude Code install, declare the marketplace and
+plugin in the project's `.claude/settings.json`:
 
 ```json
 {
   "extraKnownMarketplaces": {
-    "nexaduo": {
-      "source": {
-        "source": "github",
-        "repo": "NexaDuo/mARC"
-      }
-    }
+    "nexaduo": {"source": {"source": "github", "repo": "NexaDuo/mARC"}}
   },
-  "enabledPlugins": {
-    "marc@nexaduo": true
-  }
+  "enabledPlugins": {"marc@nexaduo": true}
 }
 ```
 
-When a team member trusts the repository folder, Claude Code prompts them to install the declared marketplace and plugin; from then on mARC loads automatically in that repo, with no `/plugin` or `claude plugin install` step required on their part.
-
-After installation, `@techlead` is available as `/marc:tech-lead` (or `agy /marc:tech-lead` under Google Antigravity) in any repository, and it dispatches the specialist subagents on demand.
+When collaborators trust the folder, Claude Code prompts them to install the
+declared plugin and loads it in that repo. This declarative team setup is
+separate from running the launcher on each machine.
 
 ## Update
 
-For Claude Code, enabling auto-update for the `nexaduo` marketplace is recommended. When auto-update is active, Claude Code pulls new plugin versions automatically. You can manage this setting by going to `/plugin` and finding the `nexaduo` marketplace.
-
-To update Claude Code manually at any time:
-
-```
-claude plugin update marc@nexaduo
-```
-
-Or run these commands inside Claude Code:
-
-```
-/plugin marketplace update nexaduo
-/reload-plugins
-```
-
-For Google Antigravity, pull the latest sources and re-run the install from the local directory:
-
 ```bash
-git -C mARC pull
-agy plugin install ./mARC/harnesses/antigravity/marc
+npx @nexaduo/marc update
 ```
 
-For GitHub Copilot CLI:
+The launcher updates all detected harnesses to its embedded release and preserves
+disabled plugins. Use `npx @nexaduo/marc doctor` to check for drift or legacy
+marketplace pins; it exits 1 if either needs attention and prints guidance.
 
-```bash
-copilot plugin update marc@nexaduo
-```
-
-**Update notifications:** mARC ships a `SessionStart` hook that checks whether your installed version is behind the version on `main` once per session. If a new major or minor version is available, it prints a one-line update reminder. This check is silent and does not block the session if you are offline or if the check times out.
+A `SessionStart` hook checks for newer versions once per session and prints an
+update reminder. Offline checks are silent and do not block the session.
 
 ## Bind mARC to a repo (optional but recommended)
 
@@ -293,10 +230,19 @@ docs/
   ARCHITECTURE.md                # growth model covering the different roles and harnesses
   marc/                          # durable team artifacts like decision records and research briefs
   team.toml.example
-install.sh                       # installer for Claude Code
+launcher/                        # npx launcher delegating to native plugin CLIs
 ```
 
 The plugin is structured so that the core logic under `core/` compiles into platform-specific configurations in the `harnesses/` directory. This allows the project to grow sideways into new harnesses or upward into further leader skills like `founder` without restructuring the repository. Detailed growth plans are documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Releases
+
+Merging a version bump to `main` releases mARC automatically through
+`release.yml`: tests, an Actions-created annotated tag, GitHub Release notes,
+and trusted npm publishing. Humans and agents do not create `v*` tags. To batch
+several PRs into one daily version, bump only in the last PR. After merge, verify
+with `python3 core/scripts/release_verify.py`; retry missing surfaces with
+`workflow_dispatch` on `main`. See the [release decision and bootstrap](docs/marc/2026-11-25-decision-npx-launcher.md#release-on-merge-user-decision-2026-11-25).
 
 ## License
 

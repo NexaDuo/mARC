@@ -1,71 +1,199 @@
 name: Release
 
-# Tag-triggered GitHub Release surface (issue #26).
-# On push of a `vX.Y.Z` tag, extract the matching `## [X.Y.Z]` section from
-# CHANGELOG.md (the single source of truth) and publish — or, idempotently,
-# update — the GitHub Release with it. Releases are a human "what changed"
-# surface only; the update nudge (hooks/outdated-check.sh) reads plugin.json on
-# main via raw GitHub, NOT Releases, so this workflow is not update-check infra.
-#
-# Idempotency: the backfill (v0.1.0..v0.8.0) is created out-of-band by
-# scripts/backfill-releases.sh; if a tag this workflow sees already has a
-# Release, it UPDATES rather than errors — so a re-tag or a re-run never
-# double-creates or collides with the backfill.
-
+# Release surfaces share one plan; npm trusted publishing binds to
+# release.yml + npm-publish. Only release-tag holds the tag deploy key.
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: [main]
+  workflow_dispatch:
 
-# Least privilege: creating/editing a Release needs only contents: write.
-# Nothing here reads a secret beyond the auto-provisioned GITHUB_TOKEN.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: Publish/update Release from CHANGELOG
+  plan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      npm: ${{ steps.plan.outputs.npm }}
+      sha: ${{ steps.plan.outputs.sha }}
+      need_tag: ${{ steps.plan.outputs.need_tag }}
+      need_release: ${{ steps.plan.outputs.need_release }}
+      need_npm: ${{ steps.plan.outputs.need_npm }}
     steps:
-      # Read CHANGELOG.md (the source of truth) and this extractor from the
-      # DEFAULT BRANCH, not the tagged commit. This is deliberate:
-      #   * the backfill tags (v0.1.0..v0.8.0) point at HISTORICAL commits that
-      #     predate this workflow, the extractor, and the later CHANGELOG
-      #     sections — checking out the tagged commit would break on them;
-      #   * CHANGELOG on the default branch is authoritative, so the release body
-      #     always matches it regardless of which commit a tag points at.
-      # The tag itself (repo metadata) still points at its own commit; only the
-      # release BODY is sourced from the default branch.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.event.repository.default_branch }}
-
-      - name: Publish or update the GitHub Release from the CHANGELOG (idempotent)
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Plan immutable release from main
+        id: plan
         env:
-          # Standard auto-provisioned token; scoped by the job `permissions` above.
           GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_plan.py
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.need_tag == 'true' || needs.plan.outputs.need_release == 'true' || needs.plan.outputs.need_npm == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+      - name: Test launcher and audit package allowlist
+        run: node --test launcher/
+      - name: Assert target, ancestry and release parity
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+        run: bash scripts/prepare_npm_release.sh
+
+  tag:
+    needs: [plan, test]
+    if: needs.plan.outputs.need_tag == 'true'
+    environment: release-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Prepare dedicated tag SSH credential and pinned hosts
+        env:
+          RELEASE_TAG_DEPLOY_KEY: ${{ secrets.RELEASE_TAG_DEPLOY_KEY }}
         run: |
           set -euo pipefail
-          # $GITHUB_REF_NAME is the tag (e.g. v0.8.0), expanded by the SHELL, not
-          # by GitHub Actions expression templating — so a tag name can never be
-          # interpolated into the workflow as code. (Do NOT write a literal
-          # Actions expression here: inside a run: block GitHub evaluates that
-          # templating, and an empty one is a parse error → startup_failure.)
-          tag="$GITHUB_REF_NAME"
+          if [[ -z "$RELEASE_TAG_DEPLOY_KEY" ]]; then
+            echo '::error::RELEASE_TAG_DEPLOY_KEY is missing from environment release-tag.'
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$RELEASE_TAG_DEPLOY_KEY" > "$RUNNER_TEMP/marc-release-tag-key"
+          chmod 600 "$RUNNER_TEMP/marc-release-tag-key"
+          # Source: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+          cat > "$RUNNER_TEMP/marc-release-tag-known-hosts" <<'KNOWN_HOSTS'
+          github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+          github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+          github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+          KNOWN_HOSTS
+      - name: Create and push annotated tag without replacing any remote tag
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+          GIT_SSH_COMMAND: >-
+            ssh -F /dev/null -i "${{ runner.temp }}/marc-release-tag-key"
+            -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes
+            -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null
+            -o UserKnownHostsFile="${{ runner.temp }}/marc-release-tag-known-hosts"
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          remote_tags="$(git ls-remote --tags git@github.com:NexaDuo/mARC.git "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+          remote_sha="$(awk -v tag="$RELEASE_TAG" '$2 == "refs/tags/" tag "^{}" {print $1}' <<< "$remote_tags")"
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha="$(awk -v tag="$RELEASE_TAG" '$2 == "refs/tags/" tag {print $1}' <<< "$remote_tags")"
+          fi
+          if [[ -n "$remote_sha" ]]; then
+            if [[ "$remote_sha" == "$RELEASE_SHA" ]]; then
+              echo 'Tag already exists at RELEASE_SHA; successful no-op.'
+              exit 0
+            fi
+            echo '::error::Tag appeared after planning at a conflicting commit; refusing to replace it.'
+            exit 1
+          fi
+          git -c tag.gpgsign=false tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Release $RELEASE_TAG"
+          git push git@github.com:NexaDuo/mARC.git "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+      - name: Remove dedicated tag SSH credential
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/marc-release-tag-key" "$RUNNER_TEMP/marc-release-tag-known-hosts"
+
+  github-release:
+    needs: [plan, tag]
+    # Status functions bypass skipped tag dependencies, but failure() also checks
+    # ancestors: a failed test must block release even when no tag was needed.
+    if: ${{ !cancelled() && !failure() && needs.plan.result == 'success' && needs.plan.outputs.need_release == 'true' && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Release BODY and extractor come from the default branch, including on
+      # re-runs. The tag continues to identify its own immutable commit.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Publish or update GitHub Release from CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
           version="${tag#v}"
-
-          # Extract the section into a FILE. CHANGELOG text is passed to gh only
-          # via --notes-file, never on a command line, so its content can never
-          # be interpreted as shell.
           bash scripts/changelog-section.sh "$version" CHANGELOG.md > release-notes.md
-          echo "== release notes for $tag =="
-          cat release-notes.md
-          echo "======================"
-
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release edit "$tag" --title "$tag" --notes-file release-notes.md
-            echo "Updated existing release $tag (idempotent path)."
           else
             gh release create "$tag" --title "$tag" --notes-file release-notes.md --verify-tag
-            echo "Created release $tag."
+          fi
+
+  publish:
+    needs: [plan, tag]
+    if: ${{ !cancelled() && !failure() && needs.plan.result == 'success' && needs.plan.outputs.need_npm == 'true' && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
+    environment: npm-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: refs/tags/${{ needs.plan.outputs.tag }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - name: Reassert tag identity and ancestry, parity and embed release.json
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+          REQUIRE_RELEASE_TAG: 'true'
+        run: bash scripts/prepare_npm_release.sh
+      - name: Recheck npm version and refuse latest downgrade
+        id: npm-check
+        env:
+          RELEASE_NPM: ${{ needs.plan.outputs.npm }}
+        run: python3 scripts/release_plan.py --check-npm "$RELEASE_NPM"
+      - name: Publish with trusted publishing and provenance
+        if: steps.npm-check.outputs.publish == 'true'
+        working-directory: launcher
+        run: |
+          set -euo pipefail
+          remedy='See docs/marc/2026-11-25-decision-npx-launcher.md#bootstrap: publish once with a token, configure release.yml + npm-publish as trusted publisher, then workflow_dispatch on main.'
+          if ! npm view @nexaduo/marc name >/dev/null 2>&1; then
+            echo "::error::npm package is absent or unreadable; bootstrap is required. $remedy"
+            exit 1
+          fi
+          if ! npm publish --access public --provenance --ignore-scripts; then
+            echo "::error::npm publish failed (including OIDC refusal). $remedy"
+            exit 1
           fi

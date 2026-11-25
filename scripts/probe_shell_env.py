@@ -33,6 +33,8 @@ import tempfile
 import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from local_test_marketplace import prepare
+
 MARK = "MARC_PROBE_367"
 PROBE = (f"echo {MARK} cwd=$PWD; env | grep -E 'PLUGIN|PROJECT_DIR' | sed 's/^/{MARK} env /'; "
          f"echo {MARK} end")
@@ -158,7 +160,7 @@ def probe(harness: str, cli: str) -> dict:
         if harness == "codex":
             env["CODEX_HOME"] = os.path.join(home, ".codex")
             os.makedirs(env["CODEX_HOME"])
-            run("plugin", "marketplace", "add", ROOT, "--json")
+            run("plugin", "marketplace", "add", prepare(os.path.join(base, "marketplace")), "--json")
             installed = json.loads(run("plugin", "add", "marc@nexaduo", "--json").stdout)["installedPath"]
             add_capture_hook(os.path.join(installed, "hooks", "hooks.json"), harness, capture)
             cfg = ["-c", "model_provider=mock", "-c", f'model_providers.mock.base_url="{url}"',
@@ -167,7 +169,7 @@ def probe(harness: str, cli: str) -> dict:
             r = run("exec", *cfg, "--skip-git-repo-check", "-s", "read-only", "--enable", "codex_hooks", "probe")
         else:
             env["COPILOT_HOME"] = os.path.join(home, ".copilot")
-            run("plugin", "marketplace", "add", ROOT)
+            run("plugin", "marketplace", "add", prepare(os.path.join(base, "marketplace")))
             run("plugin", "install", "marc@nexaduo")
             installed = os.path.join(home, ".copilot", "installed-plugins", "nexaduo", "marc")
             add_capture_hook(os.path.join(installed, "hooks", "hooks.json"), harness, capture)

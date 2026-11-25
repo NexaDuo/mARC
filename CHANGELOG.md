@@ -8,6 +8,58 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.25.2] - 2026-11-25
+
+### Added
+
+- `npx @nexaduo/marc` launcher (#424): install, update, doctor and uninstall
+  through native Claude Code, Copilot, Codex and Antigravity plugin CLIs.
+  The dependency-free package embeds a release tag and commit SHA, supports
+  dry-run and explicit scopes, and never writes harness configuration.
+- Trusted npm publish workflow, catalog-pointer parity gate, launcher tests
+  on Linux and Windows, and attested npm publication checks in release verification.
+
+### Changed
+
+- Releases run automatically when a version bump merges to main: one workflow
+  tests, creates an immutable annotated tag, publishes GitHub notes and uses
+  trusted npm publishing. Main pushes with an already-released version are green
+  no-ops; dispatch and failed-job retries heal missing surfaces without moving
+  existing tags or npm latest backwards. Tag creation uses an environment-scoped
+  deploy key with pinned GitHub SSH hosts and unconditional key cleanup.
+- All four harnesses ship 26.11.25.2. Marketplace catalogs point at `v26.11.25.2`
+  using each CLI's supported source schema; CI installs from temporary local
+  catalogs so it continues testing the PR tree. npm version: `26.1125.2`.
+- #161's rejection of a self-owned npx installer is partially superseded;
+  third-party installer rejections stand. `npx` is the documented install path;
+  declarative per-repo Claude team setup remains available.
+- Install reuses verified unpinned marketplaces; conflicting sources are preserved
+  with manual remedies. Harness failures are isolated, Codex upgrade targets only
+  `nexaduo`, Claude previews list actual settings paths, and deleted projects skip.
+- Windows generated temp paths expand short names, allow safe path separators
+  and `~`, and reject cmd metacharacters or spaces with a `TMP`/`TEMP` remedy.
+- Benchmarks install each arm's checkout through temporary local-source catalogs.
+  Version parity includes launcher package/release metadata and a null source SHA.
+- npm verification applies only to this launcher repo from `v26.11.25.2` onward;
+  other repos and older tags report `not_applicable`. Only bootstrap `v26.11.25.2`
+  / npm `26.1125.2` is exempt from attestation; all other checks still apply.
+- Maintainer release prerequisites: a `v*` tag ruleset restricting create/update/
+  delete, a rule blocking `refs/heads/v*` branches, the `npm-publish` environment
+  with required reviewers, and a trusted publisher bound to `npm-publish.yml`
+  plus environment `npm-publish`. Push the tag immediately after merge.
+  Tests have only `contents: read`; the dependent publish job gets OIDC after
+  environment approval and repeats checkout-SHA and `origin/main` ancestor gates.
+
+### Fixed
+
+- Release tagging matches exact remote refs and ignores suffix decoys.
+- Release verification prefers the latest successful matching main run, including
+  later push retries; unrelated runs do not consume the five-candidate limit.
+
+### Removed
+
+- `install.sh` and native install/update command guides; use the npx launcher.
+
 ## [26.11.25.1] - 2026-11-25
 
 ### Changed

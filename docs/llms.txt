@@ -6,7 +6,7 @@
 - **Engineering Director:** `/marc:eng-director` coordinates several techlead sessions in one or multiple repositories. It reads queues, routes dependencies and owner decisions, reports evidence, and guides authorized recovery, watcher reconciliation and shared resource use. Leadership skills run in sessions; monitoring and wake-up require local adapters. Private environment bindings stay in the coordination workspace.
 - **Channel Operator / Router:** `@techlead` (channel operator invoked with `/marc:tech-lead`).
 - **Specialist Pool:** `@dev` (engineering), `@sre` (reliability & infrastructure), `@design` (front-end & UX), `@sec` (security audit gate), `@rev` (correctness review gate), `@research` (external technical evidence & citations), and `@arch` (architecture advice).
-- **Supported Harnesses:** OpenAI Codex (see README for setup and compatibility limits), Claude Code (`/plugin install marc@nexaduo`), Google Antigravity (`agy plugin install ./harnesses/antigravity/marc`), and GitHub Copilot CLI (`copilot plugin install marc@nexaduo`).
+- **Supported Harnesses:** Claude Code, OpenAI Codex, Google Antigravity, and GitHub Copilot CLI, automatically detected by `npx @nexaduo/marc install` (or select with `--harness <claude|copilot|codex|agy>`). See README for Codex compatibility limits.
 - **GitHub Project Board Integration:** Tasks map to issues and the consuming project’s own status meanings on GitHub Project boards using runtime `gh` CLI discovery (zero hardcoded stack config).
 
 ## Operating Principles
@@ -17,27 +17,18 @@
 
 ## Installation Quick Reference
 
-### Claude Code
+Requires Node.js 20+ and harness CLIs on PATH; Antigravity's [CLI installer](https://antigravity.google/cli/) is a prerequisite.
+
 ```bash
-/plugin marketplace add NexaDuo/mARC
-/plugin install marc@nexaduo
-/marc:tech-lead
+npx @nexaduo/marc install
+npx @nexaduo/marc update
+npx @nexaduo/marc doctor
+npx @nexaduo/marc uninstall
 ```
 
-### Google Antigravity
-```bash
-bash <(curl -fsSL https://antigravity.google/cli/install.sh)
-git clone https://github.com/NexaDuo/mARC.git
-agy plugin install ./mARC/harnesses/antigravity/marc
-agy /marc:tech-lead
-```
-
-### GitHub Copilot CLI
-```bash
-copilot plugin marketplace add NexaDuo/mARC
-copilot plugin install marc@nexaduo
-/marc:tech-lead
-```
+The launcher runs native plugin CLIs and never writes configuration itself.
+Use repeatable `--harness <claude|copilot|codex|agy>`, Claude-only `--scope <user|project|local>`, `--dry-run` to preview, and `--yes` for non-interactive mutations.
+After installation, invoke `/marc:tech-lead` in your harness. For declarative per-repo Claude team installation, see the README's "For teams" note.
 
 ## Coordinate Several Teams
 

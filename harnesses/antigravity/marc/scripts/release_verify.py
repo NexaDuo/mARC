@@ -2,12 +2,12 @@
 """Release-verification operator script (origin: #113).
 
 ONE-call replacement for the `@techlead` skill's hand-rolled post-release
-`gh` sequence (does the tag exist? did the tag-triggered `Release` workflow
+`gh` sequence (does the tag exist? did the release workflow
 run go green? did GitHub Release publish and get marked Latest?) that
 `release_gate.py` (#75) deliberately does NOT cover — `release_gate.py`
 answers "is this version released at all" on a daily schedule; this script
 answers "did THIS release just go through cleanly, right now" on demand,
-right after a tag push, with the workflow-run result included.
+right after release automation runs, with the workflow-run result included.
 
 Usage:
     python3 release_verify.py [VERSION] [--json] [--repo-root PATH]
@@ -21,20 +21,26 @@ Usage:
     --repo    OWNER/REPO override; default resolution mirrors
               `board.py`: team.toml `gh_repo`, then `gh repo view`
               zero-config fallback.
-    --workflow  the tag-triggered release workflow's file name (default:
+    --workflow  the release workflow's file name (default:
               "release.yml", this repo's actual workflow — override for a
               consumer repo with a differently named release workflow).
 
-Checks (all three must pass for `ok: true`):
+Checks (all applicable checks must pass for `ok: true`):
   1. tag_exists       — `vX.Y.Z` tag exists in the repo (via `gh api
                          .../git/refs/tags/vX.Y.Z`, no local clone required).
-  2. workflow_run      — the tag-triggered release workflow has a run for
-                         this tag with `status == completed` and
-                         `conclusion == success` (via `gh run list
-                         --workflow <name> --branch vX.Y.Z`).
+  2. workflow_run      — the release workflow has a successful completed run
+                         for the tag commit (push on main or dispatch). Both
+                         can run from later main commits with the same manifest
+                         version. Tag-branch lookup remains a consumer fallback.
   3. release_published — a GitHub Release exists for the tag, is NOT a
                          draft, and IS marked "Latest" (via `gh release
                          list --json ...,isLatest`).
+
+  4. npm_published    — only in the launcher source repo, for tags >=
+                         v26.11.25.2: mapped npm version exists, is latest, has
+                         provenance (except the exact bootstrap tag), and its
+                         tarball SHA matches the locally peeled tag commit.
+                         Consumer repos and older tags are not_applicable.
 
 Decision logic is a pure function, `verify_release()`, taking plain data (no
 I/O) so it's unit-testable offline — see `test_release_verify.py`, mirroring
@@ -48,6 +54,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import base64
+import hashlib
+import io
+import re
+import tarfile
+import urllib.request
+from datetime import date
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -59,8 +72,11 @@ sys.path.insert(0, str(HERE))
 
 from board import RepoConfig, _resolve_config  # noqa: E402
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_WORKFLOW = "release.yml"
+NPM_PUBLICATION_FLOOR = (26, 11, 25, 2)
+# One manual bootstrap publish; all later releases require provenance.
+BOOTSTRAP_UNATTESTED_TAG = "v26.11.25.2"
 
 
 @dataclass
@@ -84,6 +100,7 @@ class ReleaseRow:
 class CheckResult:
     ok: bool
     notes: str
+    not_applicable: bool = False
 
 
 @dataclass
@@ -94,6 +111,7 @@ class VerifyResult:
     tag_exists: CheckResult
     workflow_run: CheckResult
     release_published: CheckResult
+    npm_published: CheckResult
     ok: bool
 
     def to_dict(self) -> dict:
@@ -110,6 +128,8 @@ def verify_release(
     tag_exists: bool,
     runs: list[WorkflowRun],
     releases: list[ReleaseRow],
+    npm_check: Optional[CheckResult] = None,
+    *, npm_applicable: bool = False,
 ) -> VerifyResult:
     """Pure decision function — no I/O. `runs` and `releases` are assumed
     already filtered to the relevant tag/workflow by the caller (mirrors
@@ -126,11 +146,11 @@ def verify_release(
         run_check = CheckResult(
             ok=False,
             notes=f"no release-workflow run found for tag {expected_tag} "
-                  f"(has it been pushed yet?)",
+                  f"(has release automation completed yet?)",
         )
     else:
-        # Most recent run wins (list is assumed newest-first, matching `gh run
-        # list`'s default ordering).
+        # The fetcher prefers the latest successful matching main run; consumer
+        # tag-triggered workflows retain newest-first ordering.
         latest = runs[0]
         if latest.status != "completed":
             run_check = CheckResult(
@@ -173,7 +193,10 @@ def verify_release(
             notes=f"Release {expected_tag} is published and marked 'Latest'",
         )
 
-    ok = tag_check.ok and run_check.ok and release_check.ok
+    if npm_check is None:
+        npm_check = CheckResult(False, "npm publication not checked") if npm_applicable else CheckResult(
+            True, "not_applicable: no launcher publication required", not_applicable=True)
+    ok = tag_check.ok and run_check.ok and release_check.ok and (npm_check.not_applicable or npm_check.ok)
     return VerifyResult(
         schema_version=SCHEMA_VERSION,
         version=norm_version,
@@ -181,8 +204,84 @@ def verify_release(
         tag_exists=tag_check,
         workflow_run=run_check,
         release_published=release_check,
+        npm_published=npm_check,
         ok=ok,
     )
+
+
+def mapped_npm_version(tag: str) -> str:
+    """Mirror launcher/lib/version.js; no runtime Node dependency."""
+    match = re.fullmatch(r"v([1-9][0-9])\.([1-9][0-9]?)\.([1-9][0-9]?)(?:\.([1-9][0-9]*))?", tag)
+    if not match:
+        raise ValueError("unsupported calendar tag")
+    y, m, d, n = (int(v or 0) for v in match.groups())
+    if date(2000 + y, m, d) < date(2026, 11, 25) or n > 9007199254740991:
+        raise ValueError("tag below launcher floor or release number too large")
+    return f"{y}.{m * 100 + d}.{n}"
+
+
+def _download(url: str, limit: int) -> bytes:
+    if not url.startswith("https://registry.npmjs.org/"):
+        raise ValueError("unexpected npm registry URL")
+    with urllib.request.urlopen(url, timeout=30) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("npm response too large")
+    return data
+
+
+def fetch_npm_published(expected_tag: str, repo_root: Path) -> CheckResult:
+    """Read registry metadata, attestation and tarball; never extract files.
+
+    Presence of provenance is checked here; cryptographic verification remains
+    npm audit signatures' job. No subprocess executes downloaded code.
+    """
+    try:
+        manifest = json.loads((repo_root / "launcher/package.json").read_text())
+    except (OSError, ValueError):
+        manifest = {}
+    if not isinstance(manifest, dict) or manifest.get("name") != "@nexaduo/marc":
+        return CheckResult(True, "not_applicable: repository has no matching launcher package", not_applicable=True)
+    parts = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", expected_tag)
+    if parts and tuple(int(g or 0) for g in parts.groups()) < NPM_PUBLICATION_FLOOR:
+        return CheckResult(True, "not_applicable: tag predates npm publication floor", not_applicable=True)
+    try:
+        version = mapped_npm_version(expected_tag)
+    except ValueError:
+        return CheckResult(False, "invalid npm release tag")
+    try:
+        metadata = json.loads(_download("https://registry.npmjs.org/@nexaduo%2fmarc", 16 * 1024 * 1024))
+        package = metadata.get("versions", {}).get(version)
+        if not package:
+            return CheckResult(False, f"npm version {version} is missing")
+        if metadata.get("dist-tags", {}).get("latest") != version:
+            return CheckResult(False, f"npm latest does not point at {version}")
+        dist = package["dist"]
+        if expected_tag != BOOTSTRAP_UNATTESTED_TAG:
+            attestation_url = dist.get("attestations", {}).get("url")
+            if not attestation_url:
+                return CheckResult(False, "npm provenance attestation is missing")
+            attestations = json.loads(_download(attestation_url, 4 * 1024 * 1024)).get("attestations", [])
+            if not any(a.get("predicateType") == "https://slsa.dev/provenance/v1" and a.get("bundle") for a in attestations):
+                return CheckResult(False, "npm provenance attestation is missing")
+        blob = _download(dist["tarball"], 8 * 1024 * 1024)
+        integrity = "sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode("ascii")
+        if dist.get("integrity") != integrity:
+            return CheckResult(False, "npm tarball integrity mismatch")
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as archive:
+            members = [m for m in archive.getmembers() if m.name == "package/release.json"]
+            if len(members) != 1 or not members[0].isfile() or members[0].size > 4096:
+                return CheckResult(False, "npm release.json missing, duplicated or unsafe")
+            release = json.load(archive.extractfile(members[0]))
+        expected_sha = _run(["git", "-C", str(repo_root), "rev-parse", f"{expected_tag}^{{commit}}"]).strip()
+        if not re.fullmatch(r"[a-f0-9]{40}", expected_sha) or release.get("sha") != expected_sha:
+            return CheckResult(False, "npm release.json SHA does not match peeled tag commit")
+        if release.get("tag") != expected_tag or release.get("npm") != version or package.get("version") != version:
+            return CheckResult(False, "npm release tag/version metadata mismatch")
+        provenance = "bootstrap provenance exception" if expected_tag == BOOTSTRAP_UNATTESTED_TAG else "attested"
+        return CheckResult(True, f"npm {version} is latest, {provenance}, and matches {expected_sha}")
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(False, f"npm publication unreadable: {exc}")
 
 
 # --- I/O: fetch real state via `gh`/`git` ------------------------------------
@@ -214,22 +313,90 @@ def fetch_tag_exists(repo: Optional[str], expected_tag: str) -> bool:
         return False
 
 
+def fetch_tag_commit(repo: str, expected_tag: str) -> Optional[str]:
+    """Peel annotated tags via GitHub; consumer verification needs no clone."""
+    try:
+        obj = json.loads(_run(["gh", "api", f"repos/{repo}/git/refs/tags/{expected_tag}"]))["object"]
+        for _ in range(8):
+            sha = obj["sha"]
+            if not re.fullmatch(r"[a-f0-9]{40}", sha):
+                return None
+            if obj["type"] == "commit":
+                return sha
+            if obj["type"] != "tag":
+                return None
+            obj = json.loads(_run(["gh", "api", f"repos/{repo}/git/tags/{sha}"]))["object"]
+    except Exception:  # noqa: BLE001 — legacy tag-branch lookup can still work
+        return None
+    return None
+
+
+def _main_run_matches_tag(repo: str, run: dict, expected_tag: str) -> bool:
+    """Main pushes and dispatches can release an older existing tag.
+
+    Only accept later-head runs whose immutable main manifest names this
+    version. Never credit an unrelated release's successful run.
+    """
+    sha = run.get("headSha", "")
+    if not re.fullmatch(r"[a-f0-9]{40}", sha):
+        return False
+    try:
+        path = "harnesses/claude-code/marc/.claude-plugin/plugin.json"
+        response = json.loads(_run(["gh", "api", f"repos/{repo}/contents/{path}?ref={sha}"]))
+        manifest = json.loads(base64.b64decode(response["content"], validate=False))
+        return "v" + manifest["version"] == expected_tag
+    except Exception:  # noqa: BLE001 — consumers may have no such manifest
+        return False
+
+
 def fetch_workflow_runs(repo: Optional[str], workflow: str, expected_tag: str) -> list[WorkflowRun]:
-    cmd = ["gh", "run", "list", "--workflow", workflow, "--branch", expected_tag,
-           "--json", "status,conclusion,url,createdAt", "--limit", "10"]
-    if repo:
-        cmd += ["--repo", repo]
-    raw = _run(cmd)
-    payload = json.loads(raw)
-    return [
-        WorkflowRun(
-            status=r.get("status"),
-            conclusion=r.get("conclusion"),
-            url=r.get("url"),
-            created_at=r.get("createdAt"),
-        )
-        for r in payload
-    ]
+    def lookup(*filters):
+        cmd = ["gh", "run", "list", "--workflow", workflow, *filters,
+               "--json", "status,conclusion,url,createdAt,headSha,headBranch,event", "--limit", "100"]
+        if repo:
+            cmd += ["--repo", repo]
+        return json.loads(_run(cmd))
+
+    candidates = []
+    sha = fetch_tag_commit(repo, expected_tag) if repo else None
+    try:
+        if sha:
+            candidates = [r for r in lookup("--commit", sha, "--branch", "main")
+                          if r.get("headSha") == sha and r.get("headBranch") == "main"
+                          and r.get("event") in ("push", "workflow_dispatch")]
+            # Both push and dispatch can retry publication for an existing tag
+            # from a later main commit with the same manifest version. Scan at
+            # most 100 rows; the five-candidate cap excludes unrelated runs.
+            matching = 0
+            manifest_matches = {}
+            for run in lookup("--branch", "main"):
+                if (run.get("headBranch") != "main"
+                        or run.get("event") not in ("push", "workflow_dispatch")):
+                    continue
+                head = run.get("headSha")
+                if head != sha:
+                    if head not in manifest_matches:
+                        manifest_matches[head] = _main_run_matches_tag(repo, run, expected_tag)
+                    if not manifest_matches[head]:
+                        continue
+                if run not in candidates:
+                    candidates.append(run)
+                matching += 1
+                if matching == 5:
+                    break
+    except Exception:  # noqa: BLE001 — fall back for consumer workflow APIs
+        candidates = []
+    main_candidates = bool(candidates)
+    if not candidates:
+        # Consumers can retain their own tag-triggered workflows (any branch
+        # naming scheme); no launcher or registry dependency is introduced.
+        candidates = lookup("--branch", expected_tag)
+    candidates.sort(key=lambda r: (
+        main_candidates and r.get("status") == "completed" and r.get("conclusion") == "success",
+        r.get("createdAt") or "",
+    ), reverse=True)
+    return [WorkflowRun(status=r.get("status"), conclusion=r.get("conclusion"),
+                        url=r.get("url"), created_at=r.get("createdAt")) for r in candidates]
 
 
 def fetch_releases(repo: Optional[str]) -> list[ReleaseRow]:
@@ -258,6 +425,7 @@ def render_human(result: VerifyResult) -> str:
         f"  [{mark(result.tag_exists.ok)}] tag_exists       — {result.tag_exists.notes}",
         f"  [{mark(result.workflow_run.ok)}] workflow_run     — {result.workflow_run.notes}",
         f"  [{mark(result.release_published.ok)}] release_published — {result.release_published.notes}",
+        f"  [{'N/A' if result.npm_published.not_applicable else mark(result.npm_published.ok)}] npm_published     — {result.npm_published.notes}",
         "",
         f"overall: {'OK' if result.ok else 'FAIL'}",
     ]
@@ -273,7 +441,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--team-toml", default=None, help="override team.toml path")
     parser.add_argument("--repo", default=None, help="OWNER/REPO override (default: resolved like board.py)")
     parser.add_argument("--workflow", default=DEFAULT_WORKFLOW,
-                         help=f"tag-triggered release workflow file name (default: {DEFAULT_WORKFLOW})")
+                         help=f"release workflow file name (default: {DEFAULT_WORKFLOW})")
     parser.add_argument("--manifest", default=None, help="override plugin.json path")
     args = parser.parse_args(argv)
 
@@ -312,7 +480,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"::warning::release_verify: gh release list failed: {e}", file=sys.stderr)
         releases = []
 
-    result = verify_release(version, tag_exists, runs, releases)
+    npm_check = fetch_npm_published(expected_tag, repo_root)
+    result = verify_release(version, tag_exists, runs, releases, npm_check)
 
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))

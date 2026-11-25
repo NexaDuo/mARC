@@ -83,6 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Verify compiled prompts are up-to-date
         run: |
@@ -100,6 +102,15 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+
+      - name: Launcher tests (offline stubs)
+        run: node --test launcher/
+
+      - name: Catalog release-pointer parity
+        run: python3 scripts/check_catalog_pointers.py
+
+      - name: Catalog and npm verification regressions (offline)
+        run: python3 -m unittest scripts/test_catalog_pointers.py scripts/test_npm_release_guards.py scripts/test_release_plan.py scripts/test_release_workflow.py core/scripts/test_npm_published.py
 
       - name: Install Claude Code CLI (pinned)
         run: |
@@ -265,7 +276,7 @@ jobs:
 
       # 5. Anti-anchoring gate: the reusable, cross-repo agent/skill ROLE prose
       #    must not hardcode this-repo/consumer specifics. The NexaDuo name is
-      #    allowed in the manifests / README / install.sh (branding); the gate is
+      #    allowed in the manifests / README / launcher (branding); the gate is
       #    scoped to agents/ + skills/ prose only.
       - name: Anti-anchoring grep gate
         run: |
@@ -437,12 +448,6 @@ jobs:
           fi
           rm -f "$tmp"
           echo "Rule-origin gate: OK (all governed rules tagged; negative test caught stripped tags)."
-
-      # 6. Installer script static checks.
-      - name: shellcheck + bash -n install.sh
-        run: |
-          shellcheck install.sh
-          bash -n install.sh
 
       # 6a2. Release-benchmark script self-test (issue #281, PR #283 review).
       #      scripts/run_token_benchmark.sh's release-only path (model pin,
@@ -705,9 +710,8 @@ jobs:
           echo "invariants-card hook: OK (shellcheck-clean; emits on compact only; silent on missing card)."
 
       # 7. Wordmark parity gate: the block-letter "mARC" wordmark is a copy-paste
-      #    duplicate across three surfaces (README banner, install.sh banner,
-      #    docs/index.html hero). They MUST stay byte-identical so the brand mark
-      #    never drifts. (Decision on issue #11, REVISED 2026-07-04 by maintainer:
+      #    duplicate across two surfaces (README banner and docs/index.html hero).
+      #    They MUST stay byte-identical so the brand mark never drifts. (Decision on issue #11, REVISED 2026-07-04 by maintainer:
       #    the leading glyph is now a bespoke lowercase x-height "m" (Candidate A)
       #    rendered in the ANSI Shadow idiom (█ fills + ╗║╚═╝ edges) beside the
       #    full-height "ARC" — m-width 11, total 38 cols, all unchanged from the
@@ -719,7 +723,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import sys
-          FILES = ["README.md", "install.sh", "docs/index.html"]
+          FILES = ["README.md", "docs/index.html"]
           def block(path):
               lines = open(path, encoding="utf-8").read().split("\n")
               # first row of the block is the "A" apex "█████╗": the leading
@@ -976,8 +980,7 @@ jobs:
           # actionlint's embedded shellcheck/pyflakes integrations (-shellcheck=
           # / -pyflakes=): those impose shell/python STYLE on run: scripts (e.g.
           # SC2015 on the intentional `check … || { echo; exit 1; }` pattern used
-          # throughout this file) and are out of scope here — install.sh already
-          # has a dedicated shellcheck step. Expression checks (e.g. an empty
+          # throughout this file) and are out of scope here. Expression checks (e.g. an empty
           # Actions expression) are unaffected and still fail the gate.
           ./actionlint -color -shellcheck= -pyflakes=
 
@@ -990,6 +993,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      - name: Prepare PR-tree local marketplaces
+        run: |
+          python3 scripts/local_test_marketplace.py "$RUNNER_TEMP/marc-pr-marketplace"
+          echo "MARC_TEST_MARKETPLACE=$RUNNER_TEMP/marc-pr-marketplace" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v5
         with:
@@ -1013,7 +1021,7 @@ jobs:
           mkdir -p "$CLAUDE_CONFIG_DIR"
           # These three are the whole Tier-2 chain; if install needed a key it
           # would fail here with the key unset.
-          claude plugin marketplace add ./
+          claude plugin marketplace add "$MARC_TEST_MARKETPLACE"
           claude plugin install marc@nexaduo
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo")' > /dev/null
           echo "AUTH-BOUNDARY: plugin install SUCCEEDED with no ANTHROPIC_API_KEY."
@@ -1030,7 +1038,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$CLAUDE_CONFIG_DIR"
-          claude plugin marketplace add ./
+          claude plugin marketplace add "$MARC_TEST_MARKETPLACE"
           claude plugin install marc@nexaduo
 
           echo "== assert plugin marc@nexaduo installed (list --json | jq -e) =="
@@ -1235,7 +1243,7 @@ jobs:
           copilot --version
 
           echo "Adding local marketplace and installing marc@nexaduo..."
-          copilot plugin marketplace add ./
+          copilot plugin marketplace add "$MARC_TEST_MARKETPLACE"
           copilot plugin install marc@nexaduo
 
           echo "== assert plugin marc@nexaduo installed (plugin list) =="
@@ -1311,7 +1319,7 @@ jobs:
           echo "consumer sandbox: $SANDBOX (outside $MARC_CHECKOUT)"
 
           # Point the marketplace at the mARC checkout by absolute path.
-          claude plugin marketplace add "$MARC_CHECKOUT"
+          claude plugin marketplace add "$MARC_TEST_MARKETPLACE"
           claude plugin install marc@nexaduo
 
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
@@ -1355,13 +1363,14 @@ jobs:
           fi
 
           echo "== Install previous version from origin/main =="
-          claude plugin marketplace add "$PREV_DIR"
+          python3 "$MARC_CHECKOUT/scripts/local_test_marketplace.py" "${RUNNER_TEMP}/marc-prev-local" "$PREV_DIR"
+          claude plugin marketplace add "${RUNNER_TEMP}/marc-prev-local"
           claude plugin install marc@nexaduo
 
           claude plugin list --json | jq -e '.[] | select(.id=="marc@nexaduo" and .enabled==true)' > /dev/null
 
           echo "== Point marketplace to the current checkout and upgrade =="
-          claude plugin marketplace add "$MARC_CHECKOUT"
+          claude plugin marketplace add "$MARC_TEST_MARKETPLACE"
           claude plugin update marc@nexaduo
 
           echo "== Assert upgraded plugin details =="
@@ -1372,3 +1381,15 @@ jobs:
               || { echo "::error::upgrade: component '$component' not registered after upgrade"; exit 1; }
           done
           echo "Upgrade path: plugin successfully upgrades from main release to PR version."
+
+  launcher-windows:
+    name: Launcher — Windows batch stubs
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - run: node --test launcher/

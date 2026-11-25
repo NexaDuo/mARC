@@ -6,17 +6,9 @@ Stdlib only (no pytest / no third-party deps); run directly:
 
 Bug this guards: a `plugin.json` `version` bump lands on `main` but the
 matching `vX.Y.Z` git tag + published GitHub Release never gets created (or
-gets created as a draft) — a manual step that has already slipped twice in one
-day (0.16.4, 0.16.5). Nothing short of an automated check catches that; the
-release-tag lesson landed as skill guidance in PR #62 (v0.11.2), but guidance
-is advisory, not enforcement.
-
-Why this runs on a SCHEDULE, not on push/PR: the tag + Release are created by
-the operator AFTER a version-bump PR merges, so any push/PR-triggered check
-would always fail on the merge commit itself (the tag/release cannot exist
-yet at that point) — a permanently-red or permanently-skipped check is
-useless. A daily scheduled run instead catches real drift (a bump that stayed
-un-released more than a day) without ever being red-by-construction. See
+gets created as a draft). A scheduled check catches drift after release
+processing has had time to finish, including failed automation. Push/PR checks
+cannot require a tag and release that are only created after merge. See
 `.github/workflows/release-gate.yml`.
 
 Decision logic is factored into a pure function, `is_released()`, that takes
@@ -86,18 +78,19 @@ def is_released(version: str, tags: list[str], releases: list[ReleaseInfo]) -> G
     if not tag_found:
         reason = (
             f"plugin.json version is {version} but no git tag {expected_tag} exists — "
-            f"push it: git -c tag.gpgsign=false tag {expected_tag} && git push origin {expected_tag}"
+            "check the release workflow after merge and re-run it if needed; "
+            "if this repo automates tagging on merge, do not tag manually; "
+            "otherwise follow its documented release process"
         )
     elif matching_release is None:
         reason = (
             f"tag {expected_tag} exists but no GitHub Release references it — "
-            f"create one: gh release create {expected_tag} --title {expected_tag} "
-            f"--notes-file <changelog-section>"
+            "check or re-run the release workflow; otherwise follow the repo release process"
         )
     else:
         reason = (
             f"tag {expected_tag} exists and a Release references it, but the Release "
-            f"is still a DRAFT — publish it: gh release edit {expected_tag} --draft=false"
+            "is still a DRAFT — check the release workflow or the repo release process"
         )
 
     return GateResult(version, expected_tag, tag_found, release_found, False, reason)
