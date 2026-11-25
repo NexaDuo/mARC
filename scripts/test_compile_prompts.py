@@ -128,6 +128,30 @@ class CompilePromptsCli(unittest.TestCase):
         self.assertNotIn("a.local", r.stderr)
         self.assertIn("b.txt (stale)", r.stderr)
 
+    def test_git_ignored_empty_without_git(self):
+        sys.path.insert(0, os.path.dirname(SCRIPT))
+        try:
+            import compile_prompts
+        finally:
+            sys.path.pop(0)
+        old = os.environ["PATH"]
+        os.environ["PATH"] = self.tmp  # no git binary here
+        try:
+            self.assertEqual(compile_prompts._git_ignored(self.tmp), set())
+        finally:
+            os.environ["PATH"] = old
+
+    def test_check_reports_untracked_when_not_a_checkout(self):
+        os.makedirs(os.path.join(self.tmp, "core", "scripts"))
+        with open(os.path.join(self.tmp, "core", "scripts", "s.sh"), "w") as f:
+            f.write("echo\n")
+        run(self.script)
+        with open(os.path.join(self.marc, "scripts", "x.local"), "w") as f:
+            f.write("x\n")
+        r = run(self.script, "--check")  # tmp has no .git: nothing is ignored
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("x.local (stale)", r.stderr)
+
 
 class RealTree(unittest.TestCase):
     def test_check_passes_on_committed_tree(self):

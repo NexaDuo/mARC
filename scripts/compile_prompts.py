@@ -742,7 +742,9 @@ def _git_ignored(base_dir):
 def check_all(base_dir):
     """Compile into a scratch copy and return the sorted list of files under
     harnesses/*/marc/ that differ from what core/ produces. Never writes to
-    `base_dir` (#417)."""
+    `base_dir` (#417). Stale-file detection only covers the trees the compiler
+    cleans (harnesses/*/marc/ with a compile.json); extra files or symlinks
+    elsewhere are not reported, same as the old gate."""
     harnesses_dir = os.path.join(base_dir, "harnesses")
     with tempfile.TemporaryDirectory(prefix="marc-compile-check-") as tmp:
         for name in ("core", "harnesses"):
