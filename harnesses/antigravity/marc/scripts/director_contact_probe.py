@@ -10,7 +10,7 @@ contact-adapter list per harness plus an optional per-team binding.
 
 Read-only by construction: it writes no file, opens no socket or network
 connection, and runs no command except `<cli> --version` for the four harness
-CLIs (timeout 10s, no stdin, captured output; override with the env var
+CLIs and, for a codex on PATH, `codex app-server --help` and `codex --help` (timeout 10s, no stdin, captured output; override with the env var
 MARC_PROBE_TIMEOUT, a finite number in (0, 60] seconds, for tests). Only with the opt-in `--list-sessions`
 it also runs the read-only `tmux ls` / `zellij list-sessions` (timeout 5s, no
 stdin). It never sends a message. Pane-id environment values are reported as present/absent
@@ -31,7 +31,7 @@ import shutil
 import subprocess
 import sys
 
-SCHEMA = 2
+SCHEMA = 3
 CROSS_SESSION_MIN = (2, 1, 224)
 
 # harness name -> CLI binary
@@ -75,6 +75,7 @@ ADAPTER_ORDER = {
 }
 
 ADAPTER_HELP = {
+    "app-server-steer": "techlead must run `codex --remote <unix socket or ws with --ws-auth>`; director: thread/loaded/list -> verify thread -> turn/steer (running, expectedTurnId) or turn/start (idle); experimental",
     "send-message": "ListAgents/SendMessage to a session addressed by display name (cross-session messaging; needs claude >= 2.1.224; if claude_cross_session is null the version is unknown, so unverified: confirm with ListAgents)",
     "multiplexer-interactive": "start the harness interactively in a detected multiplexer pane (claude: add --name <team>); type-in only to an explicit, verified pane id",
     "resume": "claude --resume <name|id>  |  copilot --resume <id>  (only after verified exit)",
@@ -119,6 +120,27 @@ def cli_version(path):
         return None
     out = (r.stdout or r.stderr or "").strip().splitlines()
     return out[0].strip() if out else None
+
+
+def cli_help(path, *args):
+    """Help text of `<path> <args> --help`, or None on any failure. Read-only."""
+    try:
+        r = subprocess.run(
+            [path, *args, "--help"], stdin=subprocess.DEVNULL, capture_output=True,
+            text=True, timeout=probe_timeout(), check=False,
+        )
+    except Exception:
+        return None
+    return (r.stdout + r.stderr) if r.returncode == 0 else None
+
+
+def codex_app_server(path):
+    """True/False from help text only (never starts or connects); None on failure."""
+    server = cli_help(path, "app-server")
+    top = cli_help(path)
+    if server is None or top is None:
+        return None
+    return "--listen" in server and "--remote" in top
 
 
 def host_harness(env):
@@ -177,6 +199,8 @@ def build(teams, with_sessions=False):
         harnesses[name] = {"on_path": bool(path), "version": cli_version(path) if path else None}
         if not path and _local_bin(binary):
             harnesses[name]["found_in_user_bin"] = True
+    codex = harnesses["codex"]
+    codex["app_server"] = codex_app_server(find_binary("codex")) if codex["on_path"] else None
     active, available, pane = detect_multiplexer(env)
     parsed = parse_version(harnesses["claude-code"]["version"])
     cross = None if parsed is None else parsed >= CROSS_SESSION_MIN
@@ -186,6 +210,8 @@ def build(teams, with_sessions=False):
         adapters[name] = [a for a in order
                           if not (a == "send-message" and (cross is False or not harnesses["claude-code"]["on_path"]))
                           and not (a == "multiplexer-interactive" and not use_mux)]
+    if codex["app_server"] is True:
+        adapters["codex"].insert(0, "app-server-steer")
     sessions = None
     if with_sessions:
         res = list_sessions(available)

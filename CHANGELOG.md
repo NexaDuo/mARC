@@ -24,6 +24,13 @@ date whose `YY.M.D` is already taken.
   counts as none running only with `No such file or directory`, and any other
   exit-1 output returns an empty list plus an `error` (#443).
 
+### Added
+- Codex app-server live contact adapter for the engineering director (#444): the
+  probe detects `codex app-server` and `--remote` from `--help` only (new
+  `harnesses.codex.app_server`, output `schema` 3) and proposes `app-server-steer`
+  first for Codex; `eng-director` documents it with transport, auth and
+  untrusted-input rules, and a brief records the evidence.
+
 ## [26.11.25.5] - 2026-11-25
 
 ### Added
