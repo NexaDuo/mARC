@@ -434,5 +434,119 @@ class Worktrees(unittest.TestCase):
         self.assertEqual(out["dead"], [])
 
 
+class MentionFreeMarkers(unittest.TestCase):
+    """#419 step 1: dual-accept `## marc:techlead claim|withdraw`; emission stays legacy."""
+    NC = "## marc:techlead claim"
+    NW = "## marc:techlead withdraw"
+
+    def test_emission_is_still_legacy(self):
+        self.assertEqual(bc.CLAIM_MARKER, "## @techlead claim")
+        self.assertEqual(bc.WITHDRAW_MARKER, "## @techlead withdraw")
+
+    def test_new_claim_counted(self):
+        st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=self.NC))), 226)
+        self.assertTrue(st.claimed)
+        self.assertEqual(st.owner, "claude-code/abc")
+
+    def test_new_withdraw_retires_legacy_claim_and_vice_versa(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment(claim("claude-code/ABC", marker=self.NW), idx=1))
+        self.assertFalse(bc.evaluate(p, 226).claimed)
+        p = view(view_comment(claim("claude-code/abc", marker=self.NC), idx=0),
+                 view_comment(claim("claude-code/abc", marker=bc.WITHDRAW_MARKER), idx=1))
+        self.assertFalse(bc.evaluate(p, 226).claimed)
+
+    def test_untrusted_new_claim_is_suspected(self):
+        st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=self.NC), assoc="NONE")), 226)
+        self.assertFalse(st.claimed)
+        self.assertEqual(len(st.suspected_forgeries), 1)
+
+    def test_untrusted_new_withdraw_naming_claim_is_suspected(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment(claim("claude-code/abc", marker=self.NW), assoc="NONE", idx=1))
+        st = bc.evaluate(p, 226)
+        self.assertTrue(st.claimed)
+        self.assertEqual(len(st.suspected_forgeries), 1)
+
+    def test_case_sensitive_header(self):
+        for m in ["## marc:Techlead claim", "## Marc:techlead claim", "## MARC:TECHLEAD CLAIM"]:
+            st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=m))), 226)
+            self.assertFalse(st.claimed, m)
+
+    def test_cross_form_tie_break(self):
+        p = view(view_comment(claim("claude-code/zzz"), idx=0),
+                 view_comment(claim("claude-code/aaa", marker=self.NC), idx=1))
+        self.assertEqual(bc.evaluate(p, 226).owner, "claude-code/aaa")
+
+    def test_trusted_near_miss_is_suspected_never_ignored(self):
+        for m in ["## marc techlead claim", "## marc-techlead claim", "## marc::techlead claim",
+                  "## marc:@techlead claim", "## Marc Techlead Claim", "## marc_techlead claim",
+                  "## marc-techlead withdraw", "## @Techlead claim", "## `@techlead` claim"]:
+            with self.subTest(m=m):
+                st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=m))), 226)
+                self.assertFalse(st.claimed)
+                self.assertEqual(len(st.suspected_forgeries), 1)
+                st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=m))), 226, "claude-code/xyz")
+                self.assertEqual(st.decision, "unclaimed")
+                self.assertIn("forger", st.advice)
+
+    def test_near_miss_withdraw_never_retires_and_escalates_owner(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment(claim("claude-code/abc", marker="## marc-techlead withdraw"), idx=1))
+        st = bc.evaluate(p, 226, "claude-code/abc")
+        self.assertTrue(st.claimed)
+        self.assertEqual(st.decision, "escalate")
+
+    def test_untrusted_near_miss_and_prose_ignored(self):
+        st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker="## marc-techlead claim"), assoc="NONE")), 226)
+        self.assertEqual(st.suspected_forgeries, [])
+        for body in ["marc technical lead claim", "the techlead claim was posted"]:
+            st = bc.evaluate(view(view_comment(body)), 226)
+            self.assertEqual(st.suspected_forgeries, [])
+
+    def test_397_shape_near_miss_then_valid_claim_is_own(self):
+        p = view(view_comment("## @techlead claim withdrawn\nnote", idx=0),
+                 view_comment(claim("claude-code/abc"), idx=1))
+        st = bc.evaluate(p, 226, "claude-code/abc")
+        self.assertEqual(st.decision, "own")
+        self.assertEqual(st.suspected_forgeries, [])
+
+    def test_near_miss_alone_escalates_with_remedy(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment("## @techlead claim withdrawn", idx=1))
+        st = bc.evaluate(p, 226, "claude-code/abc")
+        self.assertEqual(st.decision, "escalate")
+        self.assertIn("edits or deletes", st.advice)
+
+    def test_near_miss_after_valid_claim_escalates(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment("## @techlead claim withdrawn", idx=1))
+        self.assertEqual(bc.evaluate(p, 226, "claude-code/abc").decision, "escalate")
+
+    def test_later_withdraw_supersedes_near_miss(self):
+        p = view(view_comment("## @techlead claim withdrawn", idx=0),
+                 view_comment(claim("claude-code/abc", marker=bc.WITHDRAW_MARKER), idx=1))
+        self.assertEqual(bc.evaluate(p, 226).suspected_forgeries, [])
+
+    def test_untrusted_or_malformed_later_marker_does_not_supersede(self):
+        p = view(view_comment("## @techlead claim withdrawn", idx=0),
+                 view_comment(claim("claude-code/abc"), assoc="NONE", idx=1))
+        self.assertEqual(len(bc.evaluate(p, 226).suspected_forgeries), 2)
+        p = view(view_comment("## @techlead claim withdrawn", idx=0),
+                 view_comment(claim("claude-code/abc", n=999), idx=1))
+        self.assertGreaterEqual(len(bc.evaluate(p, 226).suspected_forgeries), 1)
+        p = view(view_comment("## @techlead claim withdrawn", idx=0),
+                 view_comment("## marc-techlead claim", idx=1))
+        self.assertEqual(len(bc.evaluate(p, 226).suspected_forgeries), 2)
+
+    def test_normalisation_parity(self):
+        for body in ["\n## @techlead claim", "<h2>@techlead claim</h2>", "## &#64;techlead claim",
+                     "## @ techlead claim", "## @\u200etechlead claim", "## \u200f@techlead claim"]:
+            with self.subTest(body=body):
+                st = bc.evaluate(view(view_comment(body + "\noperator: claude-code/abc\nissue: #226\n")), 226)
+                self.assertFalse(st.claimed)
+                self.assertEqual(len(st.suspected_forgeries), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

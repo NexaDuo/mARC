@@ -6,7 +6,8 @@ the prose protocol in `references/concurrent-operators.md` into one call, so
 the operator no longer re-derives it from ~8 KB of rules on every claim.
 
 What it enforces (each rule's intent and origin stays in the prose):
-  * A claim is a comment whose first line is `## @techlead claim`, carrying
+  * A claim is a comment whose first line is `## marc:techlead claim` (or the
+    legacy `## @techlead claim`, dual-accept #419), carrying
     `operator: <harness>/<session-id>`, `issue: #<N>`, `claimed-at: <ISO>`.
     The assignee field is never read (#213).
   * A marker counts only from a trusted author (OWNER/MEMBER/COLLABORATOR).
@@ -14,7 +15,8 @@ What it enforces (each rule's intent and origin stays in the prose):
     carries: `authorAssociation` in `gh issue view --json comments`,
     `author_association` in the REST `issues/<N>/comments` list. A payload read
     with the wrong field name yields "" and fails closed (#213).
-  * A `## @techlead withdraw` retires a claim only if it is trusted, names the
+  * A withdraw (either grammar; a new-form withdraw retires a legacy claim and
+    vice versa) retires a claim only if it is trusted, names the
     same `operator:` (case-insensitive) and was posted after that claim (#216).
   * Tie-break over live, trusted claims: the case-insensitively lowest
     `operator:` keeps the item (#205/#213). Autonomous withdrawal only when
@@ -33,17 +35,27 @@ from __future__ import annotations
 
 import os
 import re
+import html
 import shlex
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+# Emission stays on the legacy form until a later #419 step: installed older
+# plugin versions only parse `@`, and would miss a new-form claim. Parsing
+# accepts both (case-sensitive, like the legacy header).
 CLAIM_MARKER = "## @techlead claim"
 WITHDRAW_MARKER = "## @techlead withdraw"
+CLAIM_MARKERS = (CLAIM_MARKER, "## marc:techlead claim")
+WITHDRAW_MARKERS = (WITHDRAW_MARKER, "## marc:techlead withdraw")
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # <harness>/<session-id>: harness starts with a letter; the session id is at
 # least 3 chars. Rejects sort-gaming values such as `0/0`, `/x`, `a/`.
 OPERATOR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]{2,}$")
+# A heading that LOOKS like a claim/withdraw but is not the exact header (#419):
+# looser than counting, so a trusted near-miss is surfaced, never silently ignored.
+_NEAR_RE = re.compile(r"(?:marc[^a-z0-9]*@?\s*|@\s*)techlead[^a-z0-9]*(claim|withdraw)", re.ASCII)
 _FIELD_RE = re.compile(r"^\s*(operator|issue|claimed-at)\s*:\s*(.*?)\s*$", re.IGNORECASE)
 
 Runner = Callable[[list], str]
@@ -72,6 +84,7 @@ class Marker:
     trusted: bool
     well_formed: bool
     reason: str = ""
+    near_miss: bool = False
 
 
 @dataclass
@@ -123,15 +136,37 @@ def normalize_comments(payload) -> list[Comment]:
     return out
 
 
+def _near_text(body: str) -> str:
+    """First non-blank line, normalised like merge_gate's detection (NFKC, entities,
+    tags, zero-width/LRM/RLM, emphasis), for near-miss detection only (never counting)."""
+    t = html.unescape(unicodedata.normalize("NFKC", body))
+    t = re.sub(r"[\u200b-\u200f\u2060\ufeff\u00ad]", "", unicodedata.normalize("NFKC", t))
+    t = re.sub(r"[`*_~\\]", "", re.sub(r"<!--|-->|<[^>]*>", " ", t))
+    for ln in re.split(r"[\r\n\u2028\u2029\x0b\x0c]", t):
+        ln = re.sub(r"\s+", " ", ln).strip().lower()
+        if ln:
+            return ln.lstrip("#> -+=|").lstrip()
+    return ""
+
+
 def parse_marker(comment: Comment, issue_number: int) -> Optional[Marker]:
     lines = comment.body.replace("\r\n", "\n").split("\n")
     first = lines[0].rstrip() if lines else ""
-    if first == CLAIM_MARKER:
+    if first in CLAIM_MARKERS:
         kind = "claim"
-    elif first == WITHDRAW_MARKER:
+    elif first in WITHDRAW_MARKERS:
         kind = "withdraw"
     else:
-        return None
+        norm = _near_text(comment.body)
+        m = _NEAR_RE.match(norm)
+        if not m:
+            return None
+        near = Marker(kind=m.group(1), index=comment.index, operator="", issue="", claimed_at="",
+                      login=comment.login, association=comment.association, url=comment.url,
+                      trusted=comment.association in TRUSTED_ASSOCIATIONS, well_formed=False,
+                      reason=f"near-miss {m.group(1)} header {first[:60]!r} (not exactly the marker grammar)",
+                      near_miss=True)
+        return near
     fields: dict[str, str] = {}
     for line in lines[1:]:
         m = _FIELD_RE.match(line)
@@ -165,12 +200,19 @@ def _brief(m: Marker) -> dict:
 def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> ClaimStatus:
     """Pure decision function over one issue's comments."""
     markers = [m for m in (parse_marker(c, issue_number) for c in normalize_comments(payload)) if m]
+    near = [m for m in markers if m.near_miss and m.trusted]
+    markers = [m for m in markers if not m.near_miss]
+    # A trusted near-miss is superseded by any LATER trusted, well-formed exact
+    # marker (claim or withdraw) on the issue, mirroring merge_gate (#419).
+    suspected_near = [n for n in near
+                      if not any(x.index > n.index and x.trusted and x.well_formed for x in markers)]
+    superseded_near = [n for n in near if n not in suspected_near]
     claims = [m for m in markers if m.kind == "claim"]
     withdrawals = [m for m in markers if m.kind == "withdraw"]
     claim_ops = {c.operator.casefold() for c in claims if c.operator}
 
-    suspected: list[Marker] = []
-    ignored: list[Marker] = []
+    suspected: list[Marker] = list(suspected_near)
+    ignored: list[Marker] = list(superseded_near)
     valid_claims: list[Marker] = []
     for c in claims:
         if c.trusted and c.well_formed:
@@ -222,7 +264,9 @@ def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> Clai
             status.decision = "escalate"
             status.advice = ("you hold the lowest trusted claim, but a suspected forged marker "
                              "competes: do not withdraw, surface it and leave the item pending "
-                             "the user's decision")
+                             "the user's decision. Remedy: the author edits or deletes the "
+                             "near-miss comment, or posts a later well-formed claim/withdraw "
+                             "marker (a trusted later marker supersedes it)")
         else:
             status.decision = "own"
             status.advice = "you hold the claim; proceed"

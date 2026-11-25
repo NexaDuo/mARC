@@ -8,7 +8,7 @@ One call replaces the prose procedure in `references/review-release.md`:
 It reads `gh pr view N --json comments,headRefOid,reviewDecision,mergeStateStatus,state`
 plus the PR's review threads (GraphQL `reviewThreads`) and decides:
 
-  * `## @sec review` and `## @rev review` markers count only from a trusted
+  * `## marc:sec review` / `## marc:rev review` (and the legacy `@` forms) markers count only from a trusted
     author (`authorAssociation` OWNER/MEMBER/COLLABORATOR; missing/unknown fails
     closed) (#216).
   * The latest trusted marker per reviewer whose `reviewed-sha:` equals the
@@ -16,7 +16,11 @@ plus the PR's review threads (GraphQL `reviewThreads`) and decides:
   * Strict line grammar (#378, @arch decision on #382); the body is read raw
     (CRLF/CR normalised, trailing blanks per line stripped; no fence or HTML
     comment stripping, so nothing can disagree with the rendered comment):
-      line 1  exactly `## @sec review` / `## @rev review`
+      line 1  exactly `## marc:sec review` / `## marc:rev review`, or the legacy
+              `## @sec review` / `## @rev review` (dual-accept, #419; the
+              mention-free form avoids pinging real accounts). Matching is
+              case-sensitive, like the legacy form; a wrong-case heading is
+              detected as a suspect and fails closed.
       line 2  exactly `reviewer: <id>` (required; equal to --expect-reviewer)
       line 3  exactly `reviewed-sha: <40 lowercase hex>`
       result  exactly one line may lead with a `verdict` label and it must be
@@ -110,6 +114,11 @@ def _detect_lines(body: str) -> list:
     return out
 
 
+def headers_for(kind: str) -> tuple:
+    """Accepted line-1 headers for a kind: the mention-free form first, then legacy."""
+    return (f"## marc:{kind} review", f"## @{kind} review")
+
+
 def marker_kind(body: str) -> Optional[str]:
     """Detection runs on a normalised form (NFKC, BOM/zero-width/NBSP, whitespace,
     HTML tags/comments/entities, emphasis/backticks/backslashes, any heading level or
@@ -117,10 +126,13 @@ def marker_kind(body: str) -> Optional[str]:
     marker heading is a suspect and not silently skipped (SEC-20/REV-18, #382). This
     is wider than @arch rule 2's exact prefix. It is a heuristic over what a reader
     sees: prose that only mentions a review mid-line is out of reach by design. The
-    strict header grammar (classify) alone decides whether a marker COUNTS."""
+    strict header grammar (classify) alone decides whether a marker COUNTS. The
+    `marc` form is detected more loosely than it counts (any non-alphanumeric
+    separators, optional `@`), so `marc sec review`, `marc-sec review` or
+    `marc::sec review` are suspects; `marc security review` is not (#419)."""
     for ln in _detect_lines(body):
         for k in KINDS:
-            if ln.startswith(f"@{k} review"):
+            if ln.startswith(f"@{k} review") or re.match(rf"marc[^a-z0-9]*@?{k}[^a-z0-9]*review", ln, re.ASCII):
                 return k
     return None
 
@@ -146,8 +158,9 @@ def classify(body: str, kind: str) -> dict:
     lines += [""] * (3 - len(lines))
     out: dict = {"reviewer": None, "reviewed_sha": None, "header_error": None,
                  "verdict": MALFORMED, "problem": ""}
-    if lines[0] != f"## @{kind} review":
-        out["header_error"] = f"line 1 is not exactly `## @{kind} review`: {_clip(lines[0])}"
+    if lines[0] not in headers_for(kind):
+        out["header_error"] = (f"line 1 is not exactly `## @{kind} review` "
+                               f"(or `## marc:{kind} review`): {_clip(lines[0])}")
     m = _REVIEWER_RE.fullmatch(lines[1])
     if m:
         out["reviewer"] = m.group(1)
@@ -225,7 +238,7 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
             blockers.append(f"trusted @{k} marker cannot be counted ({why}); fail closed until the same "
                             f"reviewer re-posts a corrected comment (never edit it as the operator): {sus['url']}")
         if v is None:
-            blockers.append(f"no trusted `## @{k} review` at HEAD {head[:12]} (re-review at HEAD)")
+            blockers.append(f"no trusted `## @{k} review` (or `## marc:{k} review`) at HEAD {head[:12]} (re-review at HEAD)")
         elif v["verdict"] not in OK_RESULTS:
             why = v["problem"] if v["verdict"] == MALFORMED else "reviewer BLOCK"
             blockers.append(f"@{k} counted result is {v['verdict']} ({why}); "
