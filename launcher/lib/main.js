@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createRunner, resolveExecutable, safeValue } from './process.js';
 import { tagToNpm } from './version.js';
-import { createStyle } from './style.js';
+import { createStyle, stripControls } from './style.js';
 import { safeVersion, parsePlugins, describeSource, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from './lists.js';
 
 export const HARNESSES = ['claude', 'copilot', 'codex', 'agy'];
@@ -158,13 +158,13 @@ export async function installAgy({ run, release, tmpRoot }) {
 // Console output. Plain mode forwards every message to `log` unchanged and
 // adds nothing; color mode re-lays the same text out with headings, prompts
 // and a result table. Every colored fragment goes through style.paint.
-function makeOut(log, st) {
+export function makeOut(log, st) {
   const p = st.paint;
   const pending = new Map();
   const last = new Map();
   let buffering = false, group = null;
   const put = (h, text) => {
-    if (buffering) { pending.get(h)?.push(text); return; }
+    if (buffering) { if (!pending.has(h)) pending.set(h, []); pending.get(h).push(text); return; }
     if (h !== group) { if (group !== null) log(''); log(p('harness', `# ${h}`)); group = h; }
     log(text);
   };
@@ -179,6 +179,7 @@ function makeOut(log, st) {
     cmdLine(text) { log(st.enabled ? `${p('dim', '$ ')}${p('cmd', text)}` : text); },
     begin(harnesses) { if (st.enabled) { buffering = true; for (const h of harnesses) pending.set(h, []); } },
     flush() {
+      last.clear(); // pre-consent lines must not become a result detail
       if (!buffering) return;
       buffering = false;
       for (const [h, lines] of pending) for (const l of lines) put(h, l);
@@ -200,9 +201,13 @@ function makeOut(log, st) {
     row(h, cols, drift) {
       if (!st.enabled) return log(cols.join('\t') + (drift ? '\tDRIFT' : ''));
       const widths = [7, 10, 7, 8];
-      put(h, `  ${p('harness', pad(cols[0], widths[0]))}  ${cols.slice(1).map((c, i) => pad(c, widths[i + 1])).join('  ')}${drift ? `  ${p('drift', 'DRIFT')}` : ''}`.trimEnd());
+      // Every column is painted (so sanitized) and padded on its stripped length.
+      const cell = (c, n, role) => p(role, pad(stripControls(c), n));
+      const body = cols.slice(1).map((c, i) => cell(c, widths[i + 1], 'info')).join('  ');
+      put(h, `  ${cell(cols[0], widths[0], 'harness')}  ${body}${drift ? `  ${p('drift', 'DRIFT')}` : ''}`.trimEnd());
     },
-    detail(h) { return (last.get(h) || 'done').replace(`${h}: `, ''); },
+    detail(h) { const t = last.get(h) || 'done';
+      return t.startsWith(`${h}: `) ? t.slice(h.length + 2) : t; },
     results(list) {
       if (!st.enabled) { for (const { harness, state } of list) log(`${harness}: ${state}`); return; }
       log('');
@@ -339,7 +344,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
   }
   const results = [];
   for (const h of opts.harnesses) {
-    let failed = false, outcome;
+    let failed = false, outcome, threw = false;
     try {
       if (opts.command === 'doctor') {
         failed = Boolean(await doctor(h, run, release, out, opts.scope));
@@ -398,9 +403,9 @@ export async function main(argv, { release, run = createRunner(), log = console.
       } else {
         for (const args of plan({ ...opts, harnesses: [h] })[0].commands) await run(h, args);
       }
-    } catch (e) { out.line(h, 'error', `${h}: ${e.message}`); failed = true; }
+    } catch (e) { out.line(h, 'error', `${h}: ${e.message}`); failed = true; threw = true; }
     const state = failed ? 'FAILED' : outcome || 'OK';
-    results.push({ harness: h, state, detail: opts.command === 'doctor' ? (failed ? 'drift' : 'in sync') : out.detail(h) });
+    results.push({ harness: h, state, detail: opts.command === 'doctor' && !threw ? (failed ? 'drift' : 'in sync') : out.detail(h) });
     if (state !== 'OK') status = 1;
   }
   out.results(results);

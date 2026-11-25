@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStyle, stripControls } from '../lib/style.js';
-import { main, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
+import { main, makeOut, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
 import { tagToNpm, npmToTag } from '../lib/version.js';
 import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/process.js';
 import { describeSource, safeVersion, parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
@@ -52,7 +52,7 @@ function freshRunner(calls, after = {}) {
   };
 }
 function invoke(args, calls, extra = {}) {
-  return main(args, { release, run: runner(calls), log: silent, isTTY: false, ...extra });
+  return main(args, { release, run: runner(calls), log: silent, isTTY: false, env: {}, stdoutIsTTY: false, ...extra });
 }
 async function temp(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'marc-test-'));
@@ -304,12 +304,12 @@ esac
   const expected = [];
   for (const h of HARNESSES) for (const cmd of Object.keys(golden[h])) {
     const calls = [];
-    assert.equal(await main([cmd, '--harness', h, '--harness', h, '--yes', '--version', release.tag], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd }), 0);
+    assert.equal(await main([cmd, '--harness', h, '--harness', h, '--yes', '--version', release.tag], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd, env: {}, stdoutIsTTY: false }), 0);
     expected.push(...golden[h][cmd].map(a => [h, a]));
   }
   for (const cmd of ['install', 'update']) {
     const calls = [];
-    assert.equal(await main([cmd, '--harness', 'agy', '--yes'], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd, tmpRoot: dir }), 0);
+    assert.equal(await main([cmd, '--harness', 'agy', '--yes'], { release, run: async (...a) => { calls.push(a); return run(...a); }, log: silent, cwd, tmpRoot: dir, env: {}, stdoutIsTTY: false }), 0);
     const clone = calls[1][1].at(-1);
     expected.push(['agy', ['plugin', 'list', '--json']], ['git', ['clone', '--depth', '1', '--branch', release.tag, '--no-checkout', 'https://github.com/NexaDuo/mARC.git', clone]],
       ['git', ['rev-parse', 'HEAD']], ['git', ['ls-tree', '-r', 'HEAD']], ['git', ['checkout', '--detach', '--force', 'HEAD']],
@@ -897,4 +897,51 @@ test('color mode re-lays out the same text: headings, prompt glyph, remedy block
   assert.ok(text.some(l => /^ {2}claude {3}FAILED {2}nexaduo is registered/.test(l)), text.join('|'));
   assert.ok(text.every(l => [...l].every(c => c.charCodeAt(0) < 128)), 'ASCII only');
   assert.ok(logs.some(l => l.includes(`${ESC}[1;95mFAILED`)));
+});
+
+test('doctor rows paint every column: hostile scope and version cannot reach the terminal', async () => {
+  const BEL = String.fromCharCode(7), nl = String.fromCharCode(10);
+  const hostile = `pro${ESC}[2Jject${ESC}]0;pwned${BEL}`;
+  const rel = { tag: 'v26.11.25.4', sha: 'a'.repeat(40), npm: '26.1125.4' };
+  const run = async (h, args) => args[1] === 'list' ? JSON.stringify([{ id: 'marc@nexaduo', version: `1.${ESC}[2J${BEL}`, scope: hostile, enabled: true }]) : '[]';
+  const logs = [];
+  await main(['doctor', '--harness', 'claude'], { release: rel, run, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false });
+  const all = logs.join(nl);
+  assert.ok(all.includes(ESC), 'color mode is on');
+  assert.ok(!hasControl(all.replace(SGR, '').split(nl).join('')), all);
+  assert.ok(!all.includes(`${ESC}[2J`) && !all.includes(`${ESC}]`), all);
+  assert.ok(all.includes('pro[2Jject]0;pwned'), 'sanitized text is kept visible');
+});
+
+test('strip regex covers ALM, Mongolian vowel separator and word-joiner range', () => {
+  for (const cp of [0x061c, 0x180e, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064]) {
+    assert.equal(stripControls(`a${String.fromCharCode(cp)}b`), 'ab', cp.toString(16));
+  }
+});
+
+test('buffered color mode keeps a line for a harness not registered via begin()', () => {
+  const logs = [];
+  const out = makeOut(l => logs.push(l), createStyle({ env: { FORCE_COLOR: '1' }, isTTY: false }));
+  out.begin(['claude']);
+  out.line('codex', 'warn', 'codex: late');
+  out.line('claude', 'warn', 'claude: early');
+  out.flush();
+  const text = logs.map(l => l.replace(SGR, ''));
+  assert.deepEqual(text.filter(l => /late|early/.test(l)), ['  ! claude: early', '  ! codex: late']);
+});
+
+test('result detail reflects the outcome, not a pre-consent warning; doctor exceptions show the error', async () => {
+  const rel = { tag: 'v26.11.25.4', sha: 'a'.repeat(40), npm: '26.1125.4' };
+  const cwd = os.tmpdir();
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.4', scope: 'project', projectPath: cwd }]);
+  let logs = [];
+  const opts = { release: rel, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false, cwd };
+  assert.equal(await main(['update', '--yes', '--harness', 'claude'], { ...opts, run: async (h, a) => a[1] === 'list' ? rows : '' }), 0);
+  let text = logs.map(l => l.replace(SGR, ''));
+  assert.ok(text.some(l => l.startsWith('  ! Claude will edit')), 'pre-consent warning was shown');
+  assert.ok(text.some(l => /^ {2}claude {3}OK {6}done$/.test(l)), text.join('|'));
+  logs = [];
+  assert.equal(await main(['doctor', '--harness', 'codex'], { ...opts, run: async () => { throw new Error('boom'); } }), 1);
+  text = logs.map(l => l.replace(SGR, ''));
+  assert.ok(text.some(l => /^ {2}codex {4}FAILED {2}boom$/.test(l)), text.join('|'));
 });
