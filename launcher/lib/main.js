@@ -535,12 +535,12 @@ export async function main(argv, { release, run = createRunner(), log = console.
   if (opts.dryRun) return status;
   if (!opts.yes && opts.command !== 'doctor') {
     let accepted;
-    if (confirm) accepted = await confirm();
+    const removes = [...fstate.values()].filter(f => f.action === 'replace').length;
+    const question = removes ? `Run this plan? It removes ${removes} marketplace registration(s)` : 'Run this plan?';
+    if (confirm) accepted = await confirm(question);
     else {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const removes = [...fstate.values()].filter(f => f.action === 'replace').length;
-      const question = removes ? `Run this plan? It removes ${removes} marketplace registration(s) ` : 'Run this plan? ';
-      try { accepted = /^y(es)?$/i.test((await rl.question(`${question}${style.paint('dim', '[y/N]')} `)).trim()); } finally { rl.close(); }
+      try { accepted = /^y(es)?$/i.test((await rl.question(`${question} ${style.paint('dim', '[y/N]')} `)).trim()); } finally { rl.close(); }
     }
     if (!accepted) return 1;
   }
