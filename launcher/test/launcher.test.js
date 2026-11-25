@@ -952,7 +952,7 @@ const claudeRow = (scope, projectPath, version = '26.11.25.2') => ({ id: 'marc@n
 async function doctorRun(h, opts = {}, extra = {}) {
   const logs = [];
   const run = async (name, a) => a[1] === 'marketplace' ? JSON.stringify(opts.markets ?? marketFixtures[h]) : opts.list ?? fixtures[h];
-  const code = await main(['doctor', '--harness', h], { release, run, log: l => logs.push(l), isTTY: false, env: {}, stdoutIsTTY: false, home: '/home/user', ...extra });
+  const code = await main(['doctor', '--harness', h], { release, run, log: l => logs.push(l), isTTY: false, env: {}, stdoutIsTTY: false, platform: 'linux', home: '/home/user', ...extra });
   return { code, logs, text: logs.map(l => l.replace(SGR, '')) };
 }
 
@@ -984,6 +984,15 @@ test('doctor project column appends after DRIFT and the home option defaults fro
   const list = JSON.stringify([claudeRow('project', '/home/me/repos/app', '26.11.25.1')]);
   const { logs } = await doctorRun('claude', { list }, { home: undefined, env: { HOME: '/home/me' } });
   assert.ok(logs.includes('claude\t26.11.25.1\tproject\tenabled\tDRIFT\t~/repos/app'), logs.join('|'));
+});
+
+test('doctor project column on win32 uses win32 path rules and ~/ output', async () => {
+  const list = JSON.stringify([claudeRow('project', 'C:\\Users\\u\\repos\\app'), claudeRow('local', 'D:\\work\\app'), claudeRow('project', 'c:\\users\\U')]);
+  const { logs } = await doctorRun('claude', { list }, { platform: 'win32', home: 'C:\\Users\\u' });
+  const rows = logs.filter(l => l.startsWith('claude\t')).map(r => r.split('\t').pop());
+  assert.deepEqual(rows, ['~/repos/app', 'D:\\work\\app', '~']);
+  const env = await doctorRun('claude', { list }, { platform: 'win32', home: undefined, env: { USERPROFILE: 'C:\\Users\\u', HOME: '/ignored' } });
+  assert.ok(env.logs.some(l => l.endsWith('\t~/repos/app')), env.logs.join('|'));
 });
 
 const staleHint = 'run `npx @nexaduo/marc update`';

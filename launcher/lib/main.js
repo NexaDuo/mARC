@@ -252,28 +252,31 @@ function versionState(rows, release) {
 }
 
 // Project column for Claude project/local rows: ~-relative under home, else
-// absolute. Control characters are stripped.
-export function displayProject(projectPath, home) {
+// absolute. Control characters are stripped. Path semantics follow the injected
+// platform (path.win32 vs path.posix), not the host, and the ~-relative form
+// always uses forward slashes ("~/repos/app") on every platform.
+export function displayProject(projectPath, home, platform = process.platform) {
   if (typeof projectPath !== 'string' || !projectPath) return '-';
+  const P = platform === 'win32' ? path.win32 : path.posix;
   const clean = stripControls(projectPath);
   const h = typeof home === 'string' ? stripControls(home) : '';
-  if (h && path.isAbsolute(clean)) {
-    const rel = path.relative(h, clean);
+  if (h && P.isAbsolute(clean)) {
+    const rel = P.relative(h, clean);
     if (rel === '') return '~';
-    if (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) return `~${path.sep}${rel}`;
+    if (rel !== '..' && !rel.startsWith(`..${P.sep}`) && !P.isAbsolute(rel)) return `~/${rel.split(P.sep).join('/')}`;
   }
   return clean;
 }
 
 // Returns { state: OK|STALE|FAILED, detail }. STALE: the only problems are a
 // version mismatch and/or a catalog that tracks main. Anything else is FAILED.
-async function doctor(h, run, release, out, scope, home) {
+async function doctor(h, run, release, out, scope, home, platform) {
   const rows = parsePlugins(h, await run(h, listArgs(h))).filter(p => h !== 'claude' || !scope || p.scope === scope);
   let failed = !rows.length, stale = false;
   if (!rows.length) out.alt(h, `${h}\tmissing\t-`, 'error', `${h}: missing`);
   for (const row of rows) {
     const match = sameVersion(row.version, release);
-    const project = h === 'claude' && ['project', 'local'].includes(row.scope) ? displayProject(row.projectPath, home) : undefined;
+    const project = h === 'claude' && ['project', 'local'].includes(row.scope) ? displayProject(row.projectPath, home, platform) : undefined;
     out.row(h, [h, safeVersion(row.version), row.scope || '-', row.enabled === false ? 'disabled' : 'enabled'], !match, project);
     stale ||= !match;
   }
@@ -310,7 +313,8 @@ async function doctor(h, run, release, out, scope, home) {
 
 export async function main(argv, { release, run = createRunner(), log = console.log,
   isTTY = Boolean(process.stdin.isTTY), discover = h => resolveExecutable(h), confirm, cwd = process.cwd(), tmpRoot,
-  env = process.env, home = env.HOME || env.USERPROFILE || os.homedir(), stdoutIsTTY = Boolean(process.stdout.isTTY), platform = process.platform,
+  env = process.env, platform = process.platform,
+  home = (platform === 'win32' ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir(), stdoutIsTTY = Boolean(process.stdout.isTTY),
   style = createStyle({ env, isTTY: stdoutIsTTY, platform }) } = {}) {
   const opts = parseArgs(argv);
   if (opts.help) { log(HELP); return 0; }
@@ -374,7 +378,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
     let failed = false, outcome, threw = false, detail;
     try {
       if (opts.command === 'doctor') {
-        const d = await doctor(h, run, release, out, opts.scope, home);
+        const d = await doctor(h, run, release, out, opts.scope, home, platform);
         outcome = d.state === 'FAILED' ? undefined : d.state; failed = d.state === 'FAILED'; detail = d.detail;
       } else if (h === 'agy' && ['install', 'update'].includes(opts.command)) {
         await installAgy({ run, release, tmpRoot });
