@@ -48,7 +48,7 @@ class ProbeTest(unittest.TestCase):
         self.assertIsNone(d["host_harness"])
         self.assertIsNone(d["multiplexer"]["active"])
         self.assertEqual(d["adapters"]["codex"], ["exec-resume", "inbox"])
-        self.assertEqual(d["adapters"]["claude-code"], ["send-message", "resume", "inbox"])
+        self.assertEqual(d["adapters"]["claude-code"], ["resume", "inbox"])
         self.assertEqual(d["teams"], [])
         self.assertIs(d["persist"]["written"], False)
         self.assertIn("inbox", d["adapter_help"])
@@ -80,9 +80,39 @@ class ProbeTest(unittest.TestCase):
         d = self.data()
         self.assertIsNone(d["claude_cross_session"])
         self.assertIn("send-message", d["adapters"]["claude-code"])
+        self.assertIn("unverified", d["adapter_help"]["send-message"])
+
+    def test_send_message_needs_claude_on_path(self):
+        fake(self.bin, "claude", "echo 2.2.0")
+        self.assertEqual(self.data()["adapters"]["claude-code"][0], "send-message")
+        (self.bin / "claude").unlink()
+        self.assertNotIn("send-message", self.data()["adapters"]["claude-code"])
+
+    def test_user_bin_never_executed(self):
+        lb = self.cwd / ".local" / "bin"
+        lb.mkdir(parents=True)
+        marker = self.cwd / "ran"
+        fake(lb, "claude", f'touch {marker}; echo 9.9.9')
+        fake(lb, "tmux", f'touch {marker}; echo s')
+        d = self.data("--list-sessions")
+        self.assertFalse(marker.exists())
+        h = d["harnesses"]["claude-code"]
+        self.assertEqual((h["on_path"], h["version"], h["found_in_user_bin"]), (False, None, True))
+        self.assertNotIn("send-message", d["adapters"]["claude-code"])
+        self.assertEqual(d["multiplexer"]["sessions"]["tmux"], [])
+
+    def test_probe_timeout_bounds(self):
+        fake(self.bin, "codex", "exec /bin/sleep 30")
+        for bad in ("0", "-5", "nan", "inf", "abc", "61"):
+            r = subprocess.run([sys.executable, "-c",
+                "import os,sys;sys.path.insert(0,%r);import director_contact_probe as p;print(p.probe_timeout())"
+                % str(PROBE.parent)], env={"MARC_PROBE_TIMEOUT": bad, "PATH": str(self.bin)},
+                capture_output=True, text=True)
+            self.assertEqual(r.stdout.strip(), "10.0", bad)
 
     def test_multiplexer_markers_and_no_pane_value_leak(self):
         secret = "PANE-SECRET-77"
+        fake(self.bin, "claude", "echo 2.2.0")
         cases = [("tmux", {"TMUX": "/tmp/x,1,0", "TMUX_PANE": secret}),
                  ("zellij", {"ZELLIJ": "0", "ZELLIJ_PANE_ID": secret}),
                  ("zellij", {"ZELLIJ_SESSION_NAME": "s", "ZELLIJ_PANE_ID": secret}),
@@ -155,11 +185,18 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(d["multiplexer"]["sessions"]["zellij"], [])
         self.assertIn("tmux", d["multiplexer"]["sessions"]["error"])
 
+    def test_list_sessions_none_running_is_empty(self):
+        fake(self.bin, "tmux", 'echo "no server running on /tmp/tmux-1/default" >&2; exit 1')
+        fake(self.bin, "zellij", 'echo "No active zellij sessions found." >&2; exit 1')
+        d = self.data("--list-sessions")
+        self.assertEqual(d["multiplexer"]["sessions"], {"tmux": [], "zellij": []})
+
     def test_no_writes(self):
         fake(self.bin, "claude", 'echo "2.1.230"')
         fake(self.bin, "tmux", "echo s")
-        self.run_probe("--team", "a=claude-code", "--list-sessions",
+        r = self.run_probe("--team", "a=claude-code", "--list-sessions",
                        env={"TMUX": "1", "TMUX_PANE": "%1"})
+        self.assertEqual(r.returncode, 0)
         self.assertEqual(list(self.cwd.iterdir()), [])
 
 

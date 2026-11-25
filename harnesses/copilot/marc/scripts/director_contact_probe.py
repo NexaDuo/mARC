@@ -11,14 +11,20 @@ contact-adapter list per harness plus an optional per-team binding.
 Read-only by construction: it writes no file, opens no socket or network
 connection, and runs no command except `<cli> --version` for the four harness
 CLIs (timeout 10s, no stdin, captured output; override with the env var
-MARC_PROBE_TIMEOUT, in seconds, for tests). Only with the opt-in `--list-sessions`
+MARC_PROBE_TIMEOUT, a finite number in (0, 60] seconds, for tests). Only with the opt-in `--list-sessions`
 it also runs the read-only `tmux ls` / `zellij list-sessions` (timeout 5s, no
 stdin). It never sends a message. Pane-id environment values are reported as present/absent
 only. It always exits 0, except 2 for an unknown harness in `--team`.
+A binary found only in ~/.local/bin (not on PATH) is reported as `on_path: false,
+found_in_user_bin: true` and is never executed: no `--version`, no session listing.
+`send-message` is dropped when claude is not on PATH or is older than 2.1.224; when
+claude is on PATH but its version is unknown or unparsable (`claude_cross_session:
+null`) it is kept as UNVERIFIED and the director must confirm with `ListAgents`.
 Persisting a proposal is a separate, opt-in step done by the director.
 """
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -49,6 +55,8 @@ LIST_SESSIONS_CMDS = {
     "tmux": ["tmux", "ls", "-F", "#{session_name}"],
     "zellij": ["zellij", "list-sessions", "--short", "--no-formatting"],
 }
+# exit-1 messages that mean "none running", not a failure (tmux, zellij)
+NO_SESSIONS = ("no server running", "error connecting to", "no active", "no sessions")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 ADAPTER_ORDER = {
@@ -59,7 +67,7 @@ ADAPTER_ORDER = {
 }
 
 ADAPTER_HELP = {
-    "send-message": "ListAgents/SendMessage to a session addressed by display name (cross-session messaging; needs claude >= 2.1.224)",
+    "send-message": "ListAgents/SendMessage to a session addressed by display name (cross-session messaging; needs claude >= 2.1.224; if claude_cross_session is null the version is unknown, so unverified: confirm with ListAgents)",
     "multiplexer-interactive": "start the harness interactively in a detected multiplexer pane (claude: add --name <team>); type-in only to an explicit, verified pane id",
     "resume": "claude --resume <name|id>  |  copilot --resume <id>  (only after verified exit)",
     "exec-resume": 'codex exec resume <id> "<prompt>"  (only after verified exit)',
@@ -70,13 +78,15 @@ ADAPTER_HELP = {
 
 def probe_timeout():
     try:
-        return float(os.environ.get("MARC_PROBE_TIMEOUT", "10"))
+        t = float(os.environ.get("MARC_PROBE_TIMEOUT", "10"))
     except ValueError:
         return 10.0
+    return t if math.isfinite(t) and 0 < t <= 60 else 10.0
 
 
 def find_binary(name):
-    return shutil.which(name) or _local_bin(name)
+    """PATH only: the sole kind of binary this probe ever executes."""
+    return shutil.which(name)
 
 
 def _local_bin(name):
@@ -116,7 +126,7 @@ def detect_multiplexer(env):
     available = []
     pane = False
     for name, (markers, binary, pane_env) in MULTIPLEXERS.items():
-        if find_binary(binary):
+        if find_binary(binary) or _local_bin(binary):
             available.append(name)
         if active is None and any(env.get(m) for m in markers):
             active = name
@@ -129,7 +139,10 @@ def list_sessions(available):
     for name, cmd in LIST_SESSIONS_CMDS.items():
         if name not in available:
             continue
-        cmd = [find_binary(name)] + cmd[1:]
+        path = find_binary(name)
+        if not path:  # user-bin-only binaries are never executed
+            continue
+        cmd = [path] + cmd[1:]
         try:
             r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
                                text=True, timeout=5, check=False)
@@ -137,6 +150,10 @@ def list_sessions(available):
             out[name] = {"sessions": [], "error": type(e).__name__}
             continue
         if r.returncode != 0:
+            msg = (r.stderr + r.stdout).lower()
+            if any(m in msg for m in NO_SESSIONS):
+                out[name] = {"sessions": []}
+                continue
             out[name] = {"sessions": [], "error": f"exit {r.returncode}"}
             continue
         lines = [ANSI.sub("", ln).strip() for ln in r.stdout.splitlines()]
@@ -150,6 +167,8 @@ def build(teams, with_sessions=False):
     for name, binary in HARNESSES.items():
         path = find_binary(binary)
         harnesses[name] = {"on_path": bool(path), "version": cli_version(path) if path else None}
+        if not path and _local_bin(binary):
+            harnesses[name]["found_in_user_bin"] = True
     active, available, pane = detect_multiplexer(env)
     parsed = parse_version(harnesses["claude-code"]["version"])
     cross = None if parsed is None else parsed >= CROSS_SESSION_MIN
@@ -157,7 +176,7 @@ def build(teams, with_sessions=False):
     adapters = {}
     for name, order in ADAPTER_ORDER.items():
         adapters[name] = [a for a in order
-                          if not (a == "send-message" and cross is False)
+                          if not (a == "send-message" and (cross is False or not harnesses["claude-code"]["on_path"]))
                           and not (a == "multiplexer-interactive" and not use_mux)]
     sessions = None
     if with_sessions:
