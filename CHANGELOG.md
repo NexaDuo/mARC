@@ -8,6 +8,12 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.24] - 2026-11-24
+
+### Changed
+
+- eng-director field lessons (#415): proxy-evidence acceptance, model pinned and verified on resume, lean-session connector pruning, idle-reminder suppression, team-capacity recommendation.
+
 ## [26.11.23] - 2026-11-23
 
 ### Added
