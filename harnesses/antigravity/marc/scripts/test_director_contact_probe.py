@@ -215,6 +215,8 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(d["adapters"]["codex"], ["app-server-steer", "exec-resume", "inbox"])
         self.assertEqual(d["teams"], [])
         self.assertIn("expectedTurnId", d["adapter_help"]["app-server-steer"])
+        self.assertIn("MESSAGE-ONLY", d["adapter_help"]["app-server-steer"])
+        self.assertIn("--remote-auth-token-env", d["adapter_help"]["app-server-steer"])
         self.assertEqual(self.data("--team", "a=codex")["teams"][0]["adapters"][0], "app-server-steer")
         fake(self.bin, "tmux", "exit 0")
         self.assertEqual(self.data()["adapters"]["codex"],
@@ -235,6 +237,13 @@ class ProbeTest(unittest.TestCase):
         self.fake_codex('echo "--listen <URL>"', "exec /bin/sleep 30")
         d = self.data(env={"MARC_PROBE_TIMEOUT": "1"})
         self.assertIsNone(d["harnesses"]["codex"]["app_server"])
+
+    def test_codex_second_help_skipped_when_first_fails(self):
+        marker = self.cwd / "second-ran"
+        self.fake_codex("exit 2", f'touch {marker}; echo "--remote <ADDR>"')
+        d = self.data()
+        self.assertIsNone(d["harnesses"]["codex"]["app_server"])
+        self.assertFalse(marker.exists())
 
     def test_codex_user_bin_never_probed_for_app_server(self):
         lb = self.cwd / ".local" / "bin"

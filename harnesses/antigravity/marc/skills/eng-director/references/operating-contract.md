@@ -36,7 +36,7 @@ team's techlead without sharing that team's full context.
 
 The contact adapter binding records the harness, session name or ID, the ordered
 adapter list, the adapter last verified to reach the session, and the observation
-time. The probe's JSON output (`director_contact_probe.py`) is the proposal source;
+time. For Codex the binding also records the techlead `threadId` and server endpoint. The probe's JSON output (`director_contact_probe.py`) is the proposal source;
 the order and rules are in `operations.md`.
 
 Distinguish three operations:

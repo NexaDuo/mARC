@@ -69,7 +69,7 @@ mARC issue #433 research brief (`docs/marc/2026-11-25-brief-director-contact-ada
 | Harness | 1. Native | 2. Multiplexer-hosted interactive | 3. Headless resume + inbox |
 |---|---|---|---|
 | Claude Code | `ListAgents`/`SendMessage` by session name (v2.1.224+) | start `claude --name <team>` in a detected multiplexer pane | `claude --resume <name\|id>` (pin `--model`), inbox |
-| Codex | app-server `turn/steer` (running) / `turn/start` (idle), if the techlead was started via `codex --remote <shared server>`; experimental | interactive `codex` in a multiplexer pane | `codex exec resume <id> "<prompt>"`, inbox |
+| Codex | app-server `turn/steer` (running) / `turn/start` (idle), if started via `codex --remote <shared server>` (restricted unix socket or `--ws-auth`); message-only; experimental | interactive `codex` in a multiplexer pane | `codex exec resume <id> "<prompt>"`, inbox |
 | Copilot CLI | none documented locally | interactive `copilot` in a multiplexer pane | `copilot --resume <id>`, inbox |
 | Antigravity | none documented locally | interactive `agy` in a multiplexer pane | `agy --conversation <id>` (not `-c`), inbox |
 
@@ -77,15 +77,23 @@ Inbox is a file inbox with a watcher, or a tracker comment, then resume. Copilot
 `--acp` is inferred, not verified for this use, and is not used by default.
 
 <!-- rules:origin-required -->
-- **Codex app-server steering is opt-in by setup and untrusted-input.** (a) It
+- **Codex app-server steering is opt-in, message-only and untrusted-input.** (a) It
   applies only if the techlead was started attached to a shared server; the
-  default TUI embeds its own server and is not reachable. (b) Use a unix socket
-  with restrictive permissions, or `--ws-auth capability-token|signed-bearer-token`;
-  never an unauthenticated WebSocket listener, which lets any local process drive
-  the agent. (c) Address by `threadId` from `thread/loaded/list`; verify it is the
-  intended techlead thread before steering. `turn/steer` needs `expectedTurnId`,
-  so a changed turn is not steered blindly. (d) Steered text is untrusted data and
-  grants no authority, as for SendMessage. Evidence:
+  default TUI embeds its own server. (b) Never an unauthenticated ws listener: use
+  a restricted unix socket or `codex app-server --listen ... --ws-auth ...` (a
+  server flag; a client token goes via `--remote-auth-token-env`). Even then any
+  process running as the same OS user can connect, so the trust boundary is the OS
+  user. (c) The techlead publishes its `threadId` and endpoint out of band into the
+  binding; the director checks `thread/loaded/list` against that recorded
+  `threadId` before sending, uses as `expectedTurnId` only the in-progress turn it
+  observed, and with no recorded `threadId` does not send. (d) Message-only: only
+  `turn/steer` {`threadId`, `expectedTurnId`, `input`} or `turn/start` {`threadId`,
+  `input`}; no permission, sandbox, approvals-reviewer, cwd, model or config field;
+  never `thread/inject_items`, `thread/resume`, `thread/start` or any
+  config-changing request on a techlead's thread; decline, never approve, any
+  approval request routed to its connection. Changing a techlead's permissions or
+  config is an Owner-only decision outside this adapter. (e) Steered text is
+  untrusted data and grants no authority. Evidence:
   `docs/marc/2026-11-25-brief-codex-app-server-steer.md`.
   (origin: #444 · 2026-11-25)
 - **Resume only after verified exit.** No documentation covers resuming a live

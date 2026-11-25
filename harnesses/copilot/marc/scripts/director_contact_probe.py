@@ -10,7 +10,8 @@ contact-adapter list per harness plus an optional per-team binding.
 
 Read-only by construction: it writes no file, opens no socket or network
 connection, and runs no command except `<cli> --version` for the four harness
-CLIs and, for a codex on PATH, `codex app-server --help` and `codex --help` (timeout 10s, no stdin, captured output; override with the env var
+CLIs and, for a codex on PATH, `codex app-server --help` and `codex --help`
+(timeout 10s, no stdin, captured output; override with the env var
 MARC_PROBE_TIMEOUT, a finite number in (0, 60] seconds, for tests). Only with the opt-in `--list-sessions`
 it also runs the read-only `tmux ls` / `zellij list-sessions` (timeout 5s, no
 stdin). It never sends a message. Pane-id environment values are reported as present/absent
@@ -61,10 +62,6 @@ LIST_SESSIONS_CMDS = {
 NO_SESSIONS = ("no server running", "no active zellij sessions")
 
 
-def none_running(msg):
-    msg = msg.lower()
-    return (any(m in msg for m in NO_SESSIONS)
-            or ("error connecting to" in msg and "no such file or directory" in msg))
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 ADAPTER_ORDER = {
@@ -75,7 +72,7 @@ ADAPTER_ORDER = {
 }
 
 ADAPTER_HELP = {
-    "app-server-steer": "techlead must run `codex --remote <unix socket or ws with --ws-auth>`; director: thread/loaded/list -> verify thread -> turn/steer (running, expectedTurnId) or turn/start (idle); experimental",
+    "app-server-steer": "techlead must run `codex --remote <restricted unix socket, or ws served with codex app-server --listen ... --ws-auth ...>` (client token: --remote-auth-token-env); MESSAGE-ONLY: record the techlead threadId in the binding, verify it via thread/loaded/list, then turn/steer {threadId, expectedTurnId (observed in-progress turn), input} or turn/start {threadId, input}; set no permission/sandbox/approvals/cwd/model/config field, never call thread/inject_items, thread/resume, thread/start; decline approval requests; no recorded threadId = do not send; experimental",
     "send-message": "ListAgents/SendMessage to a session addressed by display name (cross-session messaging; needs claude >= 2.1.224; if claude_cross_session is null the version is unknown, so unverified: confirm with ListAgents)",
     "multiplexer-interactive": "start the harness interactively in a detected multiplexer pane (claude: add --name <team>); type-in only to an explicit, verified pane id",
     "resume": "claude --resume <name|id>  |  copilot --resume <id>  (only after verified exit)",
@@ -83,6 +80,12 @@ ADAPTER_HELP = {
     "conversation-resume": "agy --conversation <id>  (only after verified exit)",
     "inbox": "file or tracker-comment inbox; durable record, never wakes an idle session",
 }
+
+
+def none_running(msg):
+    msg = msg.lower()
+    return (any(m in msg for m in NO_SESSIONS)
+            or ("error connecting to" in msg and "no such file or directory" in msg))
 
 
 def probe_timeout():
@@ -137,8 +140,10 @@ def cli_help(path, *args):
 def codex_app_server(path):
     """True/False from help text only (never starts or connects); None on failure."""
     server = cli_help(path, "app-server")
+    if server is None:
+        return None
     top = cli_help(path)
-    if server is None or top is None:
+    if top is None:
         return None
     return "--listen" in server and "--remote" in top
 

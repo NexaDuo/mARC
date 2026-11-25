@@ -11,6 +11,9 @@ reported by the engineering director with codex-cli 0.167.1 on Linux;
 
 ## Observed (director-observed, live test)
 
+**Test-only setup, not a recommended configuration:** an unauthenticated loopback
+ws listener with approval policy `never`.
+
 1. `codex app-server --listen ws://127.0.0.1:<port>`. Client A ran `initialize`,
    `thread/start` (ephemeral, read-only sandbox, approval policy `never`) and
    `turn/start` with a long counting task.
@@ -32,7 +35,12 @@ Conclusion: a second client can steer a running Codex turn.
   `codex --remote <ADDR>` attaches the TUI to a remote app server. Also
   `codex app-server daemon` and `proxy`.
 - `--ws-auth capability-token | signed-bearer-token` (`--ws-token-file`,
-  `--ws-token-sha256`).
+  `--ws-token-sha256`) is a **server** flag (`codex app-server --listen ... --ws-auth ...`).
+  A client token goes via `codex --remote-auth-token-env <ENV_VAR>`.
+- `TurnStartParams` accepts `approvalPolicy`, `sandboxPolicy`, `approvalsReviewer`,
+  `cwd` and `model`, each overriding this and subsequent turns; `ThreadResumeParams`
+  accepts `developerInstructions`, `config`, `approvalPolicy` and more. A second
+  client could therefore change a techlead's permissions, hence message-only.
 
 ## Caveats
 
@@ -40,11 +48,19 @@ Conclusion: a second client can steer a running Codex turn.
 - The default `codex` TUI embeds its own server. A techlead is reachable this way
   only if it was started attached to a shared server (`codex --remote <ws|unix>`,
   or the daemon).
-- **Local-injection risk:** an unauthenticated loopback WebSocket lets any local
-  process, under any user that can reach the port, drive the agent. Prefer a unix
-  socket with restrictive permissions, or `--ws-auth`. Steered text is untrusted
-  data and grants no authority, the same as for Claude Code cross-session
-  messages.
+- **Message-only.** The director sends only `turn/steer` {`threadId`,
+  `expectedTurnId`, `input`} or `turn/start` {`threadId`, `input`}; no
+  permission/sandbox/approvals/cwd/model/config field; never `thread/inject_items`,
+  `thread/resume`, `thread/start`; it declines any approval request routed to it.
+  Changing a techlead's permissions is Owner-only, outside this adapter.
+- **Local-injection risk:** never an unauthenticated ws listener; use a restricted
+  unix socket or `--ws-auth` (server flag). Even a restricted unix socket admits
+  any process running as the same OS user, so the trust boundary is the OS user.
+  Steered text is untrusted data and grants no authority.
+- **Verification:** the techlead publishes its `threadId` and endpoint out of band
+  (the team binding); the director checks `thread/loaded/list` against the recorded
+  `threadId` before sending; `expectedTurnId` is the in-progress turn it observed,
+  never guessed; no recorded `threadId` means no send.
 - Addressing is by `threadId`. No human-readable session name was found.
 
 ## Consequence for mARC
