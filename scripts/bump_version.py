@@ -10,6 +10,7 @@ and launcher/release.json (tag/npm; sha stays null until the publish job fills i
 The npm form is the Python port of launcher/lib/version.js `tagToNpm`.
 """
 import json
+import os
 import re
 from datetime import date
 import sys
@@ -52,21 +53,34 @@ def stamp(version, root=ROOT):
     """Write VERSION and every copy. Idempotent; returns the files it owns."""
     tag = 'v' + version
     npm = tag_to_npm(tag)
-    plan = [('VERSION', None, None)]
-    plan += [(m, r'("version"\s*:\s*")[^"]*(")', version) for m in MANIFESTS.values()]
+    plan = [(m, r'("version"\s*:\s*")[^"]*(")', version) for m in MANIFESTS.values()]
     plan += [(c, r'("ref"\s*:\s*")[^"]*(")', tag) for c in CATALOGS.values()]
     plan.append((PACKAGE, r'("version"\s*:\s*")[^"]*(")', npm))
+    # Compute and validate every new content first; nothing is written on any failure.
+    outputs = []
     for name, pattern, value in plan:
-        path = root / name
-        if pattern is None:
-            path.write_text(version + '\n')
-            continue
-        text, count = re.subn(pattern, lambda m: m.group(1) + value + m.group(2), path.read_text(), count=1)
+        text, count = re.subn(pattern, lambda m: m.group(1) + value + m.group(2), (root / name).read_text(), count=1)
         if count != 1:
             raise ValueError(f'{name}: no version field to stamp')
-        path.write_text(text)
-    (root / RELEASE).write_text(json.dumps({'tag': tag, 'sha': None, 'npm': npm}, indent=2) + '\n')
-    return [n for n, _, _ in plan] + [RELEASE]
+        json.loads(text)
+        outputs.append((name, text))
+    outputs.append((RELEASE, json.dumps({'tag': tag, 'sha': None, 'npm': npm}, indent=2) + '\n'))
+    outputs.append(('VERSION', version + '\n'))  # last: VERSION only moves once every copy did
+    for name, _ in outputs:
+        if not (root / name).parent.is_dir():
+            raise ValueError(f'{name}: directory missing')
+    written = []
+    try:
+        for name, text in outputs:
+            path = root / name
+            temp = path.with_name(path.name + '.tmp')
+            written.append(temp)
+            temp.write_text(text)
+            os.replace(temp, path)
+    finally:
+        for temp in written:
+            temp.unlink(missing_ok=True)
+    return [n for n, _ in outputs]
 
 
 def check(root=ROOT):

@@ -54,8 +54,9 @@ Flags: `--harness <claude|copilot|codex|agy>` selects a harness (repeatable);
 settings paths that its CLI will edit. Antigravity uses a temporary,
 SHA-verified clone that is deleted afterwards.
 
-The npm package embeds one release: `v26.12.1` maps to npm `26.1201.0` (the live version is in `VERSION`).
-Antigravity installs exactly that tag; Claude Code, Copilot and Codex follow
+Each npm package version maps to one release tag. For example, `v26.12.1` maps to npm
+`26.1201.0` (the live version is in `VERSION`).
+Antigravity installs exactly the tag its package version maps to; Claude Code, Copilot and Codex follow
 the marketplace catalog, which points at the latest release. Use the latest
 package to keep every harness in lockstep.
 After installation, invoke `/marc:tech-lead` in your harness.

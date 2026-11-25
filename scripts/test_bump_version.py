@@ -83,6 +83,18 @@ class CatalogPointers(unittest.TestCase):
                 self.assertIn(name, str(caught.exception))
             path.write_text(original)
 
+    def test_failed_stamp_changes_no_file(self):
+        (self.root / 'harnesses/codex/marc/plugin.json').unlink()
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        with self.assertRaises(OSError): stamp('26.12.1', self.root)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+
+    def test_unstampable_target_changes_no_file(self):
+        (self.root / 'launcher/package.json').write_text('{}')
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        with self.assertRaisesRegex(ValueError, 'package.json'): stamp('26.12.1', self.root)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+
     def test_repo_is_in_parity(self):
         self.assertEqual(check(ROOT), 'v' + read_version(ROOT))
 

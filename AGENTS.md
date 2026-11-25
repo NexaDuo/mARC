@@ -81,8 +81,8 @@ reader of this file alone needs, restated:
   If agents repeat a mistake, tighten the linter/CI/test — don't grow prose here. LLMs
   anchor on whatever sits in context, including deprecated caveats.
 - **An installed plugin is immutable from the user's side.** Product changes flow only
-  through releases: bump `harnesses/claude-code/marc/.claude-plugin/plugin.json`
-  `version` + `CHANGELOG.md`; users get it via `claude plugin update marc@nexaduo`.
+  through releases: edit `VERSION` + `CHANGELOG.md`, run `python3 scripts/bump_version.py <ver>`
+  (CI runs `--check`); users get it via `claude plugin update marc@nexaduo`.
   Never edit the plugin cache; auto-update is OFF for third-party marketplaces.
 - **Self-improvement is context-gated:** flush-to-source is allowed ONLY in this repo.
   When mARC runs *installed* in a user's repo, lessons persist **locally** (their

@@ -76,7 +76,7 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 
 Each npm version embeds one mARC release tag. A tag `vYY.M.D[.N]` (no leading
 zeros) maps to npm `YY.(M*100+D).N`, where a missing `.N` is `0`. For example,
-`v26.12.2` is `26.1202.0` and `v26.12.1` is `26.1201.0`.
+`v26.11.25.5` is `26.1125.5` and `v26.12.1` is `26.1201.0`.
 
 What a given package version pins:
 
