@@ -8,7 +8,7 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
-## [26.11.26] - 2026-11-26
+## [26.11.25.2] - 2026-11-25
 
 ### Added
 
@@ -27,9 +27,9 @@ date whose `YY.M.D` is already taken.
   no-ops; dispatch and failed-job retries heal missing surfaces without moving
   existing tags or npm latest backwards. Tag creation uses an environment-scoped
   deploy key with pinned GitHub SSH hosts and unconditional key cleanup.
-- All four harnesses ship 26.11.26. Marketplace catalogs point at `v26.11.26`
+- All four harnesses ship 26.11.25.2. Marketplace catalogs point at `v26.11.25.2`
   using each CLI's supported source schema; CI installs from temporary local
-  catalogs so it continues testing the PR tree. npm version: `26.1126.0`.
+  catalogs so it continues testing the PR tree. npm version: `26.1125.2`.
 - #161's rejection of a self-owned npx installer is partially superseded;
   third-party installer rejections stand. `npx` is the documented install path;
   declarative per-repo Claude team setup remains available.
@@ -40,9 +40,9 @@ date whose `YY.M.D` is already taken.
   and `~`, and reject cmd metacharacters or spaces with a `TMP`/`TEMP` remedy.
 - Benchmarks install each arm's checkout through temporary local-source catalogs.
   Version parity includes launcher package/release metadata and a null source SHA.
-- npm verification applies only to this launcher repo from `v26.11.26` onward;
-  other repos and older tags report `not_applicable`. Only bootstrap `v26.11.26`
-  / npm `26.1126.0` is exempt from attestation; all other checks still apply.
+- npm verification applies only to this launcher repo from `v26.11.25.2` onward;
+  other repos and older tags report `not_applicable`. Only bootstrap `v26.11.25.2`
+  / npm `26.1125.2` is exempt from attestation; all other checks still apply.
 - Maintainer release prerequisites: a `v*` tag ruleset restricting create/update/
   delete, a rule blocking `refs/heads/v*` branches, the `npm-publish` environment
   with required reviewers, and a trusted publisher bound to `npm-publish.yml`

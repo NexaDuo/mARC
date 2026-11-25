@@ -121,16 +121,16 @@ class NpmPublished(unittest.TestCase):
             download.assert_not_called()
 
     def test_bootstrap_exception_only_skips_attestation(self):
-        self.fixture({'tag': 'v26.11.26', 'npm': '26.1126.0', 'sha': 'a' * 40})
+        self.fixture({'tag': 'v26.11.25.2', 'npm': '26.1125.2', 'sha': 'a' * 40})
         package = self.metadata['versions'].pop('26.1126.1')
-        package['version'] = '26.1126.0'
+        package['version'] = '26.1125.2'
         package['dist'].pop('attestations')
-        self.metadata['versions']['26.1126.0'] = package
-        self.metadata['dist-tags']['latest'] = '26.1126.0'
-        self.assertEqual(rv.BOOTSTRAP_UNATTESTED_TAG, 'v26.11.26')
-        self.assertTrue(self.check('v26.11.26').ok)
+        self.metadata['versions']['26.1125.2'] = package
+        self.metadata['dist-tags']['latest'] = '26.1125.2'
+        self.assertEqual(rv.BOOTSTRAP_UNATTESTED_TAG, 'v26.11.25.2')
+        self.assertTrue(self.check('v26.11.25.2').ok)
         self.blob += b'tampered'
-        self.assertFalse(self.check('v26.11.26').ok)
+        self.assertFalse(self.check('v26.11.25.2').ok)
 
     def test_map_edges(self):
         for tag, npm in [('v27.1.1', '27.101.0'), ('v27.12.31', '27.1231.0'), ('v26.11.25.99', '26.1125.99')]:

@@ -16,13 +16,13 @@ A, B = 'a' * 40, 'b' * 40
 
 class ReleasePlan(unittest.TestCase):
     def plan(self, **changes):
-        inputs = dict(version='26.11.26', event='push', sha=A, tag_sha=None,
+        inputs = dict(version='26.11.25.2', event='push', sha=A, tag_sha=None,
                       release_exists=False, npm_exists=False, tag_is_ancestor=True)
         inputs.update(changes)
         return rp.make_plan(**inputs)
 
     def test_new_release(self):
-        self.assertEqual(self.plan(), dict(tag='v26.11.26', npm='26.1126.0', sha=A,
+        self.assertEqual(self.plan(), dict(tag='v26.11.25.2', npm='26.1125.2', sha=A,
                                           need_tag=True, need_release=True, need_npm=True))
 
     def test_push_reuses_existing_ancestor_as_green_noop(self):
@@ -69,8 +69,8 @@ class ReleasePlan(unittest.TestCase):
         self.assertEqual([plan[k] for k in ('need_tag', 'need_release', 'need_npm')], [False, False, True])
 
     def test_npm_floor(self):
-        for version, needed in [('26.11.25', False), ('26.11.25.9', False),
-                                ('26.11.26', True), ('26.11.26.1', True), ('27.1.1', True)]:
+        for version, needed in [('26.11.25', False), ('26.11.25.1', False), ('26.11.25.9', True),
+                                ('26.11.25.2', True), ('26.11.26.1', True), ('27.1.1', True)]:
             with self.subTest(version=version):
                 self.assertEqual(self.plan(version=version)['need_npm'], needed)
         self.assertFalse(self.plan(npm_exists=True)['need_npm'])
@@ -86,15 +86,15 @@ class ReleasePlan(unittest.TestCase):
             self.plan(event='pull_request')
 
     def test_remote_tag_peels_annotated_object(self):
-        with patch.object(rp, 'git', return_value=f'{A}\trefs/tags/v26.11.26\n{B}\trefs/tags/v26.11.26^{{}}'):
-            self.assertEqual(rp.remote_tag_sha('v26.11.26'), B)
-        with patch.object(rp, 'git', return_value=f'{A}\trefs/tags/v26.11.26'):
-            self.assertEqual(rp.remote_tag_sha('v26.11.26'), A)
+        with patch.object(rp, 'git', return_value=f'{A}\trefs/tags/v26.11.25.2\n{B}\trefs/tags/v26.11.25.2^{{}}'):
+            self.assertEqual(rp.remote_tag_sha('v26.11.25.2'), B)
+        with patch.object(rp, 'git', return_value=f'{A}\trefs/tags/v26.11.25.2'):
+            self.assertEqual(rp.remote_tag_sha('v26.11.25.2'), A)
         with patch.object(rp, 'git', return_value=''):
-            self.assertIsNone(rp.remote_tag_sha('v26.11.26'))
+            self.assertIsNone(rp.remote_tag_sha('v26.11.25.2'))
         with patch.object(rp, 'git', side_effect=OSError('offline')):
             with self.assertRaises(OSError):
-                rp.remote_tag_sha('v26.11.26')
+                rp.remote_tag_sha('v26.11.25.2')
 
     def test_only_404_means_missing(self):
         for code in (404, 401, 403, 429, 500):
@@ -116,7 +116,7 @@ class ReleasePlan(unittest.TestCase):
                 output = Path(temp) / 'output'
                 with patch.dict(rp.os.environ, {'GITHUB_OUTPUT': str(output)}), \
                         patch.object(rp, 'npm_state', return_value=(exists, latest)):
-                    rp.check_npm('26.1126.0')
+                    rp.check_npm('26.1125.2')
                 self.assertEqual(output.read_text(), f'publish={expected}\n')
 
     def test_publish_refuses_backfill_and_missing_bootstrap_before_outputs(self):
@@ -126,14 +126,14 @@ class ReleasePlan(unittest.TestCase):
                 with patch.dict(rp.os.environ, {'GITHUB_OUTPUT': str(output)}), \
                         patch.object(rp, 'npm_state', return_value=(False, latest)):
                     with self.assertRaisesRegex(ValueError, message):
-                        rp.check_npm('26.1126.0')
+                        rp.check_npm('26.1125.2')
                 self.assertFalse(output.exists())
 
     def test_npm_state_uses_exact_and_latest_endpoints(self):
         with patch.object(rp, 'json_or_none', side_effect=[None, {'version': '26.1127.0'}]) as lookup:
-            self.assertEqual(rp.npm_state('26.1126.0'), (False, '26.1127.0'))
+            self.assertEqual(rp.npm_state('26.1125.2'), (False, '26.1127.0'))
             self.assertEqual([call.args[0] for call in lookup.call_args_list], [
-                'https://registry.npmjs.org/@nexaduo%2fmarc/26.1126.0',
+                'https://registry.npmjs.org/@nexaduo%2fmarc/26.1125.2',
                 'https://registry.npmjs.org/@nexaduo%2fmarc/latest'])
 
     def test_main_push_existing_tag_reuses_checked_commit(self):
@@ -145,7 +145,7 @@ class ReleasePlan(unittest.TestCase):
                     patch.object(rp, 'json_or_none', return_value={'id': 1}), \
                     patch.object(rp, 'npm_state', return_value=(True, '26.1127.0')), \
                     patch.object(rp, 'git', return_value='') as git, \
-                    patch.object(rp.Path, 'read_text', return_value=json.dumps({'version': '26.11.26'})):
+                    patch.object(rp.Path, 'read_text', return_value=json.dumps({'version': '26.11.25.2'})):
                 rp.main()
             git.assert_any_call('merge-base', '--is-ancestor', B, 'origin/main')
             self.assertIn(f'sha={B}\n', output.read_text())
@@ -164,7 +164,7 @@ class ReleasePlan(unittest.TestCase):
                 return ''
             with patch.dict(rp.os.environ, env), patch.object(rp, 'remote_tag_sha', return_value=B), \
                     patch.object(rp, 'json_or_none', return_value=None), patch.object(rp, 'git', side_effect=git), \
-                    patch.object(rp.Path, 'read_text', return_value=json.dumps({'version': '26.11.26'})):
+                    patch.object(rp.Path, 'read_text', return_value=json.dumps({'version': '26.11.25.2'})):
                 with self.assertRaisesRegex(ValueError, 'not an ancestor'):
                     rp.main()
             self.assertFalse(output.exists())

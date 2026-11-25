@@ -134,14 +134,14 @@ class TagPushRaces(unittest.TestCase):
 
     def run_tag(self):
         return subprocess.run(['bash', '-c', self.script], cwd=self.repo,
-                              env={**os.environ, 'RELEASE_TAG': 'v26.11.26', 'RELEASE_SHA': self.sha},
+                              env={**os.environ, 'RELEASE_TAG': 'v26.11.25.2', 'RELEASE_SHA': self.sha},
                               text=True, capture_output=True)
 
     def test_new_tag_is_annotated_at_exact_commit(self):
         result = self.run_tag()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.git(self.origin, 'cat-file', '-t', 'refs/tags/v26.11.26').strip(), 'tag')
-        self.assertEqual(self.git(self.origin, 'rev-parse', 'v26.11.26^{commit}').strip(), self.sha)
+        self.assertEqual(self.git(self.origin, 'cat-file', '-t', 'refs/tags/v26.11.25.2').strip(), 'tag')
+        self.assertEqual(self.git(self.origin, 'rev-parse', 'v26.11.25.2^{commit}').strip(), self.sha)
 
     def test_suffix_decoy_refs_are_ignored(self):
         # ls-remote patterns also match ref tails, so these decoys really are
@@ -150,28 +150,28 @@ class TagPushRaces(unittest.TestCase):
         self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
         for annotated in (True, False):
             with self.subTest(annotated=annotated):
-                decoy = 'x/refs/tags/v26.11.26'
+                decoy = 'x/refs/tags/v26.11.25.2'
                 args = ('-a', '-m', 'decoy') if annotated else ()
                 self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', *args, decoy, self.sha)
                 rows = self.git(self.repo, 'ls-remote', '--tags', str(self.origin),
-                                'refs/tags/v26.11.26', 'refs/tags/v26.11.26^{}')
+                                'refs/tags/v26.11.25.2', 'refs/tags/v26.11.25.2^{}')
                 self.assertIn('refs/tags/' + decoy, rows)
                 result = self.run_tag()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn('successful no-op', result.stdout)
-                self.assertEqual(self.git(self.origin, 'rev-parse', 'v26.11.26^{commit}').strip(), self.sha)
-                self.git(self.repo, 'tag', '-d', 'v26.11.26')
-                self.git(self.origin, 'tag', '-d', 'v26.11.26', decoy)
+                self.assertEqual(self.git(self.origin, 'rev-parse', 'v26.11.25.2^{commit}').strip(), self.sha)
+                self.git(self.repo, 'tag', '-d', 'v26.11.25.2')
+                self.git(self.origin, 'tag', '-d', 'v26.11.25.2', decoy)
 
     def test_decoy_peeled_ref_cannot_override_exact_tag(self):
         self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
-        self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', 'v26.11.26', self.sha)
+        self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', 'v26.11.25.2', self.sha)
         (self.repo / 'file').write_text('decoy commit')
         self.git(self.repo, 'commit', '-qam', 'decoy')
         other = self.git(self.repo, 'rev-parse', 'HEAD').strip()
         self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/other')
         self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', '-a',
-                 'x/refs/tags/v26.11.26', other, '-m', 'decoy')
+                 'x/refs/tags/v26.11.25.2', other, '-m', 'decoy')
         result = self.run_tag()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('successful no-op', result.stdout)
@@ -184,25 +184,25 @@ class TagPushRaces(unittest.TestCase):
         self.git(self.repo, 'commit', '-qam', 'other')
         other = self.git(self.repo, 'rev-parse', 'HEAD').strip()
         self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/other')
-        self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.26', other, '-m', 'other creator')
-        original = self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.26').strip()
+        self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.25.2', other, '-m', 'other creator')
+        original = self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.25.2').strip()
         result = self.run_tag()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Tag appeared after planning', result.stdout)
-        self.assertEqual(self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.26').strip(), original)
+        self.assertEqual(self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.25.2').strip(), original)
 
     def test_remote_tag_at_exact_commit_is_successful_noop(self):
         for annotated in (True, False):
             with self.subTest(annotated=annotated):
                 self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
                 args = ('-a', '-m', 'already pushed') if annotated else ()
-                self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', *args, 'v26.11.26', self.sha)
-                original = self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.26')
+                self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', *args, 'v26.11.25.2', self.sha)
+                original = self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.25.2')
                 result = self.run_tag()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('successful no-op', result.stdout)
-                self.assertEqual(self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.26'), original)
-                self.git(self.origin, 'tag', '-d', 'v26.11.26')
+                self.assertEqual(self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.25.2'), original)
+                self.git(self.origin, 'tag', '-d', 'v26.11.25.2')
 
     def test_rerun_with_local_and_remote_tag_is_noop(self):
         self.assertEqual(self.run_tag().returncode, 0)

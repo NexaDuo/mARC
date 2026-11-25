@@ -18,17 +18,17 @@ class CatalogPointers(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / 'launcher').mkdir()
-        (self.root / 'launcher/package.json').write_text(json.dumps({'version': '26.1126.0'}))
-        (self.root / 'launcher/release.json').write_text(json.dumps({'tag': 'v26.11.26', 'npm': '26.1126.0', 'sha': None}))
+        (self.root / 'launcher/package.json').write_text(json.dumps({'version': '26.1125.2'}))
+        (self.root / 'launcher/release.json').write_text(json.dumps({'tag': 'v26.11.25.2', 'npm': '26.1125.2', 'sha': None}))
         for harness in (*CATALOGS, 'antigravity'):
             target = self.root / 'harnesses' / harness / 'marc' / ('.claude-plugin/plugin.json' if harness == 'claude-code' else 'plugin.json')
             target.parent.mkdir(parents=True)
-            target.write_text(json.dumps({'version': '26.11.26'}))
+            target.write_text(json.dumps({'version': '26.11.25.2'}))
         for harness, catalog in CATALOGS.items():
             target = self.root / catalog
             target.parent.mkdir(parents=True)
             source = {'source': 'github', 'repo': 'NexaDuo/mARC'} if harness == 'copilot' else {'source': 'git-subdir', 'url': 'NexaDuo/mARC'}
-            source.update(path=f'harnesses/{harness}/marc', ref='v26.11.26')
+            source.update(path=f'harnesses/{harness}/marc', ref='v26.11.25.2')
             target.write_text(json.dumps({'name': 'nexaduo', 'plugins': [{'name': 'marc', 'source': source}]}))
 
     def edit(self, catalog, edit):
@@ -37,7 +37,7 @@ class CatalogPointers(unittest.TestCase):
         target.write_text(json.dumps(data))
 
     def test_positive(self):
-        self.assertEqual(check(self.root), 'v26.11.26')
+        self.assertEqual(check(self.root), 'v26.11.25.2')
 
     def test_wrong_pointer(self):
         for catalog in CATALOGS.values():
@@ -83,10 +83,10 @@ class CatalogPointers(unittest.TestCase):
         # All explicit JS tag fixtures plus leap days, safe-integer boundary,
         # and end-anchor newlines. Compare both acceptance and mapped value.
         cases = ['v27.1.1', 'v27.12.31', 'v27.9.30', 'v27.10.1', 'v26.11.25.99',
-                 'v0.9.0', 'v26.11.24', 'v26.01.1', 'v26.11.025', 'v26.11.26.01',
-                 'v26.11.26.0', 'v27.2.29', 'v27.13.1', 'v26.11.26.1.2',
-                 'v26.11.26\\n', 'v26.11.26\\r\\n', 'v28.2.29',
-                 'v26.11.26.9007199254740991', 'v26.11.26.9007199254740992']
+                 'v0.9.0', 'v26.11.24', 'v26.01.1', 'v26.11.025', 'v26.11.25.2.01',
+                 'v26.11.25.2.0', 'v27.2.29', 'v27.13.1', 'v26.11.25.2.1.2',
+                 'v26.11.25.2\\n', 'v26.11.25.2\\r\\n', 'v28.2.29',
+                 'v26.11.25.2.9007199254740991', 'v26.11.25.2.9007199254740992']
         cases = [s.replace('\\n', '\n').replace('\\r', '\r') for s in cases]
         js = "import {tagToNpm} from './launcher/lib/version.js'; console.log(JSON.stringify(JSON.parse(process.argv[1]).map(t => {try{return tagToNpm(t)}catch{return null}})));"
         result = subprocess.run(['node', '--input-type=module', '-e', js, json.dumps(cases)], cwd=ROOT, capture_output=True, text=True, check=True)

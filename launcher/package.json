@@ -1,6 +1,6 @@
 {
   "name": "@nexaduo/marc",
-  "version": "26.1126.0",
+  "version": "26.1125.2",
   "description": "Install and update mARC through native harness plugin CLIs",
   "type": "module",
   "bin": {"marc": "bin/marc.js"},

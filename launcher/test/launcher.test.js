@@ -11,14 +11,14 @@ import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/pr
 import { parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const release = { tag: 'v26.11.26', sha: 'a'.repeat(40), npm: '26.1126.0' };
+const release = { tag: 'v26.11.25.2', sha: 'a'.repeat(40), npm: '26.1125.2' };
 const fixtures = {
-  claude: JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.26', scope: 'user', enabled: true, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } },
-    { id: 'marc@nexaduo', version: '26.11.26', scope: 'project', enabled: false, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } }]),
-  copilot: JSON.stringify([{ name: 'marc', marketplace: 'nexaduo', version: '26.11.26', enabled: true, source: { source: 'github', repo: 'NexaDuo/mARC', path: 'harnesses/copilot/marc', ref: release.tag } }]),
-  codex: JSON.stringify({ installed: [{ pluginId: 'marc@nexaduo', version: '26.11.26', installed: true,
+  claude: JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.2', scope: 'user', enabled: true, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } },
+    { id: 'marc@nexaduo', version: '26.11.25.2', scope: 'project', enabled: false, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } }]),
+  copilot: JSON.stringify([{ name: 'marc', marketplace: 'nexaduo', version: '26.11.25.2', enabled: true, source: { source: 'github', repo: 'NexaDuo/mARC', path: 'harnesses/copilot/marc', ref: release.tag } }]),
+  codex: JSON.stringify({ installed: [{ pluginId: 'marc@nexaduo', version: '26.11.25.2', installed: true,
     enabled: true, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/codex/marc', ref: release.tag } }] }),
-  agy: JSON.stringify([{ name: 'marc', version: '26.11.26', enabled: true }]),
+  agy: JSON.stringify([{ name: 'marc', version: '26.11.25.2', enabled: true }]),
 };
 const marketFixtures = {
   // Operator captures, 2026-11-25: Claude 2.1.322, Copilot 1.0.89-1,
@@ -57,7 +57,7 @@ for (const [tag, npm] of [['v27.1.1', '27.101.0'], ['v27.12.31', '27.1231.0'], [
   ['v27.10.1', '27.1001.0'], ['v26.11.25.99', '26.1125.99']]) {
   test(`mapping edge ${tag}`, () => { assert.equal(tagToNpm(tag), npm); assert.equal(npmToTag(npm), tag); });
 }
-for (const tag of ['v0.9.0', 'v26.11.24', 'v26.01.1', 'v26.11.025', 'v26.11.26.01', 'v26.11.26.0', 'v27.2.29', 'v27.13.1', 'v26.11.26.1.2']) {
+for (const tag of ['v0.9.0', 'v26.11.24', 'v26.01.1', 'v26.11.025', 'v26.11.25.2.01', 'v26.11.25.2.0', 'v27.2.29', 'v27.13.1', 'v26.11.25.2.1.2']) {
   test(`reject tag ${tag}`, () => assert.throws(() => tagToNpm(tag)));
 }
 for (const npm of ['26.1125.1.2', '26.01125.0', '26.1125.01', '26.1132.0', '26.1124.0']) {
@@ -110,7 +110,7 @@ for (const h of HARNESSES) for (const command of ['install', 'update', 'doctor',
 for (const scope of ['user', 'project', 'local']) for (const command of ['install', 'update', 'uninstall']) {
   test(`Claude scope ${scope} ${command}`, async () => {
     const calls = [], logs = [];
-    const rows = JSON.stringify([{ id: 'marc@nexaduo', scope, version: '26.11.26' }]);
+    const rows = JSON.stringify([{ id: 'marc@nexaduo', scope, version: '26.11.25.2' }]);
     assert.equal(await invoke([command, '--harness', 'claude', '--scope', scope, '--yes'], calls,
       { run: runner(calls, { claude: rows }), log: s => logs.push(s) }), 0);
     assert.deepEqual(calls.at(-1)[1].slice(-2), ['--scope', scope]);
@@ -167,7 +167,7 @@ function agyRunner(calls, { mismatch = false, fail = false, enabled = true, fres
       if (cloneFail) throw Error('clone failed');
       const root = args.at(-1);
       await mkdir(path.join(root, 'harnesses/antigravity/marc'), { recursive: true });
-      await writeFile(path.join(root, 'harnesses/antigravity/marc/plugin.json'), JSON.stringify({ version: wrongManifest ? '26.11.25' : '26.11.26' }));
+      await writeFile(path.join(root, 'harnesses/antigravity/marc/plugin.json'), JSON.stringify({ version: wrongManifest ? '26.11.25' : '26.11.25.2' }));
       if (link) await symlink(os.tmpdir(), path.join(root, 'harnesses/antigravity/marc/escape'), 'junction');
     }
     if (h === 'git' && args[0] === 'rev-parse') return mismatch ? 'b'.repeat(40) : release.sha;
@@ -198,7 +198,7 @@ test('Antigravity missing SHA fails before commands or temp creation', async t =
 for (const h of HARNESSES) {
   test(`doctor ${h} healthy, drift and malformed fixtures`, async () => {
     assert.ok(parsePlugins(h, fixtures[h]).length);
-    for (const [output, code] of [[fixtures[h], 0], [fixtures[h].replaceAll('26.11.26', '26.11.25'), 1], ['garbage', 1]]) {
+    for (const [output, code] of [[fixtures[h], 0], [fixtures[h].replaceAll('26.11.25.2', '26.11.25'), 1], ['garbage', 1]]) {
       assert.equal(await invoke(['doctor', '--harness', h, '--yes'], [], { run: runner([], { [h]: output }) }), code);
     }
   });
@@ -249,7 +249,7 @@ test('PATH stubs record exact argv for all native flows; HOME stays unchanged', 
   await mkdir(bin); await mkdir(home); await mkdir(cwd);
   const logPath = path.join(dir, 'argv.jsonl');
   const impl = path.join(bin, 'stub.cjs');
-  await writeFile(impl, `const fs = require('node:fs');\nconst [h,...a]=process.argv.slice(2);\nfs.appendFileSync(process.env.STUB_LOG,JSON.stringify([h,a])+'\\n');\nif(h==='git'&&a[0]==='clone'){const p=require('node:path').join(a.at(-1),'harnesses/antigravity/marc');fs.mkdirSync(p,{recursive:true});fs.writeFileSync(require('node:path').join(p,'plugin.json'),JSON.stringify({version:'26.11.26'}));}\nif(h==='git'&&a[0]==='rev-parse'){console.log('${release.sha}');process.exit(0);}\nconst f=JSON.parse(process.env.STUB_FIXTURES);\nconsole.log(a[1]==='marketplace'&&a[2]==='list'?JSON.stringify(JSON.parse(process.env.STUB_MARKETS)[h]):a[1]==='list'?f[h]:'');\n`);
+  await writeFile(impl, `const fs = require('node:fs');\nconst [h,...a]=process.argv.slice(2);\nfs.appendFileSync(process.env.STUB_LOG,JSON.stringify([h,a])+'\\n');\nif(h==='git'&&a[0]==='clone'){const p=require('node:path').join(a.at(-1),'harnesses/antigravity/marc');fs.mkdirSync(p,{recursive:true});fs.writeFileSync(require('node:path').join(p,'plugin.json'),JSON.stringify({version:'26.11.25.2'}));}\nif(h==='git'&&a[0]==='rev-parse'){console.log('${release.sha}');process.exit(0);}\nconst f=JSON.parse(process.env.STUB_FIXTURES);\nconsole.log(a[1]==='marketplace'&&a[2]==='list'?JSON.stringify(JSON.parse(process.env.STUB_MARKETS)[h]):a[1]==='list'?f[h]:'');\n`);
   for (const h of [...HARNESSES, 'git']) {
     const win = process.platform === 'win32';
     const file = path.join(bin, h + (win ? '.cmd' : ''));
@@ -263,7 +263,7 @@ for arg do printf '%s"%s"' "$sep" "$arg" >> "$STUB_LOG"; sep=','; done
 printf ']]\\n' >> "$STUB_LOG"
 if [ '${h}' = git ]; then
   case "$1" in
-    clone) for dest do :; done; /bin/mkdir -p "$dest/harnesses/antigravity/marc"; printf '%s' '{"version":"26.11.26"}' > "$dest/harnesses/antigravity/marc/plugin.json" ;;
+    clone) for dest do :; done; /bin/mkdir -p "$dest/harnesses/antigravity/marc"; printf '%s' '{"version":"26.11.25.2"}' > "$dest/harnesses/antigravity/marc/plugin.json" ;;
     rev-parse) printf '%s' '${release.sha}' ;;
   esac
   exit 0
@@ -330,14 +330,14 @@ test('launcher source never requests a shell or removes a marketplace', async ()
 test('observed native JSON list fixtures, text fallback and cached-catalog pointer reads', async t => {
   const dir = await temp(t);
   const observed = {
-    claude: [{ id: 'marc@nexaduo', version: '26.11.26', scope: 'user', enabled: true, readFromFolder: dir }],
-    codex: { installed: [{ pluginId: 'marc@nexaduo', name: 'marc', marketplaceName: 'nexaduo', version: '26.11.26',
+    claude: [{ id: 'marc@nexaduo', version: '26.11.25.2', scope: 'user', enabled: true, readFromFolder: dir }],
+    codex: { installed: [{ pluginId: 'marc@nexaduo', name: 'marc', marketplaceName: 'nexaduo', version: '26.11.25.2',
       installed: true, enabled: true, source: { source: 'local', path: dir } }] },
-    copilot: [{ name: 'marc', marketplace: 'nexaduo', version: '26.11.26', enabled: true, source: 'live', installedFrom: dir }],
-    agy: [{ name: 'marc', version: '26.11.26', enabled: false, source: 'antigravity', path: dir }],
+    copilot: [{ name: 'marc', marketplace: 'nexaduo', version: '26.11.25.2', enabled: true, source: 'live', installedFrom: dir }],
+    agy: [{ name: 'marc', version: '26.11.25.2', enabled: false, source: 'antigravity', path: dir }],
   };
-  for (const h of HARNESSES) assert.equal(parsePlugins(h, JSON.stringify(observed[h]))[0].version, '26.11.26');
-  assert.equal(parsePlugins('copilot', 'Live Plugins (loaded from a local marketplace directory, never copied):\n  • marc@nexaduo (v26.11.26) (enabled)\n      from /tmp/catalog')[0].version, '26.11.26');
+  for (const h of HARNESSES) assert.equal(parsePlugins(h, JSON.stringify(observed[h]))[0].version, '26.11.25.2');
+  assert.equal(parsePlugins('copilot', 'Live Plugins (loaded from a local marketplace directory, never copied):\n  • marc@nexaduo (v26.11.25.2) (enabled)\n      from /tmp/catalog')[0].version, '26.11.25.2');
   for (const [h, location] of [['claude', '.claude-plugin'], ['copilot', '.github/plugin'], ['codex', '.agents/plugins']]) {
     await mkdir(path.join(dir, location), { recursive: true });
     const catalog = path.join(dir, location, 'marketplace.json');
@@ -388,8 +388,8 @@ test('Copilot GitHub catalog uses its native cache without fetching or writing',
 test('doctor Claude scope filters its table and all-harness scope remains Claude-only', async () => {
   const calls = [], logs = [];
   assert.equal(await invoke(['doctor', '--harness', 'claude', '--scope', 'project', '--yes'], calls, { log: s => logs.push(s) }), 0);
-  assert.ok(logs.some(s => s.startsWith('claude\t26.11.26\tproject')));
-  assert.ok(!logs.some(s => s.startsWith('claude\t26.11.26\tuser')));
+  assert.ok(logs.some(s => s.startsWith('claude\t26.11.25.2\tproject')));
+  assert.ok(!logs.some(s => s.startsWith('claude\t26.11.25.2\tuser')));
   const all = [];
   assert.equal(await invoke(['install', '--harness', 'codex', '--harness', 'claude', '--scope', 'local', '--yes'], all), 0);
   assert.deepEqual(all[1][1], ['plugin', 'add', 'marc@nexaduo']);
@@ -402,7 +402,7 @@ test('allowlist rejects embedded and trailing metacharacters, including JS end-a
     assert.throws(() => spawnSpec('C:\\bin\\cli.cmd', [value], { platform: 'win32', env: { SystemRoot: 'C:\\Windows' } }));
     for (const flag of ['--harness', '--scope', '--version']) assert.throws(() => parseArgs(['install', flag, value]));
   }
-  for (const tag of ['v26.11.26\n', 'v26.11.26\r\n']) assert.throws(() => tagToNpm(tag));
+  for (const tag of ['v26.11.25.2\n', 'v26.11.25.2\r\n']) assert.throws(() => tagToNpm(tag));
 });
 
 for (const h of ['claude', 'copilot', 'codex']) {

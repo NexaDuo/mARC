@@ -37,7 +37,7 @@ Checks (all applicable checks must pass for `ok: true`):
                          list --json ...,isLatest`).
 
   4. npm_published    — only in the launcher source repo, for tags >=
-                         v26.11.26: mapped npm version exists, is latest, has
+                         v26.11.25.2: mapped npm version exists, is latest, has
                          provenance (except the exact bootstrap tag), and its
                          tarball SHA matches the locally peeled tag commit.
                          Consumer repos and older tags are not_applicable.
@@ -74,9 +74,9 @@ from board import RepoConfig, _resolve_config  # noqa: E402
 
 SCHEMA_VERSION = 2
 DEFAULT_WORKFLOW = "release.yml"
-NPM_PUBLICATION_FLOOR = (26, 11, 26)
+NPM_PUBLICATION_FLOOR = (26, 11, 25, 2)
 # One manual bootstrap publish; all later releases require provenance.
-BOOTSTRAP_UNATTESTED_TAG = "v26.11.26"
+BOOTSTRAP_UNATTESTED_TAG = "v26.11.25.2"
 
 
 @dataclass
@@ -242,8 +242,8 @@ def fetch_npm_published(expected_tag: str, repo_root: Path) -> CheckResult:
         manifest = {}
     if not isinstance(manifest, dict) or manifest.get("name") != "@nexaduo/marc":
         return CheckResult(True, "not_applicable: repository has no matching launcher package", not_applicable=True)
-    parts = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\.[0-9]+)?", expected_tag)
-    if parts and tuple(map(int, parts.groups())) < NPM_PUBLICATION_FLOOR:
+    parts = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", expected_tag)
+    if parts and tuple(int(g or 0) for g in parts.groups()) < NPM_PUBLICATION_FLOOR:
         return CheckResult(True, "not_applicable: tag predates npm publication floor", not_applicable=True)
     try:
         version = mapped_npm_version(expected_tag)

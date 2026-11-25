@@ -24,7 +24,7 @@ item. Declarative per-repo Claude team setup remains available.
 
 Use one npm package per release, rather than independent semver with runtime
 tag resolution. `vYY.M.D[.N]` maps to `YY.(M*100+D).N`, defaulting N to zero:
-`v26.11.26` becomes `26.1126.0`. Mapping rejects tags below `v26.11.25`, old
+`v26.11.25.2` becomes `26.1125.2`. Mapping rejects tags below `v26.11.25`, old
 `v0.x` tags, leading zeros, and invalid calendar dates. Package versions have
 exactly three components; calendar tags may have a fourth release component.
 The floor ensures all installed claim parsers understand `marc:` markers.
@@ -107,7 +107,7 @@ workflows. This workflow listens only to main; all release surfaces share its pl
 
 - `plan` (contents read) reads the main event commit's manifest, maps tag/npm,
   checks origin, GitHub Releases and npm, and outputs what remains to do.
-  npm is required only from `v26.11.26`. Existing tags never move: both push
+  npm is required only from `v26.11.25.2`. Existing tags never move: both push
   and dispatch reuse the existing tag's commit if it is an ancestor of
   `origin/main`, or fail if it is not. With no tag, the target is the main
   event SHA. A fully released version is a green no-op; missing release/npm
@@ -186,7 +186,7 @@ Dispatch replans and skips surfaces that already exist; a failed-job rerun
 also succeeds because the tag and npm jobs recheck their exact target and
 log a no-op when it already exists.
 
-Only bootstrap tag `v26.11.26` (npm `26.1126.0`) is exempt from attestation,
+Only bootstrap tag `v26.11.25.2` (npm `26.1125.2`) is exempt from attestation,
 through `BOOTSTRAP_UNATTESTED_TAG`; integrity, latest, embedded version and
 peeled-tag SHA checks still apply. Every later version requires provenance.
 The npm org `nexaduo` ownership was verified by the operator. npm provenance
@@ -203,7 +203,7 @@ older missing versions instead of moving `latest` backwards. Do not create
 its tag manually.
 
 `release_verify.py` applies `npm_published` only when the repo has
-`launcher/package.json` named `@nexaduo/marc` and the tag is at least `v26.11.26`.
+`launcher/package.json` named `@nexaduo/marc` and the tag is at least `v26.11.25.2`.
 Consumer repos and earlier mARC tags report `not_applicable` without registry
 I/O and do not count against overall `ok`. Applicable checks require the mapped
 npm version, latest dist-tag, provenance presence (with the exact bootstrap

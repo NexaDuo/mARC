@@ -9,7 +9,6 @@ import json
 import os
 import re
 import subprocess
-from datetime import date
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -17,7 +16,7 @@ from urllib.request import Request, urlopen
 
 from check_catalog_pointers import tag_to_npm
 
-NPM_FLOOR = date(2026, 11, 26)
+NPM_FLOOR = (26, 11, 25, 2)  # first launcher release; (YY, MM, DD, N)
 
 
 def make_plan(version, event, sha, tag_sha, release_exists, npm_exists, *,
@@ -34,10 +33,11 @@ def make_plan(version, event, sha, tag_sha, release_exists, npm_exists, *,
     if tag_sha and not tag_is_ancestor:
         raise ValueError(f'{tag} commit is not an ancestor of origin/main; refusing to reuse a tag')
     target = tag_sha or sha
-    y, m, d = map(int, version.split('.')[:3])
+    parts = [int(p) for p in version.split('.')]
+    release_key = tuple(parts + [0] * (4 - len(parts)))
     return dict(tag=tag, npm=npm, sha=target, need_tag=tag_sha is None,
                 need_release=not release_exists,
-                need_npm=date(2000 + y, m, d) >= NPM_FLOOR
+                need_npm=release_key >= NPM_FLOOR
                 and npm_publish_needed(npm, npm_exists, npm_latest))
 
 

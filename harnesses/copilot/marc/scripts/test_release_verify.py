@@ -43,7 +43,7 @@ from release_verify import (  # noqa: E402
 class WorkflowLookup(unittest.TestCase):
     SHA = 'a' * 40
     LATER = 'b' * 40
-    TAG = 'v26.11.26'
+    TAG = 'v26.11.25.2'
 
     def row(self, event='push', sha=None, branch='main', **values):
         return dict(status='completed', conclusion='success', url='https://x/runs/1',
@@ -74,7 +74,7 @@ class WorkflowLookup(unittest.TestCase):
                 self.assertIn('release.yml', cmd)
 
     def test_later_dispatch_same_version_wins_over_failed_push(self):
-        manifest = {'content': base64.b64encode(json.dumps({'version': '26.11.26'}).encode()).decode()}
+        manifest = {'content': base64.b64encode(json.dumps({'version': '26.11.25.2'}).encode()).decode()}
         failed = self.row(); failed['conclusion'] = 'failure'
         dispatch = self.row('workflow_dispatch', sha=self.LATER, createdAt='2026-11-25T13:00:00Z')
         with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
@@ -117,7 +117,7 @@ class WorkflowLookup(unittest.TestCase):
                     patch.object(rv, '_run', side_effect=[json.dumps([bad]), '[]', '[]']):
                 self.assertEqual(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG), [])
 
-    def manifest(self, version='26.11.26'):
+    def manifest(self, version='26.11.25.2'):
         return json.dumps({'content': base64.b64encode(json.dumps({'version': version}).encode()).decode()})
 
     def test_later_main_push_same_version_wins_over_old_failure(self):
@@ -128,7 +128,7 @@ class WorkflowLookup(unittest.TestCase):
             runs = rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)
             self.assertEqual([r.conclusion for r in runs], ['success', 'failure'])
             self.assertNotIn('--event', run.call_args_list[1].args[0])
-            result = verify_release('26.11.26', True, runs, [ReleaseRow(self.TAG, False, True)])
+            result = verify_release('26.11.25.2', True, runs, [ReleaseRow(self.TAG, False, True)])
             self.assertTrue(result.workflow_run.ok)
 
     def test_unrelated_later_main_push_is_not_credited(self):

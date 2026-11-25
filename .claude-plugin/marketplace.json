@@ -14,7 +14,7 @@
         "source": "git-subdir",
         "url": "NexaDuo/mARC",
         "path": "harnesses/claude-code/marc",
-        "ref": "v26.11.26"
+        "ref": "v26.11.25.2"
       }
     }
   ]
