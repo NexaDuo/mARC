@@ -106,11 +106,11 @@ jobs:
       - name: Launcher tests (offline stubs)
         run: node --test launcher/
 
-      - name: Catalog release-pointer parity
-        run: python3 scripts/check_catalog_pointers.py
+      - name: Version parity (VERSION vs every stamped copy)
+        run: python3 scripts/bump_version.py --check
 
       - name: Catalog and npm verification regressions (offline)
-        run: python3 -m unittest scripts/test_catalog_pointers.py scripts/test_npm_release_guards.py scripts/test_release_plan.py scripts/test_release_workflow.py core/scripts/test_npm_published.py
+        run: python3 -m unittest scripts/test_bump_version.py scripts/test_npm_release_guards.py scripts/test_release_plan.py scripts/test_release_workflow.py core/scripts/test_npm_published.py
 
       - name: Install Claude Code CLI (pinned)
         run: |

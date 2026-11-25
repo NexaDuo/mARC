@@ -25,6 +25,18 @@ class ReleasePlan(unittest.TestCase):
         self.assertEqual(self.plan(), dict(tag='v26.11.25.2', npm='26.1125.2', sha=A,
                                           need_tag=True, need_release=True, need_npm=True))
 
+    def test_version_change_cuts_a_release_and_unchanged_version_is_a_noop(self):
+        # A VERSION bump (new tag) plans a release; the same VERSION with its tag released plans nothing.
+        bumped = self.plan(version='26.11.25.3')
+        self.assertEqual((bumped['tag'], bumped['need_tag'], bumped['need_release']), ('v26.11.25.3', True, True))
+        same = self.plan(version='26.11.25.4', tag_sha=B, release_exists=True, npm_exists=True)
+        self.assertFalse(any(same[k] for k in ('need_tag', 'need_release', 'need_npm')))
+
+    def test_plan_reads_the_version_file_not_a_manifest(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / 'VERSION').write_text('26.12.1\n')
+            self.assertEqual(rp.read_version(Path(d)), '26.12.1')
+
     def test_push_reuses_existing_ancestor_as_green_noop(self):
         plan = self.plan(tag_sha=B, release_exists=True, npm_exists=True)
         self.assertEqual(plan['sha'], B)
@@ -141,16 +153,29 @@ class ReleasePlan(unittest.TestCase):
             output = Path(temp) / 'output'
             env = dict(GITHUB_REF='refs/heads/main', GITHUB_SHA=A, GITHUB_EVENT_NAME='push',
                        GITHUB_REPOSITORY='NexaDuo/mARC', GH_TOKEN='fixture', GITHUB_OUTPUT=str(output))
-            with patch.dict(rp.os.environ, env), patch.object(rp, 'remote_tag_sha', return_value=B), \
+            with patch.dict(rp.os.environ, env), patch.object(rp, 'remote_tag_sha', return_value=B), patch.object(rp, 'check', return_value='v26.11.25.2'), \
                     patch.object(rp, 'json_or_none', return_value={'id': 1}), \
                     patch.object(rp, 'npm_state', return_value=(True, '26.1127.0')), \
                     patch.object(rp, 'git', return_value='') as git, \
-                    patch.object(rp.Path, 'read_text', return_value=json.dumps({'version': '26.11.25.2'})):
+                    patch.object(rp.Path, 'read_text', return_value='26.11.25.2\n'):
                 rp.main()
             git.assert_any_call('merge-base', '--is-ancestor', B, 'origin/main')
             self.assertIn(f'sha={B}\n', output.read_text())
             for key in ('need_tag', 'need_release', 'need_npm'):
                 self.assertIn(f'{key}=false\n', output.read_text())
+
+    def test_drift_fails_the_plan_before_any_network_or_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / 'output'
+            env = dict(GITHUB_REF='refs/heads/main', GITHUB_SHA=A, GITHUB_EVENT_NAME='push',
+                       GITHUB_REPOSITORY='NexaDuo/mARC', GH_TOKEN='fixture', GITHUB_OUTPUT=str(output))
+            drift = ValueError('harnesses/codex/marc/plugin.json: version 1 != VERSION 2')
+            with patch.dict(rp.os.environ, env), patch.object(rp, 'check', side_effect=drift), \
+                    patch.object(rp, 'remote_tag_sha') as tag, patch.object(rp, 'git') as git:
+                with self.assertRaisesRegex(ValueError, 'harnesses/codex/marc/plugin.json'):
+                    rp.main()
+            tag.assert_not_called(); git.assert_not_called()
+            self.assertFalse(output.exists())
 
     def test_target_must_be_main_ancestor_before_outputs(self):
         import subprocess
@@ -162,9 +187,9 @@ class ReleasePlan(unittest.TestCase):
                 if args[0] == 'merge-base':
                     raise subprocess.CalledProcessError(1, ['git', *args])
                 return ''
-            with patch.dict(rp.os.environ, env), patch.object(rp, 'remote_tag_sha', return_value=B), \
+            with patch.dict(rp.os.environ, env), patch.object(rp, 'remote_tag_sha', return_value=B), patch.object(rp, 'check', return_value='v26.11.25.2'), \
                     patch.object(rp, 'json_or_none', return_value=None), patch.object(rp, 'git', side_effect=git), \
-                    patch.object(rp.Path, 'read_text', return_value=json.dumps({'version': '26.11.25.2'})):
+                    patch.object(rp.Path, 'read_text', return_value='26.11.25.2\n'):
                 with self.assertRaisesRegex(ValueError, 'not an ancestor'):
                     rp.main()
             self.assertFalse(output.exists())

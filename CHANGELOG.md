@@ -8,6 +8,15 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Changed
+- Tooling (#441): a repo-root `VERSION` file is the only hand-edited release version.
+  `scripts/bump_version.py <ver>` stamps the four manifests, the three catalog `ref`
+  pointers, `launcher/package.json` and `launcher/release.json`; `--check` (CI and the
+  publish gate) fails naming any divergent file. It replaces
+  `check_catalog_pointers.py`, and the release plan now reads `VERSION`. Launcher and
+  release-guard tests derive the current version from `VERSION`. `launcher/package.json`
+  gains `homepage` and `bugs` (shown on npmjs.com after the next publish).
+
 ### Added
 - Launcher `--force` / `--force-local` for `install` and `update` (#440): re-register a
   mismatched or pinned nexaduo marketplace through a shown, consented plan (remove,

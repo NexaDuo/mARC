@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_catalog_pointers import check, CATALOGS, tag_to_npm
+from bump_version import check, stamp, read_version, CATALOGS, tag_to_npm
 from local_test_marketplace import prepare, ROOT
 
 
@@ -18,6 +18,7 @@ class CatalogPointers(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / 'launcher').mkdir()
+        (self.root / 'VERSION').write_text('26.11.25.2\n')
         (self.root / 'launcher/package.json').write_text(json.dumps({'version': '26.1125.2'}))
         (self.root / 'launcher/release.json').write_text(json.dumps({'tag': 'v26.11.25.2', 'npm': '26.1125.2', 'sha': None}))
         for harness in (*CATALOGS, 'antigravity'):
@@ -52,11 +53,54 @@ class CatalogPointers(unittest.TestCase):
 
     def test_version_drift(self):
         (self.root / 'harnesses/antigravity/marc/plugin.json').write_text('{"version":"26.11.25"}')
-        with self.assertRaises(ValueError): check(self.root)
+        with self.assertRaisesRegex(ValueError, 'harnesses/antigravity/marc/plugin.json'): check(self.root)
+
+    def test_version_file_drift(self):
+        (self.root / 'VERSION').write_text('26.11.25.3\n')
+        with self.assertRaisesRegex(ValueError, 'plugin.json'): check(self.root)
+
+    def test_version_file_must_be_one_clean_line(self):
+        for bad in ('26.11.25.2', '26.11.25.2\n\n', ' 26.11.25.2\n', 'v26.11.25.2\n', '26.11.24\n'):
+            (self.root / 'VERSION').write_text(bad)
+            with self.subTest(bad=bad), self.assertRaises(ValueError): read_version(self.root)
+
+    def test_stamp_round_trip_then_mutation_names_the_file(self):
+        stamp('26.12.1', self.root)
+        self.assertEqual(check(self.root), 'v26.12.1')
+        self.assertEqual(json.loads((self.root / 'launcher/package.json').read_text())['version'], '26.1201.0')
+        self.assertEqual(json.loads((self.root / 'launcher/release.json').read_text()),
+                         {'tag': 'v26.12.1', 'sha': None, 'npm': '26.1201.0'})
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        stamp('26.12.1', self.root)  # idempotent
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+        for name in ['harnesses/codex/marc/plugin.json', CATALOGS['codex'], 'launcher/package.json', 'launcher/release.json', 'VERSION']:
+            path = self.root / name
+            original = path.read_text()
+            path.write_text(original.replace('26.12.1', '26.12.2').replace('26.1201.0', '26.1202.0') if name != 'VERSION' else '26.12.2\n')
+            with self.subTest(name=name), self.assertRaises(ValueError) as caught:
+                check(self.root)
+            if name != 'VERSION':
+                self.assertIn(name, str(caught.exception))
+            path.write_text(original)
+
+    def test_failed_stamp_changes_no_file(self):
+        (self.root / 'harnesses/codex/marc/plugin.json').unlink()
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        with self.assertRaises(OSError): stamp('26.12.1', self.root)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+
+    def test_unstampable_target_changes_no_file(self):
+        (self.root / 'launcher/package.json').write_text('{}')
+        before = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        with self.assertRaisesRegex(ValueError, 'package.json'): stamp('26.12.1', self.root)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+
+    def test_repo_is_in_parity(self):
+        self.assertEqual(check(ROOT), 'v' + read_version(ROOT))
 
     def test_launcher_version_drift(self):
         self.edit('launcher/package.json', lambda d: d.update(version='26.1125.0'))
-        with self.assertRaisesRegex(ValueError, 'package.json version'): check(self.root)
+        with self.assertRaisesRegex(ValueError, 'launcher/package.json: version'): check(self.root)
 
     def test_launcher_identity_drift(self):
         for field, value in [('tag', 'v26.11.25'), ('npm', '26.1125.0'), ('sha', 'a' * 40)]:
