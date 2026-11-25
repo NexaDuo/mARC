@@ -14,10 +14,6 @@ date whose `YY.M.D` is already taken.
 
 - eng-director field lessons (#415): proxy-evidence acceptance, model pinned and verified on resume, lean-session connector pruning, idle-reminder suppression, team-capacity recommendation.
 
-### CI
-
-- eng-director skill and references are covered by the rule-origin governance gate.
-
 ## [26.11.23] - 2026-11-23
 
 ### Added
