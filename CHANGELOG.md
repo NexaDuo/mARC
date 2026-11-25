@@ -10,8 +10,14 @@ date whose `YY.M.D` is already taken.
 
 ## [26.11.24] - 2026-11-24
 
+### Fixed
+
+- `scripts/compile_prompts.py` now parses arguments (#417): `--help` prints usage without compiling, unknown arguments exit 2, and `--check` compiles into a scratch copy and exits 1 listing out-of-sync files without writing. CI's compiled-prompts step uses it.
+
 ### Changed
 
+- Read-only specialists (`@sec`, `@rev`, `@research`): read-only covers side effects too. Learn an unfamiliar command's write behavior from docs or source before running it (even `--help`); on an accidental mutation, restore, verify, and disclose (#232).
+- Discoveries triage (#408): "ride the next fix round" now applies only if a round exists, otherwise new issue or drop with a one-line reason.
 - eng-director field lessons (#415): proxy-evidence acceptance, model pinned and verified on resume, lean-session connector pruning, idle-reminder suppression, team-capacity recommendation.
 
 ## [26.11.23] - 2026-11-23

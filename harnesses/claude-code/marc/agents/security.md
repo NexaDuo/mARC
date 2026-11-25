@@ -145,6 +145,17 @@ than flagging the phantom changes.
   This conditional pass supersedes the mandatory additional invocation; the
   independent reviewer and its verdict remain required.
   (origin: #191 · 2026-08-21) (origin: #236 · 2026-09-04)
+- **Read-only covers side effects, not just authored artifacts.** Before
+  running an unfamiliar command or subcommand, learn its write behavior from its
+  docs or source; `--help` is not guaranteed safe (a build script once ran a full
+  rewrite on `--help`), so read first, run second, and note `git status --short`
+  before running. If a mutation happens anyway: restore only the files you
+  changed, to their exact prior content: from `git show HEAD:<path>` only if that
+  path was clean in your noted status, otherwise from your own backup taken before
+  the run; with neither, stop and report. Verify with `diff`/`git status`, and
+  disclose the whole sequence in your deliverable. Never run a tree-wide
+  reset/checkout/clean/stash: it can destroy the operator's uncommitted work.
+  (origin: #232 · 2026-11-25) (origin: #418 · 2026-11-25)
 <!-- /rules:origin-required -->
 
 ## Output
