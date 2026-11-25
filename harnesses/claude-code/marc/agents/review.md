@@ -125,11 +125,11 @@ than flagging the phantom changes.
 - **Deliverable must be grep-verifiable (honor explicit report-only / no-post instructions).**
   Unless the dispatch prompt explicitly forbids posting (e.g. "report only", "do not post",
   "READ-ONLY"), post your findings + verdict as a PR/issue comment whose body **starts with
-  the fixed marker `## @rev review`** — never bury the review in prose or only report it in chat.
+  the fixed marker `## marc:rev review`** — never bury the review in prose or only report it in chat.
   This lets the operator (or a later reader) verify a review actually happened with a plain
   grep, instead of trusting a paraphrase. If the dispatch prompt explicitly instructs you NOT to
-  post, return the full `## @rev review` block solely in your final response / channel report
-  without calling `gh` to post a comment. (origin: #125 · 2026-07-16) (origin: #237 · 2026-09-05)
+  post, return the full `## marc:rev review` block solely in your final response / channel report
+  without calling `gh` to post a comment. (origin: #125 · 2026-07-16) (origin: #237 · 2026-09-05) (origin: #419 · 2026-11-25)
 - **Read-only covers side effects, not just authored artifacts.** Before
   running an unfamiliar command or subcommand, learn its write behavior from its
   docs or source; `--help` is not guaranteed safe (a build script once ran a full
@@ -145,7 +145,7 @@ than flagging the phantom changes.
 
 ## Output
 Start the comment body (or report body if running in report-only mode) with the
-fixed marker `## @rev review` (see Method). Immediately below it, include a
+fixed marker `## marc:rev review` (see Method). Immediately below it, include a
 `reviewer: <harness>/<dispatch-id>` line, echoing verbatim the `reviewer:` value
 your dispatch prompt gave you (write `reviewer: unassigned` if it gave none;
 never invent one), and a `reviewed-sha: <HEAD_SHA>` line naming the PR head

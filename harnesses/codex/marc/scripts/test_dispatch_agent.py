@@ -1644,7 +1644,7 @@ def test_arch_role_388() -> None:
     if agent is None:
         return
     text = agent.read_text(encoding="utf-8")
-    check("## @arch decision" in text, "architect persona carries the '## @arch decision' marker")
+    check("## marc:arch decision" in text, "architect persona carries the '## marc:arch decision' marker")
     tools = next((l for l in text.splitlines() if l.startswith("tools:")), None)
     check(tools is not None,
           "architect persona declares a 'tools:' line (absent = inherits all tools, write access)")

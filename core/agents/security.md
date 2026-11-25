@@ -122,11 +122,11 @@ than flagging the phantom changes.
 - **Deliverable must be grep-verifiable (honor explicit report-only / no-post instructions).**
   Unless the dispatch prompt explicitly forbids posting (e.g. "report only", "do not post",
   "READ-ONLY"), post your findings + verdict as a PR/issue comment whose body **starts with
-  the fixed marker `## @sec review`** — never bury the review in prose or only report it in chat.
+  the fixed marker `## marc:sec review`** — never bury the review in prose or only report it in chat.
   This lets the operator (or a later reader) verify a review actually happened with a plain
   grep, instead of trusting a paraphrase. If the dispatch prompt explicitly instructs you NOT to
-  post, return the full `## @sec review` block solely in your final response / channel report
-  without calling `gh` to post a comment. (origin: #105 · 2026-07-16) (origin: #237 · 2026-09-05)
+  post, return the full `## marc:sec review` block solely in your final response / channel report
+  without calling `gh` to post a comment. (origin: #105 · 2026-07-16) (origin: #237 · 2026-09-05) (origin: #419 · 2026-11-25)
 - **Use `/security-review` only for a specific unresolved question.** The
   manual audit against the anchored PR diff remains required. An additional
   pass is optional: state the question it will answer and check that the skill
@@ -160,7 +160,7 @@ than flagging the phantom changes.
 
 ## Output
 Start the comment body (or report body if running in report-only mode) with the
-fixed marker `## @sec review` (see Non-negotiables). Immediately below it,
+fixed marker `## marc:sec review` (see Non-negotiables). Immediately below it,
 include a `reviewer: <harness>/<dispatch-id>` line, echoing verbatim the
 `reviewer:` value your dispatch prompt gave you (write `reviewer: unassigned` if
 it gave none; never invent one), and a `reviewed-sha: <HEAD_SHA>` line naming

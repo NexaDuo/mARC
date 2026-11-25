@@ -14,6 +14,8 @@ synthetic comments reuse the recorded shape; logins are placeholders.
 from __future__ import annotations
 
 import copy
+import io
+from contextlib import redirect_stderr
 import json
 import os
 import sys
@@ -225,7 +227,7 @@ class Flows(unittest.TestCase):
         self.assertEqual(len(posted), 1)
         self.assertIn("--repo", posted[0])
         self.assertTrue(posted[0][posted[0].index("--body") + 1].startswith(
-            "## @techlead claim\noperator: claude-code/sess-2\nissue: #226\nclaimed-at: 2026-10-24T12:00:00Z"))
+            "## marc:techlead claim\noperator: claude-code/sess-2\nissue: #226\nclaimed-at: 2026-10-24T12:00:00Z"))
 
     def test_claim_race_lost_withdraws(self):
         racer = view_comment(claim("antigravity/sess-7"), idx=99)
@@ -273,11 +275,12 @@ class CliExitCodes(unittest.TestCase):
 
         saved_runner, saved_argv = board._default_runner, sys.argv
         out = io.StringIO()
+        self.stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as root:
             board._default_runner = runner
             sys.argv = ["board.py"] + argv + ["--repo-root", root, "--json"]
             try:
-                with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                with redirect_stdout(out), redirect_stderr(self.stderr):
                     rc = board.main()
             finally:
                 board._default_runner, sys.argv = saved_runner, saved_argv
@@ -304,6 +307,18 @@ class CliExitCodes(unittest.TestCase):
         for label, comments, op, want in cases:
             rc, out = self.status(comments, op)
             self.assertEqual(rc, want, f"{label}: {out}")
+
+    def test_legacy_warning_preserves_json_and_exit_code(self):
+        for op in ("codex/sess-9", "claude-code/ef7c6e1b"):
+            rc, out = self.status(GH_VIEW_226["comments"], op)
+            legacy = json.loads(out)
+            warning = self.stderr.getvalue()
+            newer = copy.deepcopy(GH_VIEW_226["comments"])
+            newer[0]["body"] = newer[0]["body"].replace("## @techlead claim", bc.CLAIM_MARKER)
+            new_rc, new_out = self.status(newer, op)
+            self.assertEqual((rc, legacy), (new_rc, json.loads(new_out)))
+            self.assertEqual(bool(warning), op == "codex/sess-9")
+            self.assertEqual(self.stderr.getvalue(), "")
 
     def test_claim_status_error_is_2(self):
         rc, _ = self.run_cli(["claim-status", "--issue", "226"], RuntimeError("gh: HTTP 502"))
@@ -435,13 +450,13 @@ class Worktrees(unittest.TestCase):
 
 
 class MentionFreeMarkers(unittest.TestCase):
-    """#419 step 1: dual-accept `## marc:techlead claim|withdraw`; emission stays legacy."""
+    """#419: emit mention-free claims and withdrawals; keep legacy acceptance."""
     NC = "## marc:techlead claim"
     NW = "## marc:techlead withdraw"
 
-    def test_emission_is_still_legacy(self):
-        self.assertEqual(bc.CLAIM_MARKER, "## @techlead claim")
-        self.assertEqual(bc.WITHDRAW_MARKER, "## @techlead withdraw")
+    def test_emission_is_mention_free(self):
+        self.assertEqual(bc.CLAIM_MARKER, self.NC)
+        self.assertEqual(bc.WITHDRAW_MARKER, self.NW)
 
     def test_new_claim_counted(self):
         st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=self.NC))), 226)
@@ -449,11 +464,11 @@ class MentionFreeMarkers(unittest.TestCase):
         self.assertEqual(st.owner, "claude-code/abc")
 
     def test_new_withdraw_retires_legacy_claim_and_vice_versa(self):
-        p = view(view_comment(claim("claude-code/abc"), idx=0),
+        p = view(view_comment(claim("claude-code/abc", marker="## @techlead claim"), idx=0),
                  view_comment(claim("claude-code/ABC", marker=self.NW), idx=1))
         self.assertFalse(bc.evaluate(p, 226).claimed)
         p = view(view_comment(claim("claude-code/abc", marker=self.NC), idx=0),
-                 view_comment(claim("claude-code/abc", marker=bc.WITHDRAW_MARKER), idx=1))
+                 view_comment(claim("claude-code/abc", marker="## @techlead withdraw"), idx=1))
         self.assertFalse(bc.evaluate(p, 226).claimed)
 
     def test_untrusted_new_claim_is_suspected(self):
@@ -474,7 +489,7 @@ class MentionFreeMarkers(unittest.TestCase):
             self.assertFalse(st.claimed, m)
 
     def test_cross_form_tie_break(self):
-        p = view(view_comment(claim("claude-code/zzz"), idx=0),
+        p = view(view_comment(claim("claude-code/zzz", marker="## @techlead claim"), idx=0),
                  view_comment(claim("claude-code/aaa", marker=self.NC), idx=1))
         self.assertEqual(bc.evaluate(p, 226).owner, "claude-code/aaa")
 
@@ -546,6 +561,54 @@ class MentionFreeMarkers(unittest.TestCase):
                 st = bc.evaluate(view(view_comment(body + "\noperator: claude-code/abc\nissue: #226\n")), 226)
                 self.assertFalse(st.claimed)
                 self.assertEqual(len(st.suspected_forgeries), 1)
+
+
+class LegacyClaimWarning(unittest.TestCase):
+    def evaluate(self, comments, operator="codex/sess-9"):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            status = bc.evaluate(view(*comments), 226, operator)
+        return status, err.getvalue()
+
+    def test_live_peer_warns_once_even_with_multiple_legacy_claims(self):
+        comments = [view_comment(claim(op, marker="## @techlead claim"), idx=i)
+                    for i, op in enumerate(("claude-code/abc", "antigravity/xyz"))]
+        status, warning = self.evaluate(comments)
+        self.assertEqual(status.decision, "claimed-by-other")
+        self.assertEqual(warning.splitlines(), [
+            "warning: another operator appears to run a pre-26.11.25 mARC; "
+            "update all harnesses on this clone together"])
+
+    def test_no_warning_for_new_own_untrusted_malformed_or_withdrawn_claim(self):
+        legacy = claim("claude-code/abc", marker="## @techlead claim")
+        withdrawn = [view_comment(legacy, idx=0),
+                     view_comment(claim("claude-code/ABC", marker=bc.WITHDRAW_MARKER), idx=1)]
+        cases = [([view_comment(claim("claude-code/abc"))], "codex/sess-9"),
+                 ([view_comment(legacy)], "CLAUDE-CODE/ABC"),
+                 ([view_comment(legacy, assoc="NONE")], "codex/sess-9"),
+                 ([view_comment(legacy.replace("#226", "#999"))], "codex/sess-9"),
+                 ([view_comment(legacy.replace("claude-code/abc", "0/0"))], "codex/sess-9"),
+                 ([view_comment(legacy.replace("## @techlead", "## @Techlead"))], "codex/sess-9"),
+                 (withdrawn, "codex/sess-9"), ([view_comment(legacy)], None)]
+        for comments, op in cases:
+            with self.subTest(comments=comments, op=op):
+                self.assertEqual(self.evaluate(comments, op)[1], "")
+
+    def test_deduplicated_legacy_claim_still_warns(self):
+        comments = [view_comment(claim("claude-code/abc"), idx=0),
+                    view_comment(claim("claude-code/abc", marker="## @techlead claim"), idx=1)]
+        self.assertIn("pre-26.11.25", self.evaluate(comments)[1])
+
+    def test_warning_does_not_change_tie_break(self):
+        comments = [view_comment(claim("codex/sess-9"), idx=0),
+                    view_comment(claim("claude-code/abc", marker="## @techlead claim"), idx=1)]
+        status, warning = self.evaluate(comments)
+        self.assertEqual(status.decision, "withdraw")
+        self.assertTrue(warning)
+        comments[1]["body"] = comments[1]["body"].replace("## @techlead claim", bc.CLAIM_MARKER)
+        newer, warning = self.evaluate(comments)
+        self.assertEqual(status.to_dict(), newer.to_dict())
+        self.assertEqual(warning, "")
 
 
 if __name__ == "__main__":

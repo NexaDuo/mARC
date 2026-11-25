@@ -159,8 +159,8 @@ def classify(body: str, kind: str) -> dict:
     out: dict = {"reviewer": None, "reviewed_sha": None, "header_error": None,
                  "verdict": MALFORMED, "problem": ""}
     if lines[0] not in headers_for(kind):
-        out["header_error"] = (f"line 1 is not exactly `## @{kind} review` "
-                               f"(or `## marc:{kind} review`): {_clip(lines[0])}")
+        out["header_error"] = (f"line 1 is not exactly `## marc:{kind} review` "
+                               f"(or `## @{kind} review`): {_clip(lines[0])}")
     m = _REVIEWER_RE.fullmatch(lines[1])
     if m:
         out["reviewer"] = m.group(1)
@@ -238,7 +238,7 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
             blockers.append(f"trusted @{k} marker cannot be counted ({why}); fail closed until the same "
                             f"reviewer re-posts a corrected comment (never edit it as the operator): {sus['url']}")
         if v is None:
-            blockers.append(f"no trusted `## @{k} review` (or `## marc:{k} review`) at HEAD {head[:12]} (re-review at HEAD)")
+            blockers.append(f"no trusted `## marc:{k} review` (or `## @{k} review`) at HEAD {head[:12]} (re-review at HEAD)")
         elif v["verdict"] not in OK_RESULTS:
             why = v["problem"] if v["verdict"] == MALFORMED else "reviewer BLOCK"
             blockers.append(f"@{k} counted result is {v['verdict']} ({why}); "

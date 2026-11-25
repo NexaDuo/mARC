@@ -8,6 +8,14 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.25.1] - 2026-11-25
+
+### Changed
+
+- Mention-free markers, step 2 of #419: emitters and agent templates now write `marc:<role>` headers for reviews, claims, withdrawals, decisions and research briefs. Parsers still accept legacy `@` markers.
+- **Update every harness on a clone together.** An older install cannot see a `marc:` claim and may double-claim.
+- `board_claim.py` prints a one-line warning when it sees a live, trusted, well-formed legacy claim from a different operator: that operator appears to run a pre-26.11.25 mARC. The warning does not change the decision or exit code.
+
 ## [26.11.25] - 2026-11-25
 
 ### Changed

@@ -14,11 +14,12 @@ item), `2` error (stop, don't guess), `3` **escalate to the user**: a suspected
 forged marker or a dead worktree, with the remedy printed. Add `--json` for
 the full resolution (live/retired claims, suspected forgeries, reasons).
 <!-- rules:origin-required -->
-- **Claim with a `## @techlead claim` comment marker, never the assignee field.**
+- **Claim with a `## marc:techlead claim` comment marker, never the assignee field.**
   The marker is the exact first line of the comment (nothing else on it, no
   leading blank line) and carries `operator:`, `issue: #<N>` and `claimed-at:`;
-  an issue with no valid marker is not claimed, whoever is assigned.
-  (origin: #213 · 2026-08-25)
+  legacy `## @techlead claim` is still accepted for now, but new comments use
+  `marc:`. An issue with no valid marker is not claimed, whoever is assigned.
+  (origin: #213 · 2026-08-25) (origin: #419 · 2026-11-25)
 - **A marker counts only from an `OWNER`/`MEMBER`/`COLLABORATOR` author**
   (public repo: anyone can comment). The script reads `authorAssociation` from
   `gh issue view --json comments` and `author_association` from REST, and fails
@@ -33,10 +34,11 @@ the full resolution (live/retired claims, suspected forgeries, reasons).
   trusted, well-formed claim. A forged or malformed competitor never makes you
   stand down: surface it, leave the item pending. Never "both drop."
   (origin: #205 · 2026-08-25) (origin: #213 · 2026-08-25)
-- **A `## @techlead withdraw` retires a claim only if trusted, posted after it,
-  with the same `operator:`.** A withdraw failing that is noise, or a suspected
-  forgery if it names a real claim. Resolve by the marker pair, never by a
-  comment's presence or deletion. (origin: #213 · 2026-08-25) (origin: #216 · 2026-10-03)
+- **A `## marc:techlead withdraw` retires a claim only if trusted, posted after it,
+  with the same `operator:`.** Legacy `## @techlead withdraw` is still accepted
+  for now, including across claim grammars. A withdraw failing that is noise, or
+  a suspected forgery if it names a real claim. Resolve by the marker pair, never by a
+  comment's presence or deletion. (origin: #213 · 2026-08-25) (origin: #216 · 2026-10-03) (origin: #419 · 2026-11-25)
 - **Check `git worktree list` before every mutating dispatch.** A branch
   checked out elsewhere belongs to another operator: don't re-cut it or force a
   second checkout. (origin: #214 · 2026-08-25)
@@ -52,4 +54,8 @@ the full resolution (live/retired claims, suspected forgeries, reasons).
   takes its own worktree, never a shared branch or tree, and an in-repo
   worktree dir goes in the committed `.gitignore`, not `.git/info/exclude`.
   (origin: #206 · 2026-08-25) (origin: #214 · 2026-08-25)
+- **Update every harness on a clone together.** An older install cannot see a
+  `marc:` claim and may double-claim. A live, trusted legacy claim from another
+  operator prints a warning without changing the decision or exit code.
+  (origin: #419 · 2026-11-25)
 <!-- /rules:origin-required -->

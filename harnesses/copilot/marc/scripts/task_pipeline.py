@@ -745,7 +745,7 @@ class Task:
         return diff
 
     def review_prompt(self, kind: str, sha: str) -> str:
-        marker = f"## @{kind} review"
+        marker = f"## marc:{kind} review"
         return (
             f"REPORT-ONLY, READ-ONLY review. Do not post comments, do not modify files, "
             f"do not run gh. You have no shell; the caller posts your report on the PR.\n\n"
@@ -851,7 +851,7 @@ class Task:
             # lines that lead with the label are defused so they cannot make it two.
             report = "\n".join(("(report) " + ln) if GATE_LABEL_RE.match(ln) else ln
                                for ln in report.splitlines())
-            body = (f"## @{v.kind} review\nreviewer: task-pipeline/{who}-{v.kind}-{full[:12]}\n"
+            body = (f"## marc:{v.kind} review\nreviewer: task-pipeline/{who}-{v.kind}-{full[:12]}\n"
                     f"reviewed-sha: {full}\nverdict: {v.verdict}\n\n"
                     f"Counts: high={v.high} medium={v.medium} low={v.low}; parsed by the task "
                     f"pipeline (#361) from the report's last line.\n\n---\n\n{report}")

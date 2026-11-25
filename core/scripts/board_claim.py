@@ -37,18 +37,18 @@ import os
 import re
 import html
 import shlex
+import sys
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-# Emission stays on the legacy form until a later #419 step: installed older
-# plugin versions only parse `@`, and would miss a new-form claim. Parsing
-# accepts both (case-sensitive, like the legacy header).
-CLAIM_MARKER = "## @techlead claim"
-WITHDRAW_MARKER = "## @techlead withdraw"
-CLAIM_MARKERS = (CLAIM_MARKER, "## marc:techlead claim")
-WITHDRAW_MARKERS = (WITHDRAW_MARKER, "## marc:techlead withdraw")
+# Emit mention-free headers; keep accepting legacy comments (#419).
+# Update every harness on a clone together: older parsers miss new claims.
+CLAIM_MARKER = "## marc:techlead claim"
+WITHDRAW_MARKER = "## marc:techlead withdraw"
+CLAIM_MARKERS = (CLAIM_MARKER, "## @techlead claim")
+WITHDRAW_MARKERS = (WITHDRAW_MARKER, "## @techlead withdraw")
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # <harness>/<session-id>: harness starts with a letter; the session id is at
 # least 3 chars. Rejects sort-gaming values such as `0/0`, `/x`, `a/`.
@@ -85,6 +85,7 @@ class Marker:
     well_formed: bool
     reason: str = ""
     near_miss: bool = False
+    legacy: bool = False
 
 
 @dataclass
@@ -188,6 +189,7 @@ def parse_marker(comment: Comment, issue_number: int) -> Optional[Marker]:
         claimed_at=fields.get("claimed-at", ""), login=comment.login,
         association=comment.association, url=comment.url, trusted=trusted,
         well_formed=well_formed, reason="; ".join(reasons),
+        legacy=first == "## @techlead claim" or first == "## @techlead withdraw",
     )
 
 
@@ -198,7 +200,7 @@ def _brief(m: Marker) -> dict:
 
 
 def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> ClaimStatus:
-    """Pure decision function over one issue's comments."""
+    """Decide over one issue's comments; warn on live legacy claims from peers."""
     markers = [m for m in (parse_marker(c, issue_number) for c in normalize_comments(payload)) if m]
     near = [m for m in markers if m.near_miss and m.trusted]
     markers = [m for m in markers if not m.near_miss]
@@ -242,6 +244,12 @@ def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> Clai
             seen.add(key)
             live.append(c)
 
+    if operator is not None and any(c.legacy and c not in retired
+                                    and c.operator.casefold() != operator.casefold()
+                                    for c in valid_claims):
+        print("warning: another operator appears to run a pre-26.11.25 mARC; "
+              "update all harnesses on this clone together", file=sys.stderr)
+
     winner = min(live, key=lambda m: m.operator.casefold()) if live else None
     status = ClaimStatus(
         issue=issue_number,
@@ -273,7 +281,7 @@ def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> Clai
     elif mine:
         status.decision = "withdraw"
         status.advice = (f"lost the tie-break to trusted claim {winner.operator!r}: post "
-                         "`## @techlead withdraw` and pick another item")
+                         "`## marc:techlead withdraw` and pick another item")
     elif winner is not None:
         status.decision = "claimed-by-other"
         status.advice = (f"claimed by {winner.operator!r}; pick another item. If it never "

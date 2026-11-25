@@ -54,11 +54,12 @@ dispatch)` — read it there, not here; a second full copy in this file is what 
 drift out of sync with the source of truth (the defect #213/#214 exist to fix). What a
 reader of this file alone needs, restated:
 <!-- rules:origin-required -->
-- **The claim lives in a `## @techlead claim` issue comment, not the assignee field or
+- **The claim lives in a `## marc:techlead claim` issue comment, not the assignee field or
   Status.** An issue with no such comment is not claimed, regardless of who is assigned
   to it — the assignee is a human-visible label only and carries no operator identity,
   precisely because a shared `gh` token makes every operator on a machine authenticate
-  as the same login. (origin: #213 · 2026-08-25)
+  as the same login. Legacy `@` claims remain accepted for now; new comments use
+  `marc:`. (origin: #213 · 2026-08-25) (origin: #419 · 2026-11-25)
 - **`git worktree list --porcelain` is free, cross-harness ground truth** — one `.git`
   registers every operator's checkout. Read it before dispatching mutating work; a
   branch already checked out elsewhere means another operator owns it, don't re-cut it.
