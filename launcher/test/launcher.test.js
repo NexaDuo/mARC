@@ -37,6 +37,19 @@ function runner(calls, overrides = {}) {
       args[1] === 'list' ? overrides[h] ?? fixtures[h] : '';
   };
 }
+// Nothing is installed until the first plugin install/add for a harness; after
+// that, `after[h]` (default: the matching fixture) is listed.
+function freshRunner(calls, after = {}) {
+  const done = new Set(), base = runner(calls, after);
+  return async (h, args, options) => {
+    if (args[1] === 'list' && !done.has(h)) {
+      calls.push([h, args, options]);
+      return h === 'codex' ? '{"installed":[]}' : '[]';
+    }
+    if (['install', 'add'].includes(args[1]) && args[2] === 'marc@nexaduo') done.add(h);
+    return base(h, args, options);
+  };
+}
 function invoke(args, calls, extra = {}) {
   return main(args, { release, run: runner(calls), log: silent, isTTY: false, ...extra });
 }
@@ -66,19 +79,19 @@ for (const npm of ['26.1125.1.2', '26.01125.0', '26.1125.01', '26.1132.0', '26.1
 
 const golden = {
   claude: {
-    install: [['plugin', 'marketplace', 'list', '--json'], ['plugin', 'install', 'marc@nexaduo', '--scope', 'user']],
+    install: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']],
     update: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'update', 'nexaduo'],
       ['plugin', 'update', 'marc@nexaduo', '--scope', 'user'], ['plugin', 'update', 'marc@nexaduo', '--scope', 'project']],
     doctor: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']],
     uninstall: [['plugin', 'uninstall', 'marc@nexaduo', '--scope', 'user']],
   },
   copilot: {
-    install: [['plugin', 'marketplace', 'list', '--json'], ['plugin', 'install', 'marc@nexaduo']],
+    install: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']],
     update: [['plugin', 'marketplace', 'update', 'nexaduo'], ['plugin', 'update', 'marc']],
     doctor: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']], uninstall: [['plugin', 'uninstall', 'marc@nexaduo']],
   },
   codex: {
-    install: [['plugin', 'marketplace', 'list', '--json'], ['plugin', 'add', 'marc@nexaduo']],
+    install: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']],
     update: [['plugin', 'marketplace', 'upgrade', 'nexaduo'], ['plugin', 'add', 'marc@nexaduo']],
     doctor: [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']],
     uninstall: [['plugin', 'remove', 'marc@nexaduo']],
@@ -107,7 +120,7 @@ for (const h of HARNESSES) for (const command of ['install', 'update', 'doctor',
     assert.ok(calls.every(([, a]) => !(a.includes('marketplace') && a.includes('remove'))));
   });
 }
-for (const scope of ['user', 'project', 'local']) for (const command of ['install', 'update', 'uninstall']) {
+for (const scope of ['user', 'project', 'local']) for (const command of ['update', 'uninstall']) {
   test(`Claude scope ${scope} ${command}`, async () => {
     const calls = [], logs = [];
     const rows = JSON.stringify([{ id: 'marc@nexaduo', scope, version: '26.11.25.2' }]);
@@ -123,7 +136,8 @@ for (const h of HARNESSES) for (const command of ['install', 'update', 'doctor',
     if (command !== 'doctor') await assert.rejects(invoke([command, '--harness', h], calls), /--yes/);
     assert.equal(await invoke([command, '--harness', h, '--yes', '--dry-run'], calls), 0);
     assert.equal(await invoke([command, '--harness', h, '--dry-run'], calls), 0);
-    assert.deepEqual(calls.map(c => c[1]), h === 'claude' && command === 'update' ? [['plugin', 'list', '--json'], ['plugin', 'list', '--json']] : []);
+    assert.deepEqual(calls.map(c => c[1]), h !== 'agy' && ['install', 'update'].includes(command) && (h === 'claude' || command === 'install') ?
+      [['plugin', 'list', '--json'], ['plugin', 'list', '--json']] : []);
   });
 }
 for (const flag of ['--harness', '--scope', '--version']) for (const bad of ['&', '|', '%', '^', '"', '!', '\n', ' ', '-evil']) {
@@ -156,7 +170,8 @@ test('matching embedded version, repeated harnesses, discovery and invalid flags
 test('interactive refusal has no child process', async () => {
   const calls = [];
   assert.equal(await invoke(['install', '--harness', 'claude'], calls, { isTTY: true, confirm: async () => false }), 1);
-  assert.deepEqual(calls, []);
+  // Only the read-only installed-list pre-read runs before consent.
+  assert.deepEqual(calls.map(c => c[1]), [['plugin', 'list', '--json']]);
 });
 
 function agyRunner(calls, { mismatch = false, fail = false, enabled = true, fresh = false, tree = '', link = false, cloneFail = false, checkoutFail = false, wrongManifest = false } = {}) {
@@ -390,10 +405,13 @@ test('doctor Claude scope filters its table and all-harness scope remains Claude
   assert.equal(await invoke(['doctor', '--harness', 'claude', '--scope', 'project', '--yes'], calls, { log: s => logs.push(s) }), 0);
   assert.ok(logs.some(s => s.startsWith('claude\t26.11.25.2\tproject')));
   assert.ok(!logs.some(s => s.startsWith('claude\t26.11.25.2\tuser')));
-  const all = [];
-  assert.equal(await invoke(['install', '--harness', 'codex', '--harness', 'claude', '--scope', 'local', '--yes'], all), 0);
-  assert.deepEqual(all[1][1], ['plugin', 'add', 'marc@nexaduo']);
-  assert.deepEqual(all.at(-1)[1], ['plugin', 'install', 'marc@nexaduo', '--scope', 'local']);
+  const all = [], cwd = path.resolve('/work/proj');
+  const local = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.2', scope: 'local', projectPath: cwd }]);
+  assert.equal(await invoke(['install', '--harness', 'codex', '--harness', 'claude', '--scope', 'local', '--yes'], all,
+    { cwd, run: freshRunner(all, { claude: local }) }), 0);
+  const argv = all.map(c => c[1]);
+  assert.ok(argv.some(a => a.join(' ') === 'plugin add marc@nexaduo'));
+  assert.ok(argv.some(a => a.join(' ') === 'plugin install marc@nexaduo --scope local'));
 });
 
 test('allowlist rejects embedded and trailing metacharacters, including JS end-anchor newline edge', () => {
@@ -426,22 +444,25 @@ for (const h of ['claude', 'copilot', 'codex']) {
       const calls = [], logs = [];
       const run = async (name, args) => { calls.push(args); return JSON.stringify([market]); };
       assert.equal(await invoke(['install', '--harness', h, '--yes'], [], { run, log: s => logs.push(s) }), 1);
-      assert.deepEqual(calls, [['plugin', 'marketplace', 'list', '--json']]);
+      assert.deepEqual(calls, [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json']]);
       assert.ok(logs.includes(`${h} plugin marketplace remove nexaduo`));
     }
   });
   test(`install ${h} adds absent registration, skips expected existing registration`, async () => {
-    const calls = [];
-    const run = async (name, args) => {
-      calls.push(args);
-      if (args[1] === 'marketplace' && args[2] === 'list') return '[]';
-      return '';
-    };
+    const calls = [], base = freshRunner(calls);
+    const run = async (name, args, options) => args[1] === 'marketplace' && args[2] === 'list' ?
+      (calls.push([name, args, options]), '[]') : base(name, args, options);
     assert.equal(await invoke(['install', '--harness', h, '--yes'], [], { run }), 0);
-    assert.deepEqual(calls, [['plugin', 'marketplace', 'list', '--json'], ['plugin', 'marketplace', 'add', 'NexaDuo/mARC'], golden[h].install[1]]);
-    const existing = [];
-    assert.equal(await invoke(['install', '--harness', h, '--yes'], existing), 0);
+    assert.deepEqual(calls.map(c => c[1]), [['plugin', 'list', '--json'], ['plugin', 'marketplace', 'list', '--json'],
+      ['plugin', 'marketplace', 'add', 'NexaDuo/mARC'], h === 'codex' ? ['plugin', 'add', 'marc@nexaduo'] :
+        h === 'claude' ? ['plugin', 'install', 'marc@nexaduo', '--scope', 'user'] : ['plugin', 'install', 'marc@nexaduo'], ['plugin', 'list', '--json']]);
+    const existing = [], logs = [];
+    assert.equal(await invoke(['install', '--harness', h, '--yes'], existing, { log: s => logs.push(s) }), 0);
     assert.deepEqual(existing.map(c => c[1]), golden[h].install);
+    assert.ok(logs.includes(`${h}: already installed at 26.11.25.2`)); assert.ok(logs.includes(`${h}: OK`));
+    const registered = [];
+    assert.equal(await invoke(['install', '--harness', h, '--yes'], registered, { run: freshRunner(registered) }), 0);
+    assert.ok(registered.some(c => c[1][1] === 'install' || c[1][1] === 'add'));
   });
   test(`install ${h} preserves conflicting sources, continues and reports every harness`, async () => {
     for (const conflict of [
@@ -451,13 +472,14 @@ for (const h of ['claude', 'copilot', 'codex']) {
       { marketplaceSource: { sourceType: 'git', source: 'https://github.com/NexaDuo/mARC.git', ref: release.tag } },
     ]) {
       const calls = [], logs = [], next = h === 'copilot' ? 'codex' : 'copilot';
-      const otherRun = runner(calls);
+      const otherRun = freshRunner(calls);
       const run = async (name, args, options) => {
         if (name === h) { calls.push([name, args, options]); return JSON.stringify([{ name: 'nexaduo', ...conflict }]); }
         return otherRun(name, args, options);
       };
       assert.equal(await invoke(['install', '--harness', h, '--harness', next, '--yes'], [], { run, log: s => logs.push(s) }), 1);
-      assert.equal(calls.filter(c => c[0] === h).length, 1);
+      assert.equal(calls.filter(c => c[0] === h).length, 2);
+      assert.ok(logs.some(s => s.includes('found ') && /sourceType: |source: /.test(s)));
       assert.ok(calls.some(([name, args]) => name === next && args[1] === (next === 'codex' ? 'add' : 'install')));
       assert.ok(logs.includes(`${h} plugin marketplace remove nexaduo`));
       assert.ok(logs.includes(`${h} plugin marketplace add NexaDuo/mARC`));
@@ -480,6 +502,7 @@ test('Codex captured legacy local source is preserved with a manual remedy', asy
     assert.ok(calls.every(args => args.includes('list')));
     assert.ok(logs.includes('codex plugin marketplace remove nexaduo'));
     assert.ok(logs.some(s => /different or unverified source|source drift/.test(s)));
+    if (command === 'install') assert.ok(logs.some(s => s.includes('found sourceType: local, source: /path/to/clone')), logs.join('\n'));
     assert.ok(!logs.some(s => s.includes('pin state unverifiable')));
   }
 });
@@ -649,4 +672,65 @@ test('Antigravity creates an owned 0700 child under the selected POSIX temp root
   await installAgy({ run, release, tmpRoot: await temp(t) });
   assert.ok(child);
   await assert.rejects(lstat(child), { code: 'ENOENT' });
+});
+
+const stale = { claude: [{ id: 'marc@nexaduo', version: '26.11.14', scope: 'user' }],
+  copilot: 'marc@nexaduo (v26.11.14)\n  Source: GitHub: NexaDuo/mARC\n', codex: { installed: [{ pluginId: 'marc@nexaduo', version: '26.11.14', installed: true }] } };
+const mutating = calls => calls.filter(([, a]) => ['install', 'add', 'update', 'upgrade', 'remove', 'uninstall'].includes(a[1]) || a[2] === 'add');
+for (const h of ['claude', 'copilot', 'codex']) {
+  test(`install ${h} reports STALE for an existing install that differs, with no mutation`, async () => {
+    const calls = [], logs = [];
+    const rows = typeof stale[h] === 'string' ? stale[h] : JSON.stringify(stale[h]);
+    assert.equal(await invoke(['install', '--harness', h, '--yes'], calls, { run: runner(calls, { [h]: rows }), log: s => logs.push(s) }), 1);
+    assert.deepEqual(mutating(calls), []);
+    assert.ok(logs.includes(`${h}: already installed at 26.11.14 (launcher release ${release.tag}); run \`npx @nexaduo/marc update\``), logs.join('\n'));
+    assert.ok(logs.includes(`${h}: STALE`)); assert.ok(!logs.includes(`${h}: OK`));
+    assert.ok(!logs.some(s => /older/i.test(s)));
+  });
+}
+test('Claude install ignores rows from other scopes and other projects', async () => {
+  const cwd = path.resolve('/work/here'), other = path.resolve('/work/other');
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.14', scope: 'local', projectPath: other },
+    { id: 'marc@nexaduo', version: '26.11.14', scope: 'project', projectPath: other }, { id: 'marc@nexaduo', version: '26.11.14', scope: 'user' }]);
+  for (const scope of ['local', 'project']) {
+    const calls = [];
+    // Install runs (other-repo rows do not count); the post-install re-list still has no row for cwd, so not OK.
+    assert.equal(await invoke(['install', '--harness', 'claude', '--scope', scope, '--yes'], calls, { cwd, run: runner(calls, { claude: rows }) }), 1);
+    assert.deepEqual(mutating(calls).map(c => c[1]), [['plugin', 'install', 'marc@nexaduo', '--scope', scope]]);
+  }
+  const mine = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.14', scope: 'local', projectPath: cwd }]);
+  const calls = [], logs = [];
+  assert.equal(await invoke(['install', '--harness', 'claude', '--scope', 'local', '--yes'], calls, { cwd, run: runner(calls, { claude: mine }), log: s => logs.push(s) }), 1);
+  assert.deepEqual(mutating(calls), []);
+  assert.ok(logs.includes('claude: STALE'));
+});
+test('Claude user-scope install is not satisfied by a project row', async () => {
+  const calls = [];
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.14', scope: 'project', projectPath: process.cwd() }]);
+  await invoke(['install', '--harness', 'claude', '--yes'], calls, { run: runner(calls, { claude: rows }) });
+  assert.equal(mutating(calls).length, 1);
+});
+test('install with a matching version is OK without install or add', async () => {
+  for (const h of ['claude', 'copilot', 'codex']) {
+    const calls = [], logs = [];
+    assert.equal(await invoke(['install', '--harness', h, '--yes'], calls, { log: s => logs.push(s) }), 0);
+    assert.deepEqual(mutating(calls), []);
+    assert.ok(logs.includes(`${h}: already installed at 26.11.25.2`));
+  }
+});
+test('install that leaves a differing version after the install command is STALE, not OK', async () => {
+  const calls = [], logs = [];
+  const run = freshRunner(calls, { claude: JSON.stringify(stale.claude) });
+  assert.equal(await invoke(['install', '--harness', 'claude', '--yes'], calls, { run, log: s => logs.push(s) }), 1);
+  assert.equal(mutating(calls).length, 1);
+  assert.ok(logs.includes('claude: STALE')); assert.ok(!logs.includes('claude: OK'));
+});
+test('source-mismatch refusal names the found registration, strips control characters and preserves it', async () => {
+  const market = { name: 'nexaduo', marketplaceSource: { sourceType: 'local', source: '/dev/clone\x1b[31m\nevil' } };
+  const calls = [], logs = [];
+  const run = async (h, args, options) => { calls.push([h, args, options]); return args[1] === 'list' ? fixtures.codex : JSON.stringify({ marketplaces: [market] }); };
+  assert.equal(await invoke(['install', '--harness', 'codex', '--yes'], calls, { run, log: s => logs.push(s) }), 1);
+  assert.ok(logs.some(s => s.includes('found sourceType: local, source: /dev/clone[31mevil')), logs.join('|'));
+  assert.deepEqual(mutating(calls), []);
+  assert.ok(logs.includes('codex plugin marketplace remove nexaduo'));
 });

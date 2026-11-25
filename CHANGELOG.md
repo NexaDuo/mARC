@@ -8,6 +8,25 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.25.4] - 2026-11-25
+
+### Fixed
+- `install` no longer prints `OK` when nothing was installed or upgraded. For
+  Claude, Copilot and Codex it reads the installed list first (Claude: only rows
+  at the requested scope, and for `project`/`local` only rows for the current
+  directory). An existing install whose version differs from the launcher
+  release is reported `STALE`, exits non-zero and points at
+  `npx @nexaduo/marc update`; a matching one is `OK` with no install command. A
+  fresh install is re-listed and a version mismatch is `STALE` too. `install`
+  still never upgrades on its own (#428).
+- The marketplace source-mismatch refusal now names the registration it found
+  (source type and source, control characters stripped). It still never removes
+  or alters the registration (#428).
+
+### Changed
+- All four harnesses and the catalog pointers move to `v26.11.25.4` (npm
+  `26.1125.4`).
+
 ## [26.11.25.3] - 2026-11-25
 
 ### Added
@@ -19,6 +38,9 @@ date whose `YY.M.D` is already taken.
 - All four harnesses and the catalog pointers move to `v26.11.25.3` (npm
   `26.1125.3`). This is the first release published entirely by the
   `Release` workflow with npm trusted publishing and provenance.
+- Addendum (26.11.25.4): that claim did not hold. `v26.11.25.3` was tagged, but its
+  npm publish failed (E404 on PUT: the trusted publisher was not yet bound, #426),
+  so npm `26.1125.3` never reached the registry.
 
 ## [26.11.25.2] - 2026-11-25
 

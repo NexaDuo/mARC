@@ -40,7 +40,7 @@ class NpmReleaseGuards(unittest.TestCase):
                                '-c', 'user.email=fixture@localhost', *args], cwd=self.repo,
                               capture_output=True, text=True, check=True).stdout
 
-    def gate(self, sha=None, tag='v26.11.25.3'):
+    def gate(self, sha=None, tag='v26.11.25.4'):
         return subprocess.run(['bash', 'scripts/prepare_npm_release.sh'], cwd=self.repo,
                               env={**os.environ, 'RELEASE_SHA': sha or self.sha, 'RELEASE_TAG': tag},
                               capture_output=True, text=True)
@@ -55,7 +55,7 @@ class NpmReleaseGuards(unittest.TestCase):
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads((self.repo / 'launcher/release.json').read_text()),
-                         {'tag': 'v26.11.25.3', 'npm': '26.1125.3', 'sha': self.sha})
+                         {'tag': 'v26.11.25.4', 'npm': '26.1125.4', 'sha': self.sha})
 
     def test_reviewed_ancestor_is_allowed(self):
         self.next_commit()
@@ -84,20 +84,20 @@ class NpmReleaseGuards(unittest.TestCase):
 
     def publish_gate(self):
         return subprocess.run(['bash', 'scripts/prepare_npm_release.sh'], cwd=self.repo,
-                              env={**os.environ, 'RELEASE_SHA': self.sha, 'RELEASE_TAG': 'v26.11.25.3',
+                              env={**os.environ, 'RELEASE_SHA': self.sha, 'RELEASE_TAG': 'v26.11.25.4',
                                    'REQUIRE_RELEASE_TAG': 'true'}, capture_output=True, text=True)
 
     def test_publish_requires_existing_tag(self):
         self.assertNotEqual(self.publish_gate().returncode, 0)
 
     def test_publish_accepts_annotated_tag_at_target(self):
-        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.25.3', '-m', 'release', self.sha)
+        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.25.4', '-m', 'release', self.sha)
         result = self.publish_gate()
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_publish_rejects_tag_moved_to_different_commit(self):
         later = self.next_commit()
-        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.25.3', '-m', 'moved', later)
+        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.25.4', '-m', 'moved', later)
         self.git('checkout', '-q', '--detach', self.sha)
         result = self.publish_gate()
         self.assertNotEqual(result.returncode, 0)

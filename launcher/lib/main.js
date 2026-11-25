@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createRunner, resolveExecutable, safeValue } from './process.js';
 import { tagToNpm } from './version.js';
-import { parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from './lists.js';
+import { parsePlugins, describeSource, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from './lists.js';
 
 export const HARNESSES = ['claude', 'copilot', 'codex', 'agy'];
 const SCOPES = ['user', 'project', 'local'];
@@ -15,6 +15,7 @@ const HELP = `Usage: marc install|update|doctor|uninstall [--yes] [--dry-run]
   [--harness claude|copilot|codex|agy]... [--scope user|project|local]
   [--version <embedded-tag>]
 No --harness: use every harness found on PATH. Node >=20 required.
+install never upgrades: an existing install that differs from this release is reported STALE (run update).
 --scope applies to Claude only. Non-TTY install/update/uninstall requires --yes
 (doctor and --dry-run never change anything and need no --yes).
 The package release selects the tag; another tag prints its npx command.`;
@@ -61,7 +62,7 @@ export function plan(opts) {
     }
     else if (h === 'agy' && opts.command !== 'uninstall') commands.push(['plugin', 'list', '--json'], ['<verified shallow tag clone and reinstall; preserve enablement>']);
     else if (opts.command === 'install') {
-      commands.push(['plugin', 'marketplace', 'list', '--json'], ['plugin', 'marketplace', 'add', SLUG]);
+      commands.push(listArgs(h), ['plugin', 'marketplace', 'list', '--json'], ['plugin', 'marketplace', 'add', SLUG]);
       commands.push(['plugin', h === 'codex' ? 'add' : 'install', ID, ...(h === 'claude' ? scopeArgs(opts.scope || 'user') : [])]);
     } else if (opts.command === 'update') {
       if (h === 'claude') commands.push(listArgs(h));
@@ -158,12 +159,29 @@ function manualRemedy(h, log, scope = 'user') {
   log(`${h} plugin ${h === 'codex' ? 'add' : 'install'} marc@nexaduo${h === 'claude' ? ` --scope ${scope}` : ''}`);
 }
 
+const sameVersion = (version, release) => `v${String(version).replace(/^v/, '')}` === release.tag;
+
+// Rows that count as "already installed" for this request. Claude is
+// scope-aware; project/local rows from other repos never count.
+function installedRows(h, rows, scope, cwd) {
+  if (h !== 'claude') return rows;
+  return rows.filter(r => r.scope === scope && (scope === 'user' ||
+    (typeof r.projectPath === 'string' && r.projectPath && path.resolve(r.projectPath) === path.resolve(cwd))));
+}
+
+// Compare installed rows with the launcher release. Returns the versions found
+// and whether any of them differs.
+function versionState(rows, release) {
+  const found = [...new Set(rows.map(r => r.version ? String(r.version).replace(/^v/, '') : 'unknown'))];
+  return { found: found.join(', '), stale: rows.some(r => !r.version || !sameVersion(r.version, release)) };
+}
+
 async function doctor(h, run, release, log, scope) {
   const rows = parsePlugins(h, await run(h, listArgs(h))).filter(p => h !== 'claude' || !scope || p.scope === scope);
   let drift = !rows.length;
   if (!rows.length) log(`${h}\tmissing\t-`);
   for (const row of rows) {
-    const match = `v${String(row.version).replace(/^v/, '')}` === release.tag;
+    const match = sameVersion(row.version, release);
     log(`${h}\t${row.version || 'unknown'}\t${row.scope || '-'}\t${row.enabled === false ? 'disabled' : 'enabled'}${match ? '' : '\tDRIFT'}`);
     drift ||= !match;
   }
@@ -227,6 +245,12 @@ export async function main(argv, { release, run = createRunner(), log = console.
     const scope = opts.scope || 'user';
     if (scope !== 'user') log(`Claude may edit ${path.join(cwd, '.claude', scope === 'local' ? 'settings.local.json' : 'settings.json')} (${scope} scope)`);
   }
+  const preRead = new Map();
+  if (opts.command === 'install') for (const h of opts.harnesses.filter(x => x !== 'agy')) {
+    // Read-only: installed rows decide whether install has anything to do.
+    try { preRead.set(h, { rows: installedRows(h, parsePlugins(h, await run(h, listArgs(h))), opts.scope || 'user', cwd) }); }
+    catch (e) { preRead.set(h, { error: e }); }
+  }
   if (opts.dryRun) return status;
   if (!opts.yes && opts.command !== 'doctor') {
     let accepted;
@@ -239,7 +263,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
   }
   const results = [];
   for (const h of opts.harnesses) {
-    let failed = false;
+    let failed = false, outcome;
     try {
       if (opts.command === 'doctor') {
         failed = Boolean(await doctor(h, run, release, log, opts.scope));
@@ -267,21 +291,41 @@ export async function main(argv, { release, run = createRunner(), log = console.
           }
         }
       } else if (opts.command === 'install') {
+        const pre = preRead.get(h);
+        if (pre.error) throw pre.error;
+        const scope = opts.scope || 'user';
         const markets = parseMarketplaces(h, await run(h, ['plugin', 'marketplace', 'list', '--json']));
         if (markets.length && !markets.every(m => marketplaceMatches(h, m))) {
           manualRemedy(h, log, opts.scope);
-          throw new Error('nexaduo is registered from a different or unverified source; registration preserved');
+          const found = markets.map(describeSource).join('; ');
+          throw new Error(`nexaduo is registered from a different or unverified source (found ${found}); registration preserved`);
         }
-        if (!markets.length) await run(h, ['plugin', 'marketplace', 'add', SLUG]);
-        else log(`${h}: nexaduo already registered from ${SLUG}; skipping add`);
-        await run(h, ['plugin', h === 'codex' ? 'add' : 'install', ID, ...(h === 'claude' ? scopeArgs(opts.scope || 'user') : [])]);
+        const report = rows => {
+          const { found, stale } = versionState(rows, release);
+          if (stale) {
+            log(`${h}: already installed at ${found} (launcher release ${release.tag}); run \`npx @nexaduo/marc update\``);
+            return 'STALE';
+          }
+          log(`${h}: already installed at ${found}`);
+          return 'OK';
+        };
+        if (pre.rows.length) outcome = report(pre.rows);
+        else {
+          if (!markets.length) await run(h, ['plugin', 'marketplace', 'add', SLUG]);
+          else log(`${h}: nexaduo already registered from ${SLUG}; skipping add`);
+          await run(h, ['plugin', h === 'codex' ? 'add' : 'install', ID, ...(h === 'claude' ? scopeArgs(scope) : [])]);
+          const after = installedRows(h, parsePlugins(h, await run(h, listArgs(h))), scope, cwd);
+          if (!after.length) throw new Error('marc is not listed after install');
+          outcome = report(after);
+        }
       } else {
         for (const args of plan({ ...opts, harnesses: [h] })[0].commands) await run(h, args);
       }
     } catch (e) { log(`${h}: ${e.message}`); failed = true; }
-    results.push({ harness: h, failed });
-    if (failed) status = 1;
+    const state = failed ? 'FAILED' : outcome || 'OK';
+    results.push({ harness: h, state });
+    if (state !== 'OK') status = 1;
   }
-  for (const { harness, failed } of results) log(`${harness}: ${failed ? 'FAILED' : 'OK'}`);
+  for (const { harness, state } of results) log(`${harness}: ${state}`);
   return status;
 }

@@ -67,6 +67,20 @@ export function marketplaceMatches(harness, market) {
   return source.source === 'github' && source.repo === 'NexaDuo/mARC';
 }
 
+// Human-readable "sourceType: X, source: Y" for a marketplace row, with control
+// characters stripped (native CLI output is untrusted text).
+export function describeSource(market) {
+  const clean = v => String(v ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, '').slice(0, 200);
+  const raw = market.marketplaceSource ?? market.source;
+  let type, value;
+  if (raw && typeof raw === 'object') {
+    type = raw.sourceType ?? raw.source;
+    value = raw.sourceType ? raw.source : raw.repo ?? raw.url ?? raw.path;
+  } else if (market.repo) { type = raw; value = market.repo; }
+  else value = raw;
+  return [type != null && `sourceType: ${clean(type)}`, `source: ${clean(value) || 'unknown'}`].filter(Boolean).join(', ');
+}
+
 export function marketplaceWarnings(marketplaces, harness) {
   const warnings = [];
   if (marketplaces.some(marketplacePinned)) warnings.push('legacy-pinned marketplace; manual re-registration required');

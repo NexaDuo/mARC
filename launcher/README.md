@@ -45,13 +45,15 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 - Antigravity installs from a shallow clone of the release tag, checked against
   the commit embedded in this package, then deletes the clone.
 - `uninstall` never removes a marketplace registration.
+- `install` never upgrades an existing install. If the installed version differs
+  from the launcher release it prints `STALE` and exits non-zero; run `update`.
 - `doctor` changes nothing and exits non-zero when it finds drift.
 
 ## Versions
 
 Each npm version embeds one mARC release tag. A tag `vYY.M.D[.N]` (no leading
 zeros) maps to npm `YY.(M*100+D).N`, where a missing `.N` is `0`. For example,
-`v26.11.25.3` is `26.1125.3` and `v26.12.1` is `26.1201.0`.
+`v26.11.25.4` is `26.1125.4` and `v26.12.1` is `26.1201.0`.
 
 What a given package version pins:
 
@@ -63,7 +65,7 @@ What a given package version pins:
 
 Use the latest package to keep every harness on the same release.
 
-Releases from `26.1125.3` on are published from GitHub Actions with npm
+Releases from `26.1125.4` on are published from GitHub Actions with npm
 provenance. `npx` does not verify provenance for you. To check it, run
 `npm audit signatures` in a project that depends on the package; pinning an
 exact version then keeps you on the release you checked.
