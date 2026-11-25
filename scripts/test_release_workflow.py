@@ -29,10 +29,11 @@ class ReleaseWorkflow(unittest.TestCase):
     def test_exact_permissions(self):
         self.assertEqual(self.workflow['permissions'], {'contents': 'read'})
         expected = {'plan': {'contents': 'read'}, 'test': {'contents': 'read'},
-                    'tag': {'contents': 'write'}, 'github-release': {'contents': 'write'},
+                    'tag': {'contents': 'read'}, 'github-release': {'contents': 'write'},
                     'publish': {'contents': 'read', 'id-token': 'write'}}
         self.assertEqual({name: job['permissions'] for name, job in self.jobs.items()}, expected)
         self.assertEqual(self.jobs['publish']['environment'], 'npm-publish')
+        self.assertEqual(self.jobs['tag']['environment'], 'release-tag')
 
     def test_actions_pinned_and_no_run_interpolation(self):
         # No constants need expression templating in run scripts: empty allowlist.
@@ -46,11 +47,11 @@ class ReleaseWorkflow(unittest.TestCase):
                         self.assertIn(expr, allowed_run_expressions)
                     self.assertNotIn('${{', re.sub(r'\$\{\{.*?\}\}', '', step.get('run', ''), flags=re.S))
 
-    def test_credentials_only_persist_in_tag_job(self):
+    def test_checkout_credentials_never_persist(self):
         for name, job in self.jobs.items():
             for step in job['steps']:
                 if step.get('uses', '').startswith('actions/checkout@'):
-                    self.assertEqual(step['with']['persist-credentials'], 'true' if name == 'tag' else 'false')
+                    self.assertEqual(step['with']['persist-credentials'], 'false')
         self.assertEqual(self.jobs['plan']['steps'][0]['with']['ref'], '${{ github.sha }}')
         self.assertEqual(self.jobs['test']['steps'][0]['with']['ref'], '${{ needs.plan.outputs.sha }}')
         self.assertEqual(self.jobs['publish']['steps'][0]['with']['ref'], 'refs/tags/${{ needs.plan.outputs.tag }}')
@@ -72,7 +73,7 @@ class ReleaseWorkflow(unittest.TestCase):
         self.assertNotIn('node --test', '\n'.join(s.get('run', '') for s in self.jobs['publish']['steps']))
 
     def test_annotated_tag_race_guard_and_notes_file(self):
-        script = self.jobs['tag']['steps'][-1]['run']
+        script = self.jobs['tag']['steps'][-2]['run']
         self.assertIn('tag -a "$RELEASE_TAG" "$RELEASE_SHA"', script)
         self.assertLess(script.index('git ls-remote'), script.index('git push'))
         self.assertNotIn('--force', script)
@@ -81,6 +82,32 @@ class ReleaseWorkflow(unittest.TestCase):
         self.assertEqual(release[-1]['env']['RELEASE_TAG'], '${{ needs.plan.outputs.tag }}')
         self.assertEqual(release[-1]['run'].count('--notes-file release-notes.md'), 2)
         self.assertIn('--verify-tag', release[-1]['run'])
+
+    def test_deploy_key_scope_pinning_and_cleanup(self):
+        for name, job in self.jobs.items():
+            if name != 'tag':
+                self.assertNotIn('secrets.', str(job))
+        tag = self.jobs['tag']['steps']
+        setup, push, cleanup = tag[-3:]
+        self.assertEqual(setup['env'], {'RELEASE_TAG_DEPLOY_KEY': '${{ secrets.RELEASE_TAG_DEPLOY_KEY }}'})
+        self.assertIn('umask 077', setup['run'])
+        self.assertIn('chmod 600', setup['run'])
+        self.assertNotIn('ssh-keyscan', setup['run'])
+        for algorithm in ('ssh-ed25519', 'ecdsa-sha2-nistp256', 'ssh-rsa'):
+            self.assertIn(f'github.com {algorithm} ', setup['run'])
+        self.assertIn('https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints', setup['run'])
+        for option in ('IdentitiesOnly=yes', 'IdentityAgent=none', 'StrictHostKeyChecking=yes',
+                       'UserKnownHostsFile=', 'GlobalKnownHostsFile=/dev/null'):
+            self.assertIn(option, push['env']['GIT_SSH_COMMAND'])
+        self.assertEqual(cleanup['if'], 'always()')
+        self.assertIn('"$RUNNER_TEMP/marc-release-tag-key"', cleanup['run'])
+
+    def test_publish_guard_and_no_lifecycle_scripts(self):
+        guard = next(s for s in self.jobs['publish']['steps'] if s.get('id') == 'npm-check')
+        publish = self.jobs['publish']['steps'][-1]
+        self.assertIn('release_plan.py --check-npm "$RELEASE_NPM"', guard['run'])
+        self.assertEqual(publish['if'], "steps.npm-check.outputs.publish == 'true'")
+        self.assertIn('npm publish --access public --provenance --ignore-scripts', publish['run'])
 
 
 class TagPushRaces(unittest.TestCase):
@@ -98,7 +125,7 @@ class TagPushRaces(unittest.TestCase):
         self.git(self.repo, 'commit', '-qm', 'release')
         self.sha = self.git(self.repo, 'rev-parse', 'HEAD').strip()
         workflow = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
-        self.script = workflow['jobs']['tag']['steps'][-1]['run']
+        self.script = workflow['jobs']['tag']['steps'][-2]['run'].replace('git@github.com:NexaDuo/mARC.git', str(self.origin))
 
     def git(self, cwd, *args):
         return subprocess.run(['git', '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
@@ -120,12 +147,68 @@ class TagPushRaces(unittest.TestCase):
         # The runner has not fetched this new remote tag; its local creation
         # succeeds, so the explicit remote recheck has to catch the race.
         self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
-        self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.26', self.sha, '-m', 'other creator')
+        (self.repo / 'file').write_text('a different commit')
+        self.git(self.repo, 'commit', '-qam', 'other')
+        other = self.git(self.repo, 'rev-parse', 'HEAD').strip()
+        self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/other')
+        self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.26', other, '-m', 'other creator')
         original = self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.26').strip()
         result = self.run_tag()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Tag appeared after planning', result.stdout)
         self.assertEqual(self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.26').strip(), original)
+
+    def test_remote_tag_at_exact_commit_is_successful_noop(self):
+        for annotated in (True, False):
+            with self.subTest(annotated=annotated):
+                self.git(self.repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main')
+                args = ('-a', '-m', 'already pushed') if annotated else ()
+                self.git(self.origin, '-c', 'tag.gpgsign=false', 'tag', *args, 'v26.11.26', self.sha)
+                original = self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.26')
+                result = self.run_tag()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('successful no-op', result.stdout)
+                self.assertEqual(self.git(self.origin, 'rev-parse', 'refs/tags/v26.11.26'), original)
+                self.git(self.origin, 'tag', '-d', 'v26.11.26')
+
+    def test_rerun_with_local_and_remote_tag_is_noop(self):
+        self.assertEqual(self.run_tag().returncode, 0)
+        result = self.run_tag()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('successful no-op', result.stdout)
+
+
+class SSHCredentialHandling(unittest.TestCase):
+    def test_private_file_missing_key_and_cleanup(self):
+        workflow = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
+        setup, _, cleanup = workflow['jobs']['tag']['steps'][-3:]
+        with tempfile.TemporaryDirectory() as temp:
+            env = {**os.environ, 'RUNNER_TEMP': temp, 'RELEASE_TAG_DEPLOY_KEY': ''}
+            result = subprocess.run(['bash', '-c', setup['run']], env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('RELEASE_TAG_DEPLOY_KEY is missing', result.stdout)
+            self.assertFalse(list(Path(temp).iterdir()))
+            secret = 'fixture-private-key-content'
+            env['RELEASE_TAG_DEPLOY_KEY'] = secret
+            result = subprocess.run(['bash', '-c', setup['run']], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn(secret, result.stdout + result.stderr)
+            key = Path(temp) / 'marc-release-tag-key'
+            self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(key.read_text(), secret + '\n')
+            # Parse the pinned public keys with OpenSSH; expected fingerprints
+            # make accidental edits or copied obsolete RSA keys fail offline.
+            hosts = Path(temp) / 'marc-release-tag-known-hosts'
+            result = subprocess.run(['ssh-keygen', '-lf', str(hosts)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for fingerprint in (
+                    'SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU',
+                    'SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM',
+                    'SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s'):
+                self.assertIn(fingerprint, result.stdout)
+            result = subprocess.run(['bash', '-c', cleanup['run']], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(list(Path(temp).iterdir()))
 
 
 if __name__ == '__main__':

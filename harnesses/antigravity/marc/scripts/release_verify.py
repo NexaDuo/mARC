@@ -366,10 +366,13 @@ def fetch_workflow_runs(repo: Optional[str], workflow: str, expected_tag: str) -
                           and r.get("event") in ("push", "workflow_dispatch")]
             # On dispatch, GITHUB_SHA is main's current head, while plan may target
             # the existing tag's older commit. Include such bootstrap retries too.
-            for run in lookup("--branch", "main", "--event", "workflow_dispatch"):
+            # Bound manifest lookups even for dispatch-heavy consumer workflows.
+            # gh returns newest first; only the newest matching dispatch matters.
+            for run in lookup("--branch", "main", "--event", "workflow_dispatch")[:5]:
                 if (run.get("headBranch") == "main" and run.get("event") == "workflow_dispatch"
                         and (run.get("headSha") == sha or _dispatch_matches_tag(repo, run, expected_tag))):
                     candidates.append(run)
+                    break
     except Exception:  # noqa: BLE001 — fall back for consumer workflow APIs
         candidates = []
     if not candidates:

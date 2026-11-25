@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, symlink, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, symlink, chmod, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -588,8 +588,8 @@ test('Windows temp selection fails closed instead of falling back to shared syst
   assert.throws(() => tempRoots(`${home}\\alias`, options), /No private temp root/);
 });
 
-test('POSIX temp roots require user ownership and reject shared writable roots', () => {
-  for (const info of [{ uid: 0, mode: 0o1777 }, { uid: 1000, mode: 0o777 }, { uid: 1000, mode: 0o770 }]) {
+test('POSIX temp roots reject non-sticky shared roots and untrusted owners', () => {
+  for (const info of [{ uid: 0, mode: 0o777 }, { uid: 1000, mode: 0o777 }, { uid: 1000, mode: 0o770 }, { uid: 2000, mode: 0o1777 }]) {
     assert.throws(() => tempRoots('/shared', { platform: 'linux', uid: 1000, realpath: p => p,
       stat: () => ({ ...info, isDirectory: () => true }) }), /No private temp root/);
   }
@@ -625,3 +625,28 @@ for (const [folder, error] of [['RUNNER~1', null], ['with space', /TMP\/TEMP/], 
     }
   });
 }
+
+
+test('POSIX temp roots accept stock root-owned sticky /tmp', () => {
+  assert.deepEqual(tempRoots('/tmp', { platform: 'linux', uid: 1000, realpath: p => p,
+    stat: () => ({ uid: 0, mode: 0o41777, isDirectory: () => true }) }), ['/tmp']);
+});
+
+
+test('Antigravity creates an owned 0700 child under the selected POSIX temp root', { skip: process.platform === 'win32' }, async t => {
+  const calls = [], native = agyRunner(calls);
+  let child;
+  const run = async (h, args, options) => {
+    if (h === 'git' && args[0] === 'clone') {
+      child = options.cwd;
+      const info = await lstat(child);
+      assert.equal(info.uid, process.getuid());
+      assert.equal(info.mode & 0o777, 0o700);
+      assert.equal(info.isSymbolicLink(), false);
+    }
+    return native(h, args, options);
+  };
+  await installAgy({ run, release, tmpRoot: await temp(t) });
+  assert.ok(child);
+  await assert.rejects(lstat(child), { code: 'ENOENT' });
+});

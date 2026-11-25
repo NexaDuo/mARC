@@ -102,7 +102,10 @@ export function tempRoots(tmpRoot, { platform = process.platform, env = process.
           !relative.startsWith('..\\') && !path.win32.isAbsolute(relative);
       }
       const info = stat(root);
-      return info.isDirectory() && info.uid === uid && (info.mode & 0o022) === 0;
+      // Shared POSIX temp is safe only under a root-owned sticky directory.
+      // The mkdtemp child is private and checked separately before use.
+      return info.isDirectory() && ((info.uid === uid && (info.mode & 0o022) === 0) ||
+        (info.uid === 0 && (info.mode & 0o1002) === 0o1002));
     } catch { return false; }
   });
   if (!safe.length) throw new Error('No private temp root available; set TMP/TEMP to a user-owned writable directory without spaces');
@@ -125,6 +128,11 @@ export async function installAgy({ run, release, tmpRoot }) {
   const gitOptions = { cwd: temp, isolatedGit: true };
   const cliPath = p => process.platform === 'win32' ? p.replaceAll('\\', '/') : p;
   try {
+    if (process.platform !== 'win32') {
+      const info = await lstat(temp);
+      if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid() ||
+          (info.mode & 0o777) !== 0o700) throw new Error('Unsafe private release directory');
+    }
     await run('git', ['clone', '--depth', '1', '--branch', release.tag, '--no-checkout',
       'https://github.com/NexaDuo/mARC.git', cliPath(clone)], { ...gitOptions, generatedPaths: [7] });
     const options = { ...gitOptions, cwd: clone };

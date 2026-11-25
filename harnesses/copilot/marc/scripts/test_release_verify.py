@@ -117,6 +117,24 @@ class WorkflowLookup(unittest.TestCase):
                     patch.object(rv, '_run', side_effect=[json.dumps([bad]), '[]', '[]']):
                 self.assertEqual(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG), [])
 
+    def test_dispatch_manifest_api_calls_are_bounded(self):
+        dispatches = [self.row('workflow_dispatch', sha=f'{i:040x}') for i in range(1, 101)]
+        manifest = {'content': base64.b64encode(b'{"version":"26.11.27"}').decode()}
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                '[]', json.dumps(dispatches), *[json.dumps(manifest)] * 5, '[]']) as run:
+            self.assertEqual(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG), [])
+            lookups = [call for call in run.call_args_list if '/contents/' in ' '.join(call.args[0])]
+            self.assertEqual(len(lookups), 5)
+            self.assertEqual(run.call_count, 8)
+
+    def test_dispatch_stops_after_first_match(self):
+        dispatches = [self.row('workflow_dispatch', sha=self.LATER)] * 100
+        manifest = {'content': base64.b64encode(b'{"version":"26.11.26"}').decode()}
+        with patch.object(rv, 'fetch_tag_commit', return_value=self.SHA), patch.object(rv, '_run', side_effect=[
+                '[]', json.dumps(dispatches), json.dumps(manifest)]) as run:
+            self.assertEqual(len(rv.fetch_workflow_runs('owner/repo', 'release.yml', self.TAG)), 1)
+            self.assertEqual(run.call_count, 3)
+
     def test_missing_dispatch_manifest_is_consumer_safe(self):
         with patch.object(rv, '_run', side_effect=RuntimeError('not found')):
             self.assertFalse(rv._dispatch_matches_tag('owner/consumer', self.row('workflow_dispatch'), self.TAG))

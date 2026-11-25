@@ -22,7 +22,7 @@ Version/tag and editable release date:
 - [ ] Bootstrap only: follow the decision record's [bootstrap section](../../docs/marc/2026-11-25-decision-npx-launcher.md#bootstrap).
   The first publish job fails by design; publish once with a short-lived token,
   configure the trusted publisher, revoke the token, then dispatch on `main`.
-- [ ] SEC-8: the merge-to-tag missing-ref window is now seconds in a healthy run;
+- [ ] SEC-8: the merge-to-tag missing-ref window is a minute or two in a healthy run;
   confirm each CLI fails closed during that window. Scheduling delays or failed
   tests can extend it; preserve the concrete dogfood result.
 - [ ] After merge, monitor `release.yml` to terminal completion and verify with

@@ -4,6 +4,7 @@
 Only HTTP 404 means absent: auth, rate-limit and registry outages fail closed.
 The pure make_plan function is shared with offline tests.
 """
+import argparse
 import json
 import os
 import re
@@ -19,7 +20,8 @@ from check_catalog_pointers import tag_to_npm
 NPM_FLOOR = date(2026, 11, 26)
 
 
-def make_plan(version, event, sha, tag_sha, release_exists, npm_exists):
+def make_plan(version, event, sha, tag_sha, release_exists, npm_exists, *,
+              tag_is_ancestor=False, npm_latest=None):
     tag = 'v' + version
     npm = tag_to_npm(tag)  # Strict calendar validation also makes outputs single-line.
     if event not in ('push', 'workflow_dispatch'):
@@ -29,13 +31,46 @@ def make_plan(version, event, sha, tag_sha, release_exists, npm_exists):
     for value in (sha, tag_sha):
         if value is not None and not re.fullmatch(r'[a-f0-9]{40}', value):
             raise ValueError('invalid release commit SHA')
-    target = tag_sha if event == 'workflow_dispatch' and tag_sha else sha
-    if tag_sha and tag_sha != target:
-        raise ValueError(f'{tag} already points at {tag_sha}, not {target}; refusing to move a tag')
+    if tag_sha and not tag_is_ancestor:
+        raise ValueError(f'{tag} commit is not an ancestor of origin/main; refusing to reuse a tag')
+    target = tag_sha or sha
     y, m, d = map(int, version.split('.')[:3])
     return dict(tag=tag, npm=npm, sha=target, need_tag=tag_sha is None,
                 need_release=not release_exists,
-                need_npm=date(2000 + y, m, d) >= NPM_FLOOR and not npm_exists)
+                need_npm=date(2000 + y, m, d) >= NPM_FLOOR
+                and npm_publish_needed(npm, npm_exists, npm_latest))
+
+
+def npm_publish_needed(version, exists, latest):
+    # An existing exact version is a no-op, even after a newer release shipped.
+    if exists:
+        return False
+    def parts(value):
+        if not isinstance(value, str) or not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', value):
+            raise ValueError('invalid npm version; refusing to publish')
+        return tuple(map(int, value.split('.')))
+    target = parts(version)
+    if latest is not None and target < parts(latest):
+        raise ValueError(f'refusing to publish {version} below npm latest {latest}; no backfill path in v1')
+    return True
+
+
+def npm_state(version):
+    package = json_or_none(f'https://registry.npmjs.org/@nexaduo%2fmarc/{version}')
+    latest = json_or_none('https://registry.npmjs.org/@nexaduo%2fmarc/latest')
+    return package is not None, latest['version'] if latest is not None else None
+
+
+def check_npm(version):
+    # Recheck immediately before npm publish: a failed-job rerun keeps its old plan.
+    exists, latest = npm_state(version)
+    needed = npm_publish_needed(version, exists, latest)
+    if needed and latest is None:
+        raise ValueError('npm package is absent; bootstrap is required. See docs/marc/2026-11-25-decision-npx-launcher.md#bootstrap')
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+        output.write(f'publish={str(needed).lower()}\n')
+    if not needed:
+        print(f'npm {version} already published; successful no-op')
 
 
 def git(*args):
@@ -72,16 +107,19 @@ def main():
     repo = os.environ['GITHUB_REPOSITORY']
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
         raise ValueError('invalid GitHub repository')
-    release = json_or_none(f'https://api.github.com/repos/{repo}/releases/tags/{quote(tag, safe="")}', os.environ['GH_TOKEN'])
-    package = json_or_none(f'https://registry.npmjs.org/@nexaduo%2fmarc/{npm}')
-    plan = make_plan(version, os.environ['GITHUB_EVENT_NAME'], os.environ['GITHUB_SHA'],
-                     tag_sha, release is not None, package is not None)
+    target = tag_sha or os.environ['GITHUB_SHA']
+    if not re.fullmatch(r'[a-f0-9]{40}', target):
+        raise ValueError('invalid release commit SHA')
     git('fetch', '--no-tags', 'origin', 'refs/heads/main:refs/remotes/origin/main')
-    git('fetch', '--no-tags', 'origin', plan['sha'])
+    git('fetch', '--no-tags', 'origin', target)
     try:
-        git('merge-base', '--is-ancestor', plan['sha'], 'origin/main')
+        git('merge-base', '--is-ancestor', target, 'origin/main')
     except subprocess.CalledProcessError as exc:
         raise ValueError('release target is not an ancestor of origin/main') from exc
+    release = json_or_none(f'https://api.github.com/repos/{repo}/releases/tags/{quote(tag, safe="")}', os.environ['GH_TOKEN'])
+    exists, latest = npm_state(npm)
+    plan = make_plan(version, os.environ['GITHUB_EVENT_NAME'], os.environ['GITHUB_SHA'],
+                     tag_sha, release is not None, exists, tag_is_ancestor=True, npm_latest=latest)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         for key, value in plan.items():
             output.write(f'{key}={str(value).lower() if isinstance(value, bool) else value}\n')
@@ -89,4 +127,10 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check-npm', metavar='VERSION')
+    args = parser.parse_args()
+    if args.check_npm:
+        check_npm(args.check_npm)
+    else:
+        main()

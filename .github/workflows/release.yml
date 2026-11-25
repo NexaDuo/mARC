@@ -1,7 +1,7 @@
 name: Release
 
-# A GITHUB_TOKEN tag push cannot start another workflow. Keep all release
-# surfaces here; npm's trusted publisher binds to release.yml + npm-publish.
+# Release surfaces share one plan; npm trusted publishing binds to
+# release.yml + npm-publish. Only release-tag holds the tag deploy key.
 on:
   push:
     branches: [main]
@@ -64,30 +64,65 @@ jobs:
   tag:
     needs: [plan, test]
     if: needs.plan.outputs.need_tag == 'true'
+    environment: release-tag
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.plan.outputs.sha }}
-          persist-credentials: true
+          persist-credentials: false
           fetch-depth: 0
+      - name: Prepare dedicated tag SSH credential and pinned hosts
+        env:
+          RELEASE_TAG_DEPLOY_KEY: ${{ secrets.RELEASE_TAG_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_TAG_DEPLOY_KEY" ]]; then
+            echo '::error::RELEASE_TAG_DEPLOY_KEY is missing from environment release-tag.'
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$RELEASE_TAG_DEPLOY_KEY" > "$RUNNER_TEMP/marc-release-tag-key"
+          chmod 600 "$RUNNER_TEMP/marc-release-tag-key"
+          # Source: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+          cat > "$RUNNER_TEMP/marc-release-tag-known-hosts" <<'KNOWN_HOSTS'
+          github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+          github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+          github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+          KNOWN_HOSTS
       - name: Create and push annotated tag without replacing any remote tag
         env:
           RELEASE_TAG: ${{ needs.plan.outputs.tag }}
           RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+          GIT_SSH_COMMAND: >-
+            ssh -F /dev/null -i "${{ runner.temp }}/marc-release-tag-key"
+            -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes
+            -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null
+            -o UserKnownHostsFile="${{ runner.temp }}/marc-release-tag-known-hosts"
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git -c tag.gpgsign=false tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Release $RELEASE_TAG"
-          remote_tags="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+          remote_tags="$(git ls-remote --tags git@github.com:NexaDuo/mARC.git "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
           if [[ -n "$remote_tags" ]]; then
-            echo '::error::Tag appeared after planning; refusing to replace it. Re-run release.'
+            remote_sha="$(awk '$2 ~ /\^\{\}$/ {print $1}' <<< "$remote_tags")"
+            if [[ -z "$remote_sha" ]]; then
+              remote_sha="$(awk '{print $1}' <<< "$remote_tags")"
+            fi
+            if [[ "$remote_sha" == "$RELEASE_SHA" ]]; then
+              echo 'Tag already exists at RELEASE_SHA; successful no-op.'
+              exit 0
+            fi
+            echo '::error::Tag appeared after planning at a conflicting commit; refusing to replace it.'
             exit 1
           fi
-          git push origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          git -c tag.gpgsign=false tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Release $RELEASE_TAG"
+          git push git@github.com:NexaDuo/mARC.git "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+      - name: Remove dedicated tag SSH credential
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/marc-release-tag-key" "$RUNNER_TEMP/marc-release-tag-known-hosts"
 
   github-release:
     needs: [plan, tag]
@@ -143,7 +178,13 @@ jobs:
           RELEASE_SHA: ${{ needs.plan.outputs.sha }}
           REQUIRE_RELEASE_TAG: 'true'
         run: bash scripts/prepare_npm_release.sh
+      - name: Recheck npm version and refuse latest downgrade
+        id: npm-check
+        env:
+          RELEASE_NPM: ${{ needs.plan.outputs.npm }}
+        run: python3 scripts/release_plan.py --check-npm "$RELEASE_NPM"
       - name: Publish with trusted publishing and provenance
+        if: steps.npm-check.outputs.publish == 'true'
         working-directory: launcher
         run: |
           set -euo pipefail
@@ -152,7 +193,7 @@ jobs:
             echo "::error::npm package is absent or unreadable; bootstrap is required. $remedy"
             exit 1
           fi
-          if ! npm publish --access public --provenance; then
+          if ! npm publish --access public --provenance --ignore-scripts; then
             echo "::error::npm publish failed (including OIDC refusal). $remedy"
             exit 1
           fi
