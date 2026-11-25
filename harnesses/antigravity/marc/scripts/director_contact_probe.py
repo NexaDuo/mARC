@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Read-only first-use discovery for the engineering director (issue #433).
+"""Read-only contact discovery for the engineering director (issue #433).
+
+Run on every resume and before contacting a team; stored bindings are caches.
 
 Reports which harness CLIs are on PATH (with `--version`), which terminal
-multiplexer is in use (environment markers only), whether Claude Code
+multiplexer is in use (environment markers; binaries on PATH or ~/.local/bin), whether Claude Code
 cross-session messaging is available (CLI >= 2.1.224), and proposes an ordered
 contact-adapter list per harness plus an optional per-team binding.
 
 Read-only by construction: it writes no file, opens no socket or network
 connection, and runs no command except `<cli> --version` for the four harness
-CLIs (timeout 10s, no stdin, captured output). It never calls a multiplexer and
-never sends a message. Pane-id environment values are reported as present/absent
+CLIs (timeout 10s, no stdin, captured output; override with the env var
+MARC_PROBE_TIMEOUT, in seconds, for tests). Only with the opt-in `--list-sessions`
+it also runs the read-only `tmux ls` / `zellij list-sessions` (timeout 5s, no
+stdin). It never sends a message. Pane-id environment values are reported as present/absent
 only. It always exits 0, except 2 for an unknown harness in `--team`.
 Persisting a proposal is a separate, opt-in step done by the director.
 """
@@ -21,7 +25,7 @@ import shutil
 import subprocess
 import sys
 
-SCHEMA = 1
+SCHEMA = 2
 CROSS_SESSION_MIN = (2, 1, 224)
 
 # harness name -> CLI binary
@@ -32,28 +36,52 @@ HARNESSES = {
     "antigravity": "agy",
 }
 
-# multiplexer name -> (activity env marker, binary, pane-id env)
+# multiplexer name -> (activity env markers, binary, pane-id env)
 MULTIPLEXERS = {
-    "tmux": ("TMUX", "tmux", "TMUX_PANE"),
-    "zellij": ("ZELLIJ", "zellij", "ZELLIJ_PANE_ID"),
-    "wezterm": ("WEZTERM_PANE", "wezterm", "WEZTERM_PANE"),
+    "tmux": (("TMUX",), "tmux", "TMUX_PANE"),
+    "zellij": (("ZELLIJ", "ZELLIJ_SESSION_NAME"), "zellij", "ZELLIJ_PANE_ID"),
+    "screen": (("STY",), "screen", "WINDOW"),
+    "wezterm": (("WEZTERM_PANE",), "wezterm", "WEZTERM_PANE"),
+    "kitty": (("KITTY_WINDOW_ID",), "kitty", "KITTY_WINDOW_ID"),
 }
 
+LIST_SESSIONS_CMDS = {
+    "tmux": ["tmux", "ls", "-F", "#{session_name}"],
+    "zellij": ["zellij", "list-sessions", "--short", "--no-formatting"],
+}
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
 ADAPTER_ORDER = {
-    "claude-code": ["send-message", "resume", "inbox"],
-    "codex": ["exec-resume", "inbox"],
-    "copilot": ["resume", "inbox"],
-    "antigravity": ["conversation-resume", "inbox"],
+    "claude-code": ["send-message", "multiplexer-interactive", "resume", "inbox"],
+    "codex": ["multiplexer-interactive", "exec-resume", "inbox"],
+    "copilot": ["multiplexer-interactive", "resume", "inbox"],
+    "antigravity": ["multiplexer-interactive", "conversation-resume", "inbox"],
 }
 
 ADAPTER_HELP = {
-    "send-message": "SendMessage to a session named via --name (cross-session messaging; needs claude >= 2.1.224)",
+    "send-message": "ListAgents/SendMessage to a session addressed by display name (cross-session messaging; needs claude >= 2.1.224)",
+    "multiplexer-interactive": "start the harness interactively in a detected multiplexer pane (claude: add --name <team>); type-in only to an explicit, verified pane id",
     "resume": "claude --resume <name|id>  |  copilot --resume <id>  (only after verified exit)",
     "exec-resume": 'codex exec resume <id> "<prompt>"  (only after verified exit)',
     "conversation-resume": "agy --conversation <id>  (only after verified exit)",
     "inbox": "file or tracker-comment inbox; durable record, never wakes an idle session",
-    "multiplexer": "send to an explicit, verified pane id; only after native and resume paths",
 }
+
+
+def probe_timeout():
+    try:
+        return float(os.environ.get("MARC_PROBE_TIMEOUT", "10"))
+    except ValueError:
+        return 10.0
+
+
+def find_binary(name):
+    return shutil.which(name) or _local_bin(name)
+
+
+def _local_bin(name):
+    p = os.path.join(os.path.expanduser("~/.local/bin"), name)
+    return p if os.path.isfile(p) and os.access(p, os.X_OK) else None
 
 
 def parse_version(text):
@@ -65,7 +93,7 @@ def cli_version(path):
     try:
         r = subprocess.run(
             [path, "--version"], stdin=subprocess.DEVNULL, capture_output=True,
-            text=True, timeout=10, check=False,
+            text=True, timeout=probe_timeout(), check=False,
         )
     except Exception:
         return None
@@ -87,20 +115,40 @@ def detect_multiplexer(env):
     active = None
     available = []
     pane = False
-    for name, (marker, binary, pane_env) in MULTIPLEXERS.items():
-        if shutil.which(binary):
+    for name, (markers, binary, pane_env) in MULTIPLEXERS.items():
+        if find_binary(binary):
             available.append(name)
-        if active is None and env.get(marker):
+        if active is None and any(env.get(m) for m in markers):
             active = name
             pane = bool(env.get(pane_env))
     return active, available, pane
 
 
-def build(teams):
+def list_sessions(available):
+    out = {}
+    for name, cmd in LIST_SESSIONS_CMDS.items():
+        if name not in available:
+            continue
+        cmd = [find_binary(name)] + cmd[1:]
+        try:
+            r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, timeout=5, check=False)
+        except Exception as e:
+            out[name] = {"sessions": [], "error": type(e).__name__}
+            continue
+        if r.returncode != 0:
+            out[name] = {"sessions": [], "error": f"exit {r.returncode}"}
+            continue
+        lines = [ANSI.sub("", ln).strip() for ln in r.stdout.splitlines()]
+        out[name] = {"sessions": [ln for ln in lines if ln]}
+    return out
+
+
+def build(teams, with_sessions=False):
     env = os.environ
     harnesses = {}
     for name, binary in HARNESSES.items():
-        path = shutil.which(binary)
+        path = find_binary(binary)
         harnesses[name] = {"on_path": bool(path), "version": cli_version(path) if path else None}
     active, available, pane = detect_multiplexer(env)
     parsed = parse_version(harnesses["claude-code"]["version"])
@@ -108,18 +156,27 @@ def build(teams):
     use_mux = bool(active or available)
     adapters = {}
     for name, order in ADAPTER_ORDER.items():
-        ids = [a for a in order if not (a == "send-message" and cross is False)]
-        if use_mux:
-            ids.append("multiplexer")
-        adapters[name] = ids
+        adapters[name] = [a for a in order
+                          if not (a == "send-message" and cross is False)
+                          and not (a == "multiplexer-interactive" and not use_mux)]
+    sessions = None
+    if with_sessions:
+        res = list_sessions(available)
+        sessions = {n: res.get(n, {}).get("sessions", []) for n in LIST_SESSIONS_CMDS}
+        errs = {n: v["error"] for n, v in res.items() if "error" in v}
+        if errs:
+            sessions["error"] = "; ".join(f"{n}: {e}" for n, e in errs.items())
     return {
         "schema": SCHEMA,
         "host_harness": host_harness(env),
         "harnesses": harnesses,
-        "multiplexer": {"active": active, "available": available, "pane_id_env_present": pane},
+        "multiplexer": {"active": active, "available": available, "pane_id_env_present": pane,
+                        "sessions": sessions},
         "claude_cross_session": cross,
         "adapters": adapters,
         "adapter_help": ADAPTER_HELP,
+        "claude_address_hint": "address = session display name (--name / /rename), not the --remote-control name",
+        "rediscover": "re-run on every resume and before contact; stored bindings are caches",
         "teams": [{"name": n, "harness": h, "adapters": adapters[h]} for n, h in teams],
         "persist": {
             "written": False,
@@ -132,6 +189,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Read-only contact-adapter discovery (#433).")
     ap.add_argument("--team", action="append", default=[], metavar="NAME=HARNESS",
                     help="propose a binding for a team (repeatable)")
+    ap.add_argument("--list-sessions", action="store_true",
+                    help="opt-in: run read-only tmux/zellij session listing")
     ap.add_argument("--json", action="store_true", help="JSON output (default)")
     args = ap.parse_args(argv)
     teams = []
@@ -142,7 +201,7 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
         teams.append((name, harness))
-    print(json.dumps(build(teams), indent=2))
+    print(json.dumps(build(teams, args.list_sessions), indent=2))
     return 0
 
 

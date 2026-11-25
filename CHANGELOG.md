@@ -11,9 +11,10 @@ date whose `YY.M.D` is already taken.
 ### Added
 - Harness-agnostic contact adapters for the engineering director (#433): an ordered
   per-harness adapter model in `eng-director` (native message, resume after exit,
-  inbox, optional multiplexer) and a read-only first-use probe,
-  `director_contact_probe.py`, that proposes a binding per team without writing
-  anything. Research brief in `docs/marc/`.
+  multiplexer-hosted interactive session, headless resume plus inbox) and a
+  read-only probe, `director_contact_probe.py`, re-run on every resume and before
+  contact (everyday discovery; stored bindings are re-verified caches) that
+  proposes a binding per team without writing anything. Research brief in `docs/marc/`.
 
 ## [26.11.25.4] - 2026-11-25
 

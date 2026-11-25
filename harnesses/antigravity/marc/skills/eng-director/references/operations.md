@@ -62,15 +62,16 @@ order are in [Contact adapters](#contact-adapters).
 
 Per team, the first adapter that is verified for that session wins. The
 discovery probe (`director_contact_probe.py`) proposes this order from what is
-installed; the director verifies before using it. Evidence:
+installed and is re-run on every resume and before contact; the director
+verifies before using it. Evidence:
 mARC issue #433 research brief (`docs/marc/2026-11-25-brief-director-contact-adapters.md`).
 
-| Harness | 1. Live (native) | 2. Resume after exit | 3. Fallback | Optional |
-|---|---|---|---|---|
-| Claude Code | `SendMessage` to a session named with `--name` (v2.1.224+) | `claude --resume <name\|id>` (pin `--model`) | inbox | multiplexer |
-| Codex | none documented | `codex exec resume <id> "<prompt>"` | inbox | multiplexer |
-| Copilot CLI | none documented locally | `copilot --resume <id>` | inbox | multiplexer |
-| Antigravity | none documented locally | `agy --conversation <id>` (not `-c`) | inbox | multiplexer |
+| Harness | 1. Native | 2. Multiplexer-hosted interactive | 3. Headless resume + inbox |
+|---|---|---|---|
+| Claude Code | `ListAgents`/`SendMessage` by session name (v2.1.224+) | start `claude --name <team>` in a detected multiplexer pane | `claude --resume <name\|id>` (pin `--model`), inbox |
+| Codex | none documented | interactive `codex` in a multiplexer pane | `codex exec resume <id> "<prompt>"`, inbox |
+| Copilot CLI | none documented locally | interactive `copilot` in a multiplexer pane | `copilot --resume <id>`, inbox |
+| Antigravity | none documented locally | interactive `agy` in a multiplexer pane | `agy --conversation <id>` (not `-c`), inbox |
 
 Inbox is a file inbox with a watcher, or a tracker comment, then resume. Codex
 `app-server` and Copilot `--acp` are inferred, not verified for this use, and are
@@ -81,10 +82,16 @@ not used by default.
   process; keep the liveness checks above. (origin: #433 · 2026-11-25)
 - **A tracker comment never wakes an idle session.** It is a durable record and a
   poll target only. (origin: #433 · 2026-11-25)
-- **A multiplexer is discovered, never assumed.** Use it only after the native and
-  resume paths, with an explicit pane id captured at discovery and a verified
+- **A multiplexer is discovered, never assumed.** Tier 2 is a session the team
+  hosts interactively in a detected multiplexer (a real TTY). Type into a pane
+  only as a fallback, to an explicit pane id captured at discovery and a verified
   target that is not a shell or a permission dialog; never the focused or active
   pane by default. (origin: #433 · 2026-11-25)
+- **The `ListAgents` address is the session display name** (`-n/--name` or
+  `/rename`), not the `--remote-control` name; start techleads with an explicit
+  `--name`. (origin: #433 · 2026-11-25)
+- **Windows Terminal can open a tab running a command but cannot type into an
+  existing tab.** (origin: #433 · 2026-11-25)
 - **Remote Control is only for cross-machine reach.** Same-machine Claude Code
   delivery uses cross-session messaging, which needs no Remote Control on either
   side. A `-p` session needs `crossSessionInbound: accept` to take messages

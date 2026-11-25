@@ -39,7 +39,10 @@ class ProbeTest(unittest.TestCase):
 
     def test_no_harness(self):
         d = self.data()
-        self.assertEqual(d["schema"], 1)
+        self.assertEqual(d["schema"], 2)
+        self.assertIsNone(d["multiplexer"]["sessions"])
+        self.assertIn("rediscover", d)
+        self.assertIn("display name", d["claude_address_hint"])
         self.assertTrue(all(not h["on_path"] and h["version"] is None for h in d["harnesses"].values()))
         self.assertIsNone(d["claude_cross_session"])
         self.assertIsNone(d["host_harness"])
@@ -82,6 +85,9 @@ class ProbeTest(unittest.TestCase):
         secret = "PANE-SECRET-77"
         cases = [("tmux", {"TMUX": "/tmp/x,1,0", "TMUX_PANE": secret}),
                  ("zellij", {"ZELLIJ": "0", "ZELLIJ_PANE_ID": secret}),
+                 ("zellij", {"ZELLIJ_SESSION_NAME": "s", "ZELLIJ_PANE_ID": secret}),
+                 ("screen", {"STY": "1.pts", "WINDOW": secret}),
+                 ("kitty", {"KITTY_WINDOW_ID": secret}),
                  ("wezterm", {"WEZTERM_PANE": secret})]
         for mux, env in cases:
             fake(self.bin, mux, "exit 0")
@@ -92,12 +98,13 @@ class ProbeTest(unittest.TestCase):
             self.assertEqual(d["multiplexer"]["active"], mux)
             self.assertIn(mux, d["multiplexer"]["available"])
             self.assertIs(d["multiplexer"]["pane_id_env_present"], True)
-            self.assertEqual(d["adapters"]["codex"][-1], "multiplexer")
+            self.assertEqual(d["adapters"]["codex"], ["multiplexer-interactive", "exec-resume", "inbox"])
+            self.assertEqual(d["adapters"]["claude-code"][:2], ["send-message", "multiplexer-interactive"])
             (self.bin / mux).unlink()
 
     def test_no_multiplexer_means_no_adapter(self):
         d = self.data()
-        self.assertNotIn("multiplexer", d["adapters"]["copilot"])
+        self.assertNotIn("multiplexer-interactive", d["adapters"]["copilot"])
         self.assertIs(d["multiplexer"]["pane_id_env_present"], False)
 
     def test_host_harness(self):
@@ -117,15 +124,42 @@ class ProbeTest(unittest.TestCase):
     def test_failing_or_hanging_cli(self):
         fake(self.bin, "codex", "exit 3")
         fake(self.bin, "copilot", "exec /bin/sleep 30")
-        d = self.data()
+        d = self.data(env={"MARC_PROBE_TIMEOUT": "1"})
         self.assertTrue(d["harnesses"]["codex"]["on_path"])
         self.assertIsNone(d["harnesses"]["codex"]["version"])
         self.assertTrue(d["harnesses"]["copilot"]["on_path"])
         self.assertIsNone(d["harnesses"]["copilot"]["version"])
 
+    def test_local_bin_fallback(self):
+        lb = self.cwd / ".local" / "bin"
+        lb.mkdir(parents=True)
+        fake(lb, "tmux", "exit 0")
+        d = self.data()
+        self.assertIn("tmux", d["multiplexer"]["available"])
+        self.assertEqual(d["adapters"]["codex"][0], "multiplexer-interactive")
+        (lb / "tmux").chmod(0o644)
+        self.assertNotIn("tmux", self.data()["multiplexer"]["available"])
+
+    def test_list_sessions(self):
+        fake(self.bin, "tmux", 'echo alpha; echo beta')
+        fake(self.bin, "zellij", 'printf "\\033[1mgamma\\033[0m\\n"')
+        d = self.data("--list-sessions")
+        self.assertEqual(d["multiplexer"]["sessions"]["tmux"], ["alpha", "beta"])
+        self.assertEqual(d["multiplexer"]["sessions"]["zellij"], ["gamma"])
+        self.assertIsNone(self.data()["multiplexer"]["sessions"])
+
+    def test_list_sessions_failure(self):
+        fake(self.bin, "tmux", "exit 1")
+        d = self.data("--list-sessions")
+        self.assertEqual(d["multiplexer"]["sessions"]["tmux"], [])
+        self.assertEqual(d["multiplexer"]["sessions"]["zellij"], [])
+        self.assertIn("tmux", d["multiplexer"]["sessions"]["error"])
+
     def test_no_writes(self):
         fake(self.bin, "claude", 'echo "2.1.230"')
-        self.run_probe("--team", "a=claude-code", env={"TMUX": "1", "TMUX_PANE": "%1"})
+        fake(self.bin, "tmux", "echo s")
+        self.run_probe("--team", "a=claude-code", "--list-sessions",
+                       env={"TMUX": "1", "TMUX_PANE": "%1"})
         self.assertEqual(list(self.cwd.iterdir()), [])
 
 
