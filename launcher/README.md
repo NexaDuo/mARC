@@ -20,7 +20,7 @@ Requires Node.js 20 or later and at least one harness CLI on your `PATH`.
 
 ```bash
 npx @nexaduo/marc install     # install on every detected harness
-npx @nexaduo/marc update      # move every harness to this package's release
+npx @nexaduo/marc update      # update the plugin on every detected harness
 npx @nexaduo/marc doctor      # read-only: versions, drift, marketplace source
 npx @nexaduo/marc uninstall   # remove the plugin (marketplaces are kept)
 ```
@@ -29,10 +29,11 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 
 | Flag | Effect |
 |---|---|
-| `--harness <claude\|copilot\|codex\|agy>` | Limit to one harness (repeatable) |
-| `--scope <user\|project\|local>` | Claude Code install scope |
+| `--harness <claude\|copilot\|codex\|agy>` | Act only on the named harness; repeat for several. Default: every harness on `PATH` |
+| `--scope <user\|project\|local>` | Claude Code only: the scope to install, update or uninstall |
+| `--version <tag>` | Must equal the release embedded in this package; otherwise prints the matching `npx` command and exits |
 | `--dry-run` | Print the plan and change nothing |
-| `--yes` | Skip the confirmation prompt (required when not in a terminal) |
+| `--yes` | Skip the confirmation prompt. Required for `install`, `update` and `uninstall` when not in a terminal; `doctor` and `--dry-run` never need it |
 
 ## What it does, and what it doesn't
 
@@ -48,14 +49,24 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 
 ## Versions
 
-Each npm version embeds exactly one mARC release:
-`vYY.MM.DD[.N]` maps to `YY.(MM*100+DD).N`. For example, `v26.11.25.3` is
-`26.1125.3`. Run a specific release with `npx @nexaduo/marc@<version> install`.
+Each npm version embeds one mARC release tag. A tag `vYY.M.D[.N]` (no leading
+zeros) maps to npm `YY.(M*100+D).N`, where a missing `.N` is `0`. For example,
+`v26.11.25.3` is `26.1125.3` and `v26.12.1` is `26.1201.0`.
+
+What a given package version pins:
+
+- **Antigravity** installs exactly the embedded tag, verified by commit.
+- **Claude Code, Copilot and Codex** install from the `nexaduo` marketplace,
+  whose catalog points at the latest mARC release. An older package still gives
+  these harnesses the latest release, and `doctor` reports any harness whose
+  installed version differs from the embedded one.
+
+Use the latest package to keep every harness on the same release.
 
 Releases from `26.1125.3` on are published from GitHub Actions with npm
 provenance. `npx` does not verify provenance for you. To check it, run
-`npm audit signatures` in a project that depends on the package, or pin an
-exact version.
+`npm audit signatures` in a project that depends on the package; pinning an
+exact version then keeps you on the release you checked.
 
 ## Links
 
