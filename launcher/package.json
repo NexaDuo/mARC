@@ -7,5 +7,7 @@
   "engines": {"node": ">=20"},
   "files": ["bin/", "lib/", "release.json", "LICENSE", "README.md"],
   "repository": {"type": "git", "url": "git+https://github.com/NexaDuo/mARC.git", "directory": "launcher"},
+  "homepage": "https://marc.nexaduo.com/",
+  "bugs": {"url": "https://github.com/NexaDuo/mARC/issues"},
   "license": "MIT"
 }

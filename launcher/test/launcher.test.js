@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, symlink, chmod, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
-import { rmSync } from 'node:fs';
+import { rmSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStyle, stripControls } from '../lib/style.js';
@@ -13,6 +13,10 @@ import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/pr
 import { classifyMarketplace, enrichMarketplaces, describeSource, redactSource, safeVersion, parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+// The current release comes from the single VERSION source, never a literal.
+const CUR_VERSION = readFileSync(new URL('../../VERSION', import.meta.url), 'utf8').trim();
+const CUR_TAG = `v${CUR_VERSION}`;
+const CUR_NPM = tagToNpm(CUR_TAG);
 const release = { tag: 'v26.11.25.2', sha: 'a'.repeat(40), npm: '26.1125.2' };
 const fixtures = {
   claude: JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.2', scope: 'user', enabled: true, source: { source: 'git-subdir', url: 'NexaDuo/mARC', path: 'harnesses/claude-code/marc', ref: release.tag } },
@@ -871,8 +875,8 @@ test('hostile native strings cannot inject SGR or controls', async () => {
 });
 
 test('plain install --dry-run output is pinned byte for byte, with no escapes', async () => {
-  const rel = { tag: 'v26.11.25.5', sha: 'a'.repeat(40), npm: '26.1125.5' };
-  const expected = ["mARC v26.11.25.5 (26.1125.5); install","claude plugin list --json","claude plugin marketplace list --json","claude plugin marketplace add NexaDuo/mARC","claude plugin install marc@nexaduo --scope user","claude plugin list --json","codex plugin list --json","codex plugin marketplace list --json","codex plugin marketplace add NexaDuo/mARC","codex plugin add marc@nexaduo","codex plugin list --json"];
+  const rel = { tag: CUR_TAG, sha: 'a'.repeat(40), npm: CUR_NPM };
+  const expected = [`mARC ${CUR_TAG} (${CUR_NPM}); install`,"claude plugin list --json","claude plugin marketplace list --json","claude plugin marketplace add NexaDuo/mARC","claude plugin install marc@nexaduo --scope user","claude plugin list --json","codex plugin list --json","codex plugin marketplace list --json","codex plugin marketplace add NexaDuo/mARC","codex plugin add marc@nexaduo","codex plugin list --json"];
   const argv = ['install', '--dry-run', '--harness', 'claude', '--harness', 'codex'];
   for (const [env, stdoutIsTTY] of [[{}, false], [{ TERM: 'dumb' }, true], [{ NO_COLOR: '1' }, true], [{ FORCE_COLOR: '0' }, true], [{ FORCE_COLOR: '3', NO_COLOR: '1' }, true]]) {
     const logs = [];
@@ -883,7 +887,7 @@ test('plain install --dry-run output is pinned byte for byte, with no escapes', 
 });
 
 test('color mode re-lays out the same text: headings, prompt glyph, remedy block, result table', async () => {
-  const rel = { tag: 'v26.11.25.5', sha: 'a'.repeat(40), npm: '26.1125.5' };
+  const rel = { tag: CUR_TAG, sha: 'a'.repeat(40), npm: CUR_NPM };
   const logs = [];
   const run = async (h, args) => args[1] === 'marketplace' && args[2] === 'list' ? JSON.stringify([{ name: 'nexaduo', source: 'github', repo: 'evil/x' }]) :
     args[1] === 'list' ? '[]' : '';
@@ -891,7 +895,7 @@ test('color mode re-lays out the same text: headings, prompt glyph, remedy block
     { release: rel, run, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false });
   assert.equal(code, 1);
   const text = logs.map(l => l.replace(SGR, ''));
-  assert.equal(text[0], 'mARC v26.11.25.5 (26.1125.5); install');
+  assert.equal(text[0], `mARC ${CUR_TAG} (${CUR_NPM}); install`);
   assert.ok(text.includes('# claude'));
   assert.ok(text.includes('  $ claude plugin list --json'));
   assert.ok(text.some(l => l.startsWith('  +- claude: Manual remedy (review first;')));
@@ -906,7 +910,7 @@ test('color mode re-lays out the same text: headings, prompt glyph, remedy block
 test('doctor rows paint every column: hostile scope and version cannot reach the terminal', async () => {
   const BEL = String.fromCharCode(7), nl = String.fromCharCode(10);
   const hostile = `pro${ESC}[2Jject${ESC}]0;pwned${BEL}`;
-  const rel = { tag: 'v26.11.25.5', sha: 'a'.repeat(40), npm: '26.1125.5' };
+  const rel = { tag: CUR_TAG, sha: 'a'.repeat(40), npm: CUR_NPM };
   const run = async (h, args) => args[1] === 'list' ? JSON.stringify([{ id: 'marc@nexaduo', version: `1.${ESC}[2J${BEL}`, scope: hostile, enabled: true }]) : '[]';
   const logs = [];
   await main(['doctor', '--harness', 'claude'], { release: rel, run, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false });
@@ -935,9 +939,9 @@ test('buffered color mode keeps a line for a harness not registered via begin()'
 });
 
 test('result detail reflects the outcome, not a pre-consent warning; doctor exceptions show the error', async () => {
-  const rel = { tag: 'v26.11.25.5', sha: 'a'.repeat(40), npm: '26.1125.5' };
+  const rel = { tag: CUR_TAG, sha: 'a'.repeat(40), npm: CUR_NPM };
   const cwd = os.tmpdir();
-  const rows = JSON.stringify([{ id: 'marc@nexaduo', version: '26.11.25.5', scope: 'project', projectPath: cwd }]);
+  const rows = JSON.stringify([{ id: 'marc@nexaduo', version: CUR_VERSION, scope: 'project', projectPath: cwd }]);
   let logs = [];
   const opts = { release: rel, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false, cwd };
   assert.equal(await main(['update', '--yes', '--harness', 'claude'], { ...opts, run: async (h, a) => a[1] === 'list' ? rows : '' }), 0);
@@ -1218,7 +1222,7 @@ test('--force --dry-run plan (e) stale match: update lines only, nothing but lis
     'claude plugin marketplace update nexaduo', 'claude plugin update marc@nexaduo --scope user', 'claude plugin list --json']);
 });
 
-test('without --force, mismatch and STALE output is pinned line for line (unchanged from 26.11.25.5)', async () => {
+test('without --force, mismatch and STALE output is pinned line for line (unchanged from the prior release)', async () => {
   const head = ['mARC v26.11.25.2 (26.1125.2); install', 'claude plugin list --json', 'claude plugin marketplace list --json', 'claude plugin marketplace add NexaDuo/mARC',
     'claude plugin install marc@nexaduo --scope user', 'claude plugin list --json'];
   let r = await force(['install', '--yes', '--harness', 'claude'], { claude: { markets: [FOREIGN.claude], plugins: OLD } });

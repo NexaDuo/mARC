@@ -9,6 +9,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / 'VERSION').read_text().strip()  # the single source; never a literal
+TAG = 'v' + VERSION
+NPM = subprocess.run(['node', '--input-type=module', '-e', "import {tagToNpm} from './launcher/lib/version.js'; console.log(tagToNpm(process.argv[1]))", TAG],
+                     cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
 
 
 class NpmReleaseGuards(unittest.TestCase):
@@ -18,8 +22,8 @@ class NpmReleaseGuards(unittest.TestCase):
         self.repo = Path(self.temp.name)
         for name in ['.claude-plugin/marketplace.json', '.github/plugin/marketplace.json',
                      '.agents/plugins/marketplace.json', 'launcher/package.json',
-                     'launcher/release.json', 'launcher/lib/version.js',
-                     'scripts/check_catalog_pointers.py', 'scripts/prepare_npm_release.sh']:
+                     'launcher/release.json', 'launcher/lib/version.js', 'VERSION',
+                     'scripts/bump_version.py', 'scripts/prepare_npm_release.sh']:
             self.copy(name)
         for harness in ['claude-code', 'copilot', 'codex', 'antigravity']:
             self.copy(f'harnesses/{harness}/marc/' + ('.claude-plugin/plugin.json' if harness == 'claude-code' else 'plugin.json'))
@@ -40,7 +44,7 @@ class NpmReleaseGuards(unittest.TestCase):
                                '-c', 'user.email=fixture@localhost', *args], cwd=self.repo,
                               capture_output=True, text=True, check=True).stdout
 
-    def gate(self, sha=None, tag='v26.11.25.5'):
+    def gate(self, sha=None, tag=TAG):
         return subprocess.run(['bash', 'scripts/prepare_npm_release.sh'], cwd=self.repo,
                               env={**os.environ, 'RELEASE_SHA': sha or self.sha, 'RELEASE_TAG': tag},
                               capture_output=True, text=True)
@@ -55,7 +59,7 @@ class NpmReleaseGuards(unittest.TestCase):
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads((self.repo / 'launcher/release.json').read_text()),
-                         {'tag': 'v26.11.25.5', 'npm': '26.1125.5', 'sha': self.sha})
+                         {'tag': TAG, 'npm': NPM, 'sha': self.sha})
 
     def test_reviewed_ancestor_is_allowed(self):
         self.next_commit()
@@ -84,20 +88,20 @@ class NpmReleaseGuards(unittest.TestCase):
 
     def publish_gate(self):
         return subprocess.run(['bash', 'scripts/prepare_npm_release.sh'], cwd=self.repo,
-                              env={**os.environ, 'RELEASE_SHA': self.sha, 'RELEASE_TAG': 'v26.11.25.5',
+                              env={**os.environ, 'RELEASE_SHA': self.sha, 'RELEASE_TAG': TAG,
                                    'REQUIRE_RELEASE_TAG': 'true'}, capture_output=True, text=True)
 
     def test_publish_requires_existing_tag(self):
         self.assertNotEqual(self.publish_gate().returncode, 0)
 
     def test_publish_accepts_annotated_tag_at_target(self):
-        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.25.5', '-m', 'release', self.sha)
+        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', TAG, '-m', 'release', self.sha)
         result = self.publish_gate()
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_publish_rejects_tag_moved_to_different_commit(self):
         later = self.next_commit()
-        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', 'v26.11.25.5', '-m', 'moved', later)
+        self.git('-c', 'tag.gpgsign=false', 'tag', '-a', TAG, '-m', 'moved', later)
         self.git('checkout', '-q', '--detach', self.sha)
         result = self.publish_gate()
         self.assertNotEqual(result.returncode, 0)

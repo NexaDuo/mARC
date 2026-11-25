@@ -10,13 +10,14 @@ if [[ "${REQUIRE_RELEASE_TAG:-false}" == true ]]; then
 fi
 git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
 git merge-base --is-ancestor "$RELEASE_SHA" origin/main || { echo 'Release commit is not an ancestor of origin/main' >&2; exit 1; }
-python3 scripts/check_catalog_pointers.py
+python3 scripts/bump_version.py --check
 node --input-type=module <<'JS'
 import fs from 'node:fs';
 import { tagToNpm } from './launcher/lib/version.js';
 const tag = process.env.RELEASE_TAG;
 const manifest = JSON.parse(fs.readFileSync('harnesses/claude-code/marc/.claude-plugin/plugin.json'));
-if (tag !== `v${manifest.version}`) throw new Error('Tag/manifest mismatch');
+const version = fs.readFileSync('VERSION', 'utf8').trim();
+if (tag !== `v${version}` || tag !== `v${manifest.version}`) throw new Error('Tag/manifest mismatch');
 if (!/^[a-f0-9]{40}$/.test(process.env.RELEASE_SHA)) throw new Error('Invalid release SHA');
 const npm = tagToNpm(tag);
 const pkg = JSON.parse(fs.readFileSync('launcher/package.json'));

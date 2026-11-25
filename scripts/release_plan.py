@@ -14,7 +14,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from check_catalog_pointers import tag_to_npm
+from bump_version import read_version, tag_to_npm
 
 NPM_FLOOR = (26, 11, 25, 2)  # first launcher release; (YY, MM, DD, N)
 
@@ -100,7 +100,7 @@ def json_or_none(url, token=None):
 def main():
     if os.environ['GITHUB_REF'] != 'refs/heads/main':
         raise ValueError('release must run on main')
-    version = json.loads(Path('harnesses/claude-code/marc/.claude-plugin/plugin.json').read_text())['version']
+    version = read_version(Path('.'))  # VERSION is the release trigger; bump_version --check ties the copies to it
     tag = 'v' + version
     npm = tag_to_npm(tag)
     tag_sha = remote_tag_sha(tag)
