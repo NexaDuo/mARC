@@ -342,7 +342,7 @@ const canon = v => Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeo
 const clip = s => s.length > 200 ? `${s.slice(0, 200)}${String.fromCharCode(0x2026)}` : s;
 
 // Found-source text for plans: controls stripped, URL credentials redacted,
-// ?query/#fragment dropped, local paths via displayProject, visibly truncated.
+// ?query values redacted, local paths via displayProject, visibly truncated.
 export function describeForPlan(row, home, platform) {
   const { type, value, hasSource } = sourceParts(row);
   if (!hasSource) {
@@ -365,13 +365,13 @@ async function reinstallTargets(h, opts, rows, cwd, home, platform) {
   if (h !== 'claude') return { targets: [{ disabled: rows.some(r => r.enabled === false) }], skipped };
   for (const row of rows) {
     const scope = row.scope || 'user', disabled = row.enabled === false;
-    if (!SCOPES.includes(scope)) { skipped.push(`skipped unknown scope ${stripControls(scope)}`); continue; }
+    if (!SCOPES.includes(scope)) { skipped.push({ text: `skipped unknown scope ${stripControls(scope)}` }); continue; }
     if (scope === 'user') { add('user', undefined, disabled); continue; }
     try {
       if (typeof row.projectPath !== 'string' || !path.isAbsolute(row.projectPath)) throw new Error('invalid project path');
       if (!(await stat(row.projectPath)).isDirectory()) throw new Error('project path is not a directory');
       add(scope, row.projectPath, disabled);
-    } catch (e) { skipped.push(`skipped ${scope} scope at ${displayProject(row.projectPath, home, platform)}: ${e.message}`); }
+    } catch (e) { skipped.push({ scope, text: `skipped ${scope} scope at ${displayProject(row.projectPath, home, platform)}: ${e.message}` }); }
   }
   if (opts.command === 'install' || opts.scope || !targets.size) {
     const scope = opts.scope || 'user';
@@ -408,6 +408,16 @@ async function forcePreRead(h, { opts, run, cwd, home, platform, release }) {
 const updateArgs = (h, scope) => [['plugin', 'marketplace', h === 'codex' ? 'upgrade' : 'update', 'nexaduo'],
   h === 'claude' ? ['plugin', 'update', ID, ...scopeArgs(scope)] : ['plugin', h === 'codex' ? 'add' : 'update', h === 'codex' ? ID : 'marc']];
 
+const isPresent = (h, rows, t) => h !== 'claude' ? rows.length > 0 : rows.some(r => (r.scope || 'user') === t.scope &&
+  (t.scope === 'user' || (typeof r.projectPath === 'string' && samePath(r.projectPath, t.cwd))));
+// A target is reinstalled when absent or when it is the requested install scope;
+// a survivor in any other scope is updated instead.
+const bindModes = (h, rows, targets, opts) => targets.map(t => ({ t, install: !isPresent(h, rows, t) ||
+  (opts.command === 'install' && (h !== 'claude' || t.scope === (opts.scope || 'user'))) }));
+const bindCmds = (h, xs, opts, withMarket = true) => [
+  ...(withMarket && opts.command === 'update' && xs.some(x => !x.install) ? [`${h} ${updateArgs(h, 'user')[0].join(' ')}`] : []),
+  ...xs.map(x => `${h} ${(x.install ? installArgs(h, x.t.scope) : updateArgs(h, x.t.scope)[1]).join(' ')}`)];
+
 // Plan lines that replace a harness's static plan() lines.
 function forceLines(h, f, opts, home, platform) {
   const cmd = text => ({ role: 'cmd', text });
@@ -415,11 +425,21 @@ function forceLines(h, f, opts, home, platform) {
   if (f.action === 'update') return [...updateArgs(h, opts.scope || 'user').map(a => cmd(`${h} ${a.join(' ')}`)), cmd(`${h} ${listArgs(h).join(' ')}`)];
   const L = [{ role: 'warn', text: `${h}: --force will REMOVE marketplace nexaduo (found ${f.desc}; reason: ${f.cls.reason})` },
     cmd(`${h} ${REMOVE.join(' ')}`), cmd(`${h} ${ADD.join(' ')}`)];
-  for (const t of f.targets) L.push(cmd(`${h} ${installArgs(h, t.scope).join(' ')}${t.cwd ? `   (cwd ${displayProject(t.cwd, home, platform)}, if missing after add)` : ''}`));
+  const modes = bindModes(h, f.rows ?? [], f.targets, opts);
+  if (opts.command === 'update' && modes.some(x => !x.install)) L.push(cmd(`${h} ${updateArgs(h, 'user')[0].join(' ')}`));
+  for (const { t, install } of modes) {
+    const where = t.cwd ? `cwd ${displayProject(t.cwd, home, platform)}` : '';
+    const inst = `${h} ${installArgs(h, t.scope).join(' ')}`;
+    if (install) L.push(cmd(`${inst}${where ? `   (${where}, if missing after add)` : ''}`));
+    else {
+      L.push(cmd(`${h} ${updateArgs(h, t.scope)[1].join(' ')}   (${where ? `${where}; ` : ''}if marc is still installed after the add)`));
+      L.push(cmd(`${inst}   (${where ? `${where}; ` : ''}instead, if marc is gone after the add)`));
+    }
+  }
   for (const t of f.targets) if (t.disabled && h === 'claude') L.push(cmd(`${h} plugin disable ${ID} ${scopeArgs(t.scope).join(' ')}`));
   for (const t of f.targets) if (t.cwd) L.push({ role: 'warn', text: `Claude may edit ${displayProject(path.join(t.cwd, '.claude', settingsFile(t.scope)), home, platform)} (${t.scope} scope)` });
   if (h !== 'claude' && f.targets.some(t => t.disabled)) L.push({ role: 'warn', text: `${h}: marc was disabled; re-disable it after the reinstall` });
-  for (const s of f.skipped) L.push({ role: 'warn', text: `${h}: warning: ${s}` });
+  for (const s of f.skipped) L.push({ role: 'warn', text: `${h}: warning: ${s.text}` });
   L.push(cmd(`${h} ${listArgs(h).join(' ')}`));
   return L;
 }
@@ -437,27 +457,41 @@ async function forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, plat
   const installs = ts => ts.map(t => `${h} ${installArgs(h, t.scope).join(' ')}`);
   let retry = [`${h} ${ADD.join(' ')}`, ...installs(f.targets)];
   let title = `${h}: nexaduo is now unregistered; retry (review first):`;
+  // Commands that could not be completed (skipped scope, failed re-disable).
+  const leftover = f.skipped.filter(s => s.scope).map(s => `${h} ${installArgs(h, s.scope).join(' ')}`);
+  // Nothing installs or updates until nexaduo is proven to be the one NexaDuo/mARC row.
+  const prove = (markets, rows, when) => {
+    const mk = enrichMarketplaces(h, markets, rows);
+    const cls = mk.length === 1 ? classifyMarketplace(h, mk[0]) : { kind: 'many', reason: `${mk.length} registrations` };
+    if (cls.kind === 'match') return;
+    title = `${h}: nexaduo is not registered from ${SLUG} ${when}; retry (review first):`;
+    retry = [`${h} ${REMOVE.join(' ')}`, `${h} ${ADD.join(' ')}`, ...installs(f.targets)];
+    throw new Error(`nexaduo is not a verified ${SLUG} registration ${when} (${cls.reason})`);
+  };
   try {
     if ((await listed()).length) throw new Error('nexaduo is still listed after marketplace remove; not adding');
     try { await run(h, ADD); } catch { throw new Error('nexaduo is now unregistered: marketplace add failed'); }
-    if (!(await listed()).length) throw new Error('nexaduo is now unregistered: marketplace add failed');
+    const added = await listed();
+    if (!added.length) throw new Error('nexaduo is now unregistered: marketplace add failed');
+    let rows = parsePlugins(h, await run(h, listArgs(h)));
+    prove(added, rows, 'after add');
     title = `${h}: failed after re-registration; retry (review first):`;
     retry = installs(f.targets);
-    let rows = parsePlugins(h, await run(h, listArgs(h)));
-    const present = t => h !== 'claude' ? rows.length > 0 : rows.some(r => (r.scope || 'user') === t.scope &&
-      (t.scope === 'user' || (typeof r.projectPath === 'string' && samePath(r.projectPath, t.cwd))));
-    const requested = t => h !== 'claude' || t.scope === (opts.scope || 'user');
     // Installs that survived the remove still point at the old source: the
     // requested install scope is re-run, surviving update scopes are updated.
-    const todo = f.targets.map(t => ({ t, install: !present(t) || (opts.command === 'install' && requested(t)) }));
+    const todo = bindModes(h, rows, f.targets, opts);
     let failed = f.skipped.length > 0;
     const ready = [];
     for (const x of todo) {
       try {
         if (x.t.cwd && !(await stat(x.t.cwd)).isDirectory()) throw new Error('project path is not a directory');
         ready.push(x);
-      } catch (e) { out.line(h, 'warn', `${h}: warning: skipped ${x.t.scope} scope at ${displayProject(x.t.cwd, home, platform)}: ${e.message}`); failed = true; }
+      } catch (e) {
+        out.line(h, 'warn', `${h}: warning: skipped ${x.t.scope} scope at ${displayProject(x.t.cwd, home, platform)}: ${e.message}`);
+        failed = true; leftover.push(...bindCmds(h, [x], opts, false));
+      }
     }
+    retry = bindCmds(h, ready, opts);
     const options = t => t.cwd ? { cwd: t.cwd } : undefined;
     if (opts.command === 'update' && ready.some(x => !x.install)) {
       try { await run(h, updateArgs(h, opts.scope || 'user')[0]); } catch (e) { throw new Error(`marketplace update failed (${e.message}); the marketplace is registered`); }
@@ -465,23 +499,26 @@ async function forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, plat
     for (const [i, { t, install }] of ready.entries()) {
       const argv = install ? installArgs(h, t.scope) : updateArgs(h, t.scope)[1];
       try { await run(h, argv, options(t)); } catch (e) {
-        retry = installs(ready.slice(i).map(x => x.t));
+        retry = bindCmds(h, ready.slice(i), opts);
         throw new Error(`${install ? 'reinstall' : 'update'} of ${ID} failed (${e.message}); the marketplace is registered`);
       }
       if (install && t.disabled && h === 'claude') {
         try { await run(h, ['plugin', 'disable', ID, ...scopeArgs(t.scope)], options(t)); } catch (e) {
-          out.line(h, 'warn', `${h}: warning: could not re-disable ${t.scope} scope: ${e.message}`); failed = true;
+          out.line(h, 'warn', `${h}: warning: could not re-disable ${t.scope} scope: ${e.message}`);
+          failed = true; leftover.push(`${h} plugin disable ${ID} ${scopeArgs(t.scope).join(' ')}`);
         }
       }
     }
     rows = parsePlugins(h, await run(h, listArgs(h)));
+    prove(await listed(), rows, 'after the reinstall');
     const after = opts.command === 'install' || opts.scope ? installedRows(h, rows, opts.scope || 'user', cwd) : rows;
     if (!after.length) throw new Error('marc is not listed after install');
+    if (leftover.length) out.remedy(h, `${h}: incomplete; run these manually, in the matching project directory for project/local scopes (review first):`, [...new Set(leftover)]);
     return { outcome: report(after), failed };
   } catch (e) {
     ctx.aborted = true;
     out.line(h, 'warn', `${h}: previous registration was: ${f.desc}`);
-    out.remedy(h, title, retry);
+    out.remedy(h, title, [...new Set([...retry, ...leftover])]);
     throw e;
   }
 }

@@ -1099,7 +1099,7 @@ function forceFake(calls, init, hooks = {}) {
     if (args[1] === 'list') return fmtP(h, s.plugins);
     if (key === 'marketplace list --json') { s.reads++; return fmtM(h, hooks.list?.(h, s.reads, s.markets) ?? s.markets); }
     if (key.startsWith('marketplace remove')) { if (!hooks.keep) s.markets = []; if (!hooks.survive) s.plugins = []; return ''; }
-    if (key.startsWith('marketplace add')) { s.markets = [GOOD[h]]; return ''; }
+    if (key.startsWith('marketplace add')) { s.markets = hooks.add?.(h) ?? [GOOD[h]]; return ''; }
     if (args[1] === 'update' && args[2] !== 'nexaduo' && args[1] !== 'marketplace') s.plugins.forEach(p => { p.version = '26.11.25.2'; });
     if (['install', 'add'].includes(args[1]) && args[2] === 'marc@nexaduo') {
       s.plugins = s.plugins.filter(p => (p.scope ?? 'user') !== (args[4] ?? 'user') && h === 'claude');
@@ -1251,8 +1251,11 @@ test('--force plan: Claude reinstall per pre-read scope, project cwd shown, disa
   assert.deepEqual(r.logs.slice(r.logs.findIndex(s => s.includes('--force will REMOVE'))), [
     'claude: --force will REMOVE marketplace nexaduo (found sourceType: github, source: Fork/mARC; reason: foreign source)',
     'claude plugin marketplace remove nexaduo', 'claude plugin marketplace add NexaDuo/mARC',
-    'claude plugin install marc@nexaduo --scope user',
-    `claude plugin install marc@nexaduo --scope project   (cwd ${rel}, if missing after add)`,
+    'claude plugin marketplace update nexaduo',
+    'claude plugin update marc@nexaduo --scope user   (if marc is still installed after the add)',
+    'claude plugin install marc@nexaduo --scope user   (instead, if marc is gone after the add)',
+    `claude plugin update marc@nexaduo --scope project   (cwd ${rel}; if marc is still installed after the add)`,
+    `claude plugin install marc@nexaduo --scope project   (cwd ${rel}; instead, if marc is gone after the add)`,
     'claude plugin disable marc@nexaduo --scope project',
     `Claude may edit ${displayProject(path.join(dir, '.claude', 'settings.json'), path.dirname(dir))} (project scope)`,
     'claude plugin list --json']);
@@ -1358,8 +1361,8 @@ test('--force plan display: credentials redacted, controls stripped, query/fragm
   const row = url => ({ name: 'nexaduo', source: 'git', url });
   const plan = async url => (await force(['install', '--force', '--force-local', '--dry-run', '--harness', 'claude'], { claude: { markets: [row(url)], plugins: [] } })).logs.find(s => s.includes('--force will REMOVE'));
   const cred = await plan('https://user:s3cret@github.com/Fork/mARC.git?token=abc#frag');
-  assert.ok(cred.includes('source: https://***@github.com/Fork/mARC.git;'), cred);
-  assert.ok(!/s3cret|token|frag/.test(cred));
+  assert.ok(cred.includes('source: https://***@github.com/Fork/mARC.git?token=***#frag;'), cred);
+  assert.ok(!/s3cret|abc/.test(cred));
   const ctl = await plan('https://github.com/Fork/m\u001b[31mA\u202eR\rC\n.git');
   assert.ok(ctl.includes('https://github.com/Fork/m'), ctl);
   assert.ok(!hasControl(ctl), ctl);
@@ -1438,13 +1441,13 @@ for (const h of ['claude', 'codex']) for (const command of ['install', 'update']
 test('SEC-2: one redaction covers describeSource, the non-force refusal, the result table and the force plan', async () => {
   const url = 'https://user:tok@github.com/x?token=abc';
   const row = { name: 'nexaduo', source: 'git', url };
-  assert.equal(redactSource(`${url}#frag\u001b[31m`), 'https://***@github.com/x');
-  assert.equal(describeSource(row), 'sourceType: git, source: https://***@github.com/x');
+  assert.equal(redactSource(`${url}#v1`), 'https://***@github.com/x?token=***#v1');
+  assert.equal(describeSource(row), 'sourceType: git, source: https://***@github.com/x?token=***');
   let r = await force(['install', '--yes', '--harness', 'claude'], { claude: { markets: [row], plugins: OLD } });
-  for (const s of [...r.logs]) assert.ok(!/tok|token=abc/.test(s), s);
+  for (const s of [...r.logs]) assert.ok(!/:tok@|token=abc/.test(s), s);
   assert.ok(r.logs.some(s => s.includes('https://***@github.com/x')));
   r = await force(['install', '--force', '--force-local', '--yes', '--harness', 'claude'], { claude: { markets: [row], plugins: OLD } }, { fail: (h, a) => a[2] === 'add' });
-  for (const s of r.logs) assert.ok(!/tok|token=abc/.test(s), s);
+  for (const s of r.logs) assert.ok(!/:tok@|token=abc/.test(s), s);
 });
 
 test('REV-2: the skip warning prints the project path home-relative', async t => {
@@ -1471,4 +1474,71 @@ test('REV-5: two raw sources that sanitize identically still abort after consent
     { list: (h, n, m) => n >= 2 ? [b] : m });
   assert.equal(r.code, 1); assert.deepEqual(wargs(r.calls), []);
   assert.ok(r.logs.includes('claude: registration changed since the plan was shown; nothing removed'));
+});
+
+const EVIL = { name: 'nexaduo', source: 'github', repo: 'Evil/x' };
+const noInstall = c => wargs(c).filter(s => !/marketplace (remove|add)/.test(s));
+
+test('SEC-3: an add that leaves nexaduo on a foreign source aborts before any install or update', async () => {
+  for (const command of ['install', 'update']) {
+    const init = { claude: { markets: [FOREIGN.claude], plugins: OLD }, codex: { markets: [FOREIGN.codex], plugins: [] } };
+    const r = await force([command, '--force', '--yes', '--harness', 'claude', '--harness', 'codex'], init, { add: () => [EVIL] });
+    assert.equal(r.code, 1, r.logs.join('\n'));
+    assert.deepEqual(wargs(r.calls), ['claude plugin marketplace remove nexaduo', 'claude plugin marketplace add NexaDuo/mARC']);
+    assert.deepEqual(noInstall(r.calls), []);
+    assert.ok(r.logs.includes('claude: FAILED') && r.logs.some(s => /not a verified NexaDuo\/mARC registration after add/.test(s)), r.logs.join('\n'));
+    assert.ok(r.logs.includes('claude: previous registration was: sourceType: github, source: Fork/mARC'));
+    assert.ok(r.logs.includes('claude plugin marketplace remove nexaduo') && r.logs.includes('claude plugin install marc@nexaduo --scope user'));
+    assert.ok(r.logs.includes('codex: skipped: earlier forced re-registration failed; nothing removed'));
+  }
+});
+
+test('SEC-3: nexaduo flipping to a foreign source after the reinstall is FAILED, not OK', async () => {
+  const r = await force(['install', '--force', '--yes', '--harness', 'claude'], { claude: { markets: [FOREIGN.claude], plugins: OLD } },
+    { list: (h, n, m) => n >= 5 ? [EVIL] : m });
+  assert.equal(r.code, 1, r.logs.join('\n'));
+  assert.ok(r.logs.includes('claude: FAILED') && !r.logs.includes('claude: OK'), r.logs.join('\n'));
+  assert.ok(r.logs.some(s => /not a verified NexaDuo\/mARC registration after the reinstall/.test(s)), r.logs.join('\n'));
+});
+
+test('REV-6: redaction keeps #ref and query structure; only credentials and query values change', async () => {
+  assert.equal(redactSource('GitHub: NexaDuo/mARC#v1'), 'GitHub: NexaDuo/mARC#v1');
+  assert.equal(redactSource('https://github.com/NexaDuo/mARC.git#v1'), 'https://github.com/NexaDuo/mARC.git#v1');
+  assert.equal(redactSource('https://user:tok@github.com/x?token=abc#v1'), 'https://***@github.com/x?token=***#v1');
+  assert.equal(redactSource('https://github.com/x?a=1&b=2&flag#v1'), 'https://github.com/x?a=***&b=***&flag#v1');
+  assert.equal(redactSource('/home/u/dir#1?x=y'), '/home/u/dir#1?x=y');
+  const pinned = { name: 'nexaduo', source: 'GitHub: NexaDuo/mARC#v1' };
+  assert.ok(describeSource(pinned).endsWith('source: GitHub: NexaDuo/mARC#v1'));
+  const codexPinned = { name: 'nexaduo', root: '/x', marketplaceSource: { sourceType: 'git', source: 'https://github.com/NexaDuo/mARC.git#v1' } };
+  assert.equal(describeSource(codexPinned), 'sourceType: git, source: https://github.com/NexaDuo/mARC.git#v1');
+  for (const [h, row] of [['copilot', pinned], ['codex', codexPinned]]) {
+    const r = await force(['install', '--yes', '--harness', h], { [h]: { markets: [row], plugins: [] } });
+    assert.ok(r.logs.some(s => s.includes('#v1') && s.includes('registration preserved')), r.logs.join('\n'));
+  }
+});
+
+test('redaction: scp-style userinfo is masked, the conventional git user is not', () => {
+  assert.equal(redactSource('tok@github.com:Fork/m.git'), '***@github.com:Fork/m.git');
+  assert.equal(redactSource('user:tok@github.com:Fork/m.git'.replace('user:tok', 'ghp_abc')), '***@github.com:Fork/m.git');
+  assert.equal(redactSource('git@github.com:Fork/mARC.git'), 'git@github.com:Fork/mARC.git');
+  assert.equal(redactSource('ssh://git@host/Fork/m.git'), 'ssh://git@host/Fork/m.git');
+});
+
+test('REV-7: a survivor update failure prints the matching update commands in the retry block', async () => {
+  const r = await force(['update', '--force', '--yes', '--harness', 'claude'], { claude: { markets: [FOREIGN.claude], plugins: OLD } },
+    { survive: true, fail: (h, a) => a[1] === 'update' && a[2] === 'marc@nexaduo' });
+  assert.equal(r.code, 1, r.logs.join('\n'));
+  assert.ok(r.logs.includes('claude plugin marketplace update nexaduo') && r.logs.includes('claude plugin update marc@nexaduo --scope user'), r.logs.join('\n'));
+  assert.ok(!r.logs.includes('claude plugin install marc@nexaduo --scope user'), 'a survivor is retried with update, not install');
+});
+
+test('SEC-4: a skipped scope and a failed re-disable appear in the retry block without aborting later harnesses', async () => {
+  const plugins = [{ id: 'marc@nexaduo', version: '26.11.14', scope: 'user', enabled: false }, { id: 'marc@nexaduo', version: '26.11.14', scope: 'project', projectPath: 'relative/dir', enabled: true }];
+  const init = { claude: { markets: [FOREIGN.claude], plugins }, codex: { markets: [FOREIGN.codex], plugins: [] } };
+  const r = await force(['install', '--force', '--yes', '--harness', 'claude', '--harness', 'codex'], init, { fail: (h, a) => a[1] === 'disable' });
+  assert.equal(r.code, 1, r.logs.join('\n'));
+  assert.ok(r.logs.includes('claude: FAILED'));
+  assert.ok(r.logs.includes('claude plugin install marc@nexaduo --scope project'), r.logs.join('\n'));
+  assert.ok(r.logs.includes('claude plugin disable marc@nexaduo --scope user'), r.logs.join('\n'));
+  assert.ok(wargs(r.calls).includes('codex plugin marketplace remove nexaduo'), 'no global abort');
 });

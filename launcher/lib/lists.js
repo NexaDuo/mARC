@@ -120,12 +120,20 @@ export function enrichMarketplaces(harness, markets, rows) {
 // Human-readable "sourceType: X, source: Y" for a marketplace row, with control
 // characters stripped (native CLI output is untrusted text).
 // One redaction for every place a native source value is printed: controls
-// stripped, URL userinfo replaced, query/fragment dropped. Local paths are
-// kept as-is (a "#" or "?" can be part of a directory name).
+// stripped, URL/scp userinfo replaced, query VALUES replaced. Everything else,
+// including the #fragment (a pin), is kept verbatim. Local paths are kept
+// as-is (a "#" or "?" can be part of a directory name).
 export function redactSource(value) {
   const v = String(value ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '');
   if (looksLocal(v)) return v;
-  return v.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1***@').replace(/[?#].*$/, '');
+  const hash = v.indexOf('#');
+  let head = hash < 0 ? v : v.slice(0, hash);
+  const frag = hash < 0 ? '' : v.slice(hash);
+  head = head.replace(/^([a-z][a-z0-9+.-]*:\/\/)(?!git@)[^/]*@/i, '$1***@')
+    // scp-style tok@host:path; the conventional "git" user is not a credential
+    .replace(/^(?!git@)(?![a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+@(?=[\w.-]+:)/i, '***@')
+    .replace(/([?&;][^=&;]*=)[^&;]*/g, '$1***');
+  return head + frag;
 }
 
 // Human-readable "sourceType: X, source: Y" for a marketplace row (native CLI
