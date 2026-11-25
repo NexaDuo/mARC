@@ -80,9 +80,13 @@ work or requests a blocker; it does not manufacture a new task. Escalate after
 the configured acknowledgment deadline, without repeatedly injecting text.
 
 <!-- rules:origin-required -->
-After a team answers "no eligible item" (threshold from local policy), suppress
-further idle reminders until its ready-queue state changes, then send one reminder
-citing the change. Change detection belongs to the consumer's opted-in watcher.
+After a team gives consecutive "no eligible item" answers (count from local
+policy), suppress further idle reminders until its ready-queue state changes, then
+send one reminder citing the change. Suppression never covers blockers, owner
+decisions or acknowledgment-deadline escalation. Change detection belongs to the
+consumer's opted-in watcher; without a working check (no watcher, failed check),
+treat queue state as unknown per Prerequisite failures and re-check on the
+director's next ready-queue read instead of suppressing indefinitely.
 (origin: #415 · 2026-11-24)
 <!-- /rules:origin-required -->
 
@@ -139,15 +143,21 @@ invent a cron API in a harness that lacks one. Without scheduling support,
 report that gap and perform the currently requested review only. Compare fresh
 metrics with the prior record: quality/rework, throughput, tokens/cache, quota,
 CI waits and resource pressure. Apply only delegated adjustments; plan, cost or
-infrastructure authority outside that scope stays with the user. Include a
-capacity recommendation (add or pause a team) from the compared metrics; the user
-decides, and ownership changes follow the concurrency protocol.
+infrastructure authority outside that scope stays with the user.
 
 <!-- rules:origin-required -->
-Within delegated configuration authority and where the harness allows, disable
-connectors, MCP servers or synced skills a team does not use, only after evidence
-of non-use (telemetry or transcripts). Change team-local uncommitted settings,
-show the change before writing it, and confirm the effect next session.
+Include a capacity recommendation (add or pause a team) from the compared metrics;
+the user decides, and ownership changes follow the concurrency protocol.
+(origin: #415 · 2026-11-24)
+<!-- /rules:origin-required -->
+
+<!-- rules:origin-required -->
+Where the harness allows, disable connectors, MCP servers or synced skills a team
+does not use, only after evidence of non-use (telemetry or transcripts) and only
+when the user's mandate covers this change; otherwise it is an Owner-only decision.
+Get confirmation (showing isn't consent), record the prior value for rollback and
+confirm the effect next session. Change only team-local uncommitted settings, and
+never prune review, security or governance tooling even if seldom used.
 (origin: #415 · 2026-11-24)
 <!-- /rules:origin-required -->
 
