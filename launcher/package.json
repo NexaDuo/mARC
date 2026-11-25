@@ -1,11 +1,11 @@
 {
   "name": "@nexaduo/marc",
-  "version": "26.1125.2",
+  "version": "26.1125.3",
   "description": "Install and update mARC through native harness plugin CLIs",
   "type": "module",
   "bin": {"marc": "bin/marc.js"},
   "engines": {"node": ">=20"},
-  "files": ["bin/", "lib/", "release.json", "LICENSE"],
+  "files": ["bin/", "lib/", "release.json", "LICENSE", "README.md"],
   "repository": {"type": "git", "url": "git+https://github.com/NexaDuo/mARC.git", "directory": "launcher"},
   "license": "MIT"
 }

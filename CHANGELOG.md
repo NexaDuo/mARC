@@ -8,6 +8,18 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.25.3] - 2026-11-25
+
+### Added
+- `launcher/README.md`, shipped in the npm package, so the npmjs.com page for
+  `@nexaduo/marc` shows usage, flags, guarantees and the version mapping. The
+  package `files` allowlist and its test now include `README.md`.
+
+### Changed
+- All four harnesses and the catalog pointers move to `v26.11.25.3` (npm
+  `26.1125.3`). This is the first release published entirely by the
+  `Release` workflow with npm trusted publishing and provenance.
+
 ## [26.11.25.2] - 2026-11-25
 
 ### Added

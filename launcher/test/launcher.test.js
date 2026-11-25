@@ -317,7 +317,7 @@ test('package contract and exact npm pack file list', async () => {
   const packed = JSON.parse(output);
   const files = Object.values(packed)[0].files.map(f => f.path).sort();
   const lib = (await readdir(path.join(ROOT, 'launcher/lib'))).map(f => `lib/${f}`);
-  assert.deepEqual(files, ['LICENSE', 'package.json', 'release.json', 'bin/marc.js', ...lib].sort());
+  assert.deepEqual(files, ['LICENSE', 'README.md', 'package.json', 'release.json', 'bin/marc.js', ...lib].sort());
 });
 test('launcher source never requests a shell or removes a marketplace', async () => {
   for (const f of await readdir(path.join(ROOT, 'launcher/lib'))) {
