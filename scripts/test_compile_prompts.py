@@ -84,6 +84,51 @@ class CompilePromptsCli(unittest.TestCase):
         self.assertEqual(before, _snapshot(self.tmp))
 
 
+    def test_check_flags_lost_exec_bit(self):
+        with open(os.path.join(self.tmp, "core", "agents", "x.md"), "w") as f:
+            f.write("hello\n")
+        os.makedirs(os.path.join(self.tmp, "core", "scripts"))
+        s = os.path.join(self.tmp, "core", "scripts", "s.sh")
+        with open(s, "w") as f:
+            f.write("echo\n")
+        os.chmod(s, 0o755)
+        run(self.script)
+        out = os.path.join(self.marc, "scripts", "s.sh")
+        self.assertTrue(os.stat(out).st_mode & 0o111)
+        self.assertEqual(run(self.script, "--check").returncode, 0)
+        os.chmod(out, 0o644)
+        r = run(self.script, "--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("scripts/s.sh (differs)", r.stderr)
+
+    def test_tree_files_records_symlinked_dir(self):
+        sys.path.insert(0, os.path.dirname(SCRIPT))
+        try:
+            import compile_prompts
+        finally:
+            sys.path.pop(0)
+        os.symlink(self.tmp, os.path.join(self.marc, "linkdir"))
+        entry = compile_prompts._tree_files(self.marc)["linkdir"]
+        self.assertEqual(entry, ("link", self.tmp, False))
+
+    def test_check_ignores_gitignored_but_reports_untracked(self):
+        os.makedirs(os.path.join(self.tmp, "core", "scripts"))
+        with open(os.path.join(self.tmp, "core", "scripts", "s.sh"), "w") as f:
+            f.write("echo\n")
+        run(self.script)
+        git = ["git", "-C", self.tmp]
+        subprocess.run(git + ["init", "-q"], check=True)
+        with open(os.path.join(self.tmp, ".gitignore"), "w") as f:
+            f.write("*.local\n")
+        for n in ("a.local", "b.txt"):
+            with open(os.path.join(self.marc, "scripts", n), "w") as f:
+                f.write("x\n")
+        r = run(self.script, "--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("a.local", r.stderr)
+        self.assertIn("b.txt (stale)", r.stderr)
+
+
 class RealTree(unittest.TestCase):
     def test_check_passes_on_committed_tree(self):
         r = run(SCRIPT, "--check")

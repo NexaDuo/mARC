@@ -115,8 +115,12 @@ before searching — an unfocused search burns the timebox on noise.
   running an unfamiliar command or subcommand, learn its write behavior from its
   docs or source; `--help` is not guaranteed safe (a build script once ran a full
   rewrite on `--help`), so read first, run second. If a mutation happens anyway:
-  back up or restore the original, verify the restoration (`diff`/`git status`),
-  and disclose the whole sequence in your deliverable. (origin: #232 · 2026-11-25)
+  restore only the files you changed, to their exact prior content (your own
+  backup, or `git show HEAD:<path>` for that path alone), verify with
+  `diff`/`git status`, and disclose the whole sequence in your deliverable. Never
+  run a tree-wide reset/checkout/clean/stash: it can destroy the operator's
+  uncommitted work. If exact restore is not possible, stop and report.
+  (origin: #232 · 2026-11-25) (origin: #418 · 2026-11-25)
 <!-- /rules:origin-required -->
 
 ## Deliverable: ONE structured brief

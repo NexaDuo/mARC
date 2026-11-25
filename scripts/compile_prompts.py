@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -701,20 +702,41 @@ def compile_all(base_dir):
 
 
 def _tree_files(root):
-    """{relative path: bytes, or link target for a symlink} under `root`,
-    ignoring generated __pycache__."""
+    """{relative path: (kind, content, executable)} under `root`: bytes for a
+    file, link target for a symlink (file or directory, recorded not
+    followed). Ignores generated __pycache__."""
     out = {}
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        keep = []
+        for d in dirnames:
+            path = os.path.join(dirpath, d)
+            if os.path.islink(path):
+                out[os.path.relpath(path, root)] = ("link", os.readlink(path), False)
+            elif d != "__pycache__":
+                keep.append(d)
+        dirnames[:] = keep
         for name in filenames:
             path = os.path.join(dirpath, name)
             rel = os.path.relpath(path, root)
             if os.path.islink(path):
-                out[rel] = ("link", os.readlink(path))
+                out[rel] = ("link", os.readlink(path), False)
             else:
                 with open(path, "rb") as f:
-                    out[rel] = ("file", f.read())
+                    out[rel] = ("file", f.read(), bool(os.stat(path).st_mode & 0o111))
     return out
+
+
+def _git_ignored(base_dir):
+    """Set of git-ignored paths (relative to base_dir) under harnesses/, or an
+    empty set when git is unavailable / not a checkout."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", base_dir, "ls-files", "--others", "--ignored",
+             "--exclude-standard", "-z", "--", "harnesses"],
+            capture_output=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return set()
+    return {os.path.normpath(p) for p in r.stdout.decode("utf-8", "replace").split("\0") if p}
 
 
 def check_all(base_dir):
@@ -730,6 +752,7 @@ def check_all(base_dir):
                                 ignore=shutil.ignore_patterns("__pycache__"))
         with contextlib.redirect_stdout(io.StringIO()):
             compile_all(tmp)
+        ignored = _git_ignored(base_dir)
         diffs = []
         for harness in sorted(os.listdir(harnesses_dir)):
             if not os.path.exists(os.path.join(harnesses_dir, harness, "marc", "compile.json")):
@@ -737,6 +760,9 @@ def check_all(base_dir):
             rel_root = os.path.join("harnesses", harness, "marc")
             have = _tree_files(os.path.join(base_dir, rel_root))
             want = _tree_files(os.path.join(tmp, rel_root))
+            # git-ignored local files (not in what core/ produces) are not drift
+            have = {k: v for k, v in have.items()
+                    if k in want or os.path.join(rel_root, k) not in ignored}
             for rel in sorted(set(have) | set(want)):
                 if have.get(rel) != want.get(rel):
                     kind = "missing" if rel not in have else "stale" if rel not in want else "differs"
