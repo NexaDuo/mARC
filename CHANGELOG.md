@@ -45,10 +45,10 @@ date whose `YY.M.D` is already taken.
 - All four harnesses and the catalog pointers move to `v26.11.25.3` (npm
   `26.1125.3`). This is the first release published entirely by the
   `Release` workflow with npm trusted publishing and provenance.
-- Addendum (26.11.25.4): that claim did not hold. `v26.11.25.3` was tagged, but its
-  npm publish failed (E404 on PUT: the trusted publisher was not yet bound, #426),
-  so the first publish failed. It was completed by re-running the `Release` job
-  after the trusted publisher was bound.
+- Addendum (26.11.25.4): the first publish of `v26.11.25.3` failed (E404 on
+  PUT, because the trusted publisher was not yet bound, #426). After the
+  binding, a re-run of the `Release` job published npm `26.1125.3` with
+  provenance.
 
 ## [26.11.25.2] - 2026-11-25
 

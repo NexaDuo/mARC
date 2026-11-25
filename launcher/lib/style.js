@@ -22,7 +22,7 @@ const ROLES = {
 
 // C0 (incl. ESC, TAB, CR, LF), DEL, C1, and bidi/invisible format controls.
 // eslint-disable-next-line no-control-regex
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g;
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
 export const stripControls = text => String(text ?? '').replace(UNSAFE, '');
 
 const ON = v => v !== undefined && v !== '' && v !== '0' && v !== 'false';
