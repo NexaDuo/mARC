@@ -36,6 +36,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -51,6 +52,9 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # <harness>/<session-id>: harness starts with a letter; the session id is at
 # least 3 chars. Rejects sort-gaming values such as `0/0`, `/x`, `a/`.
 OPERATOR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]{2,}$")
+# A heading that LOOKS like a claim/withdraw but is not the exact header (#419):
+# looser than counting, so a trusted near-miss is surfaced, never silently ignored.
+_NEAR_RE = re.compile(r"(?:marc[^a-z0-9]*@?|@)techlead[^a-z0-9]*(claim|withdraw)", re.ASCII)
 _FIELD_RE = re.compile(r"^\s*(operator|issue|claimed-at)\s*:\s*(.*?)\s*$", re.IGNORECASE)
 
 Runner = Callable[[list], str]
@@ -79,6 +83,7 @@ class Marker:
     trusted: bool
     well_formed: bool
     reason: str = ""
+    near_miss: bool = False
 
 
 @dataclass
@@ -138,7 +143,17 @@ def parse_marker(comment: Comment, issue_number: int) -> Optional[Marker]:
     elif first in WITHDRAW_MARKERS:
         kind = "withdraw"
     else:
-        return None
+        norm = unicodedata.normalize("NFKC", first)
+        norm = re.sub(r"[`*_~\\\u200b-\u200d\u2060\ufeff\u00ad]", "", norm).lower()
+        m = _NEAR_RE.match(norm.lstrip("#> -+=|\t "))
+        if not m:
+            return None
+        near = Marker(kind=m.group(1), index=comment.index, operator="", issue="", claimed_at="",
+                      login=comment.login, association=comment.association, url=comment.url,
+                      trusted=comment.association in TRUSTED_ASSOCIATIONS, well_formed=False,
+                      reason=f"near-miss {m.group(1)} header {first[:60]!r} (not exactly the marker grammar)",
+                      near_miss=True)
+        return near
     fields: dict[str, str] = {}
     for line in lines[1:]:
         m = _FIELD_RE.match(line)
@@ -172,11 +187,13 @@ def _brief(m: Marker) -> dict:
 def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> ClaimStatus:
     """Pure decision function over one issue's comments."""
     markers = [m for m in (parse_marker(c, issue_number) for c in normalize_comments(payload)) if m]
+    suspected_near = [m for m in markers if m.near_miss and m.trusted]
+    markers = [m for m in markers if not m.near_miss]
     claims = [m for m in markers if m.kind == "claim"]
     withdrawals = [m for m in markers if m.kind == "withdraw"]
     claim_ops = {c.operator.casefold() for c in claims if c.operator}
 
-    suspected: list[Marker] = []
+    suspected: list[Marker] = list(suspected_near)
     ignored: list[Marker] = []
     valid_claims: list[Marker] = []
     for c in claims:

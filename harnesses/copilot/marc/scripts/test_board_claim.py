@@ -478,6 +478,32 @@ class MentionFreeMarkers(unittest.TestCase):
                  view_comment(claim("claude-code/aaa", marker=self.NC), idx=1))
         self.assertEqual(bc.evaluate(p, 226).owner, "claude-code/aaa")
 
+    def test_trusted_near_miss_is_suspected_never_ignored(self):
+        for m in ["## marc techlead claim", "## marc-techlead claim", "## marc::techlead claim",
+                  "## marc:@techlead claim", "## Marc Techlead Claim", "## marc_techlead claim",
+                  "## marc-techlead withdraw", "## @Techlead claim", "## `@techlead` claim"]:
+            with self.subTest(m=m):
+                st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=m))), 226)
+                self.assertFalse(st.claimed)
+                self.assertEqual(len(st.suspected_forgeries), 1)
+                st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=m))), 226, "claude-code/xyz")
+                self.assertEqual(st.decision, "unclaimed")
+                self.assertIn("forger", st.advice)
+
+    def test_near_miss_withdraw_never_retires_and_escalates_owner(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment(claim("claude-code/abc", marker="## marc-techlead withdraw"), idx=1))
+        st = bc.evaluate(p, 226, "claude-code/abc")
+        self.assertTrue(st.claimed)
+        self.assertEqual(st.decision, "escalate")
+
+    def test_untrusted_near_miss_and_prose_ignored(self):
+        st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker="## marc-techlead claim"), assoc="NONE")), 226)
+        self.assertEqual(st.suspected_forgeries, [])
+        for body in ["marc technical lead claim", "the techlead claim was posted"]:
+            st = bc.evaluate(view(view_comment(body)), 226)
+            self.assertEqual(st.suspected_forgeries, [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

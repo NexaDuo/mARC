@@ -537,6 +537,36 @@ class MentionFreeGrammar(unittest.TestCase):
               {"body": self.N(), "authorAssociation": "NONE"}]
         self.assertEqual(len(mg.trusted_markers(cs)), 2)
 
+    NEAR_MISS = ["## marc sec review", "## marc-sec review", "## marc/sec review", "## marc_sec review",
+                 "## marcsec review", "## marc::sec review", "## marc:@sec review",
+                 "## marc: sec-review", "## Marc Sec Review"]
+
+    def test_loose_near_misses_fail_closed_after_pass(self):
+        for first in self.NEAR_MISS:
+            body = f"{first}\nreviewer: x/sec-2\nreviewed-sha: {HEAD}\n\nverdict: BLOCK\n"
+            with self.subTest(first=first):
+                res = run(B(), body)
+                self.assertFalse(res["ok"], first)
+                self.assertTrue(any("cannot be counted" in b for b in res["blockers"]))
+
+    def test_loose_near_miss_rev_kind(self):
+        c = mk(B())
+        c["comments"].append({"author": {"login": "m"}, "authorAssociation": "MEMBER", "url": "late",
+                              "createdAt": "2026-11-14T01:00:00Z",
+                              "body": f"## marc-rev review\nreviewer: x/rev-2\nreviewed-sha: {HEAD}\n\nverdict: BLOCK\n"})
+        self.assertFalse(mg.adjudicate(c, [], {})["ok"])
+
+    def test_prose_is_not_a_marker(self):
+        for body in ["marc security review of the change", "## marc secure review", "marc second review",
+                     "## Review of marc sections"]:
+            with self.subTest(body=body):
+                self.assertIsNone(mg.marker_kind(body))
+                self.assertTrue(run(B(), body + "\n\nverdict: BLOCK\n")["ok"])
+
+    def test_missing_marker_text_names_legacy_first(self):
+        res = mg.adjudicate(mk(), [], {})
+        self.assertTrue(any("`## @sec review` (or `## marc:sec review`)" in b for b in res["blockers"]), res["blockers"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

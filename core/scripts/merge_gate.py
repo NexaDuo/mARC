@@ -126,10 +126,13 @@ def marker_kind(body: str) -> Optional[str]:
     marker heading is a suspect and not silently skipped (SEC-20/REV-18, #382). This
     is wider than @arch rule 2's exact prefix. It is a heuristic over what a reader
     sees: prose that only mentions a review mid-line is out of reach by design. The
-    strict header grammar (classify) alone decides whether a marker COUNTS."""
+    strict header grammar (classify) alone decides whether a marker COUNTS. The
+    `marc` form is detected more loosely than it counts (any non-alphanumeric
+    separators, optional `@`), so `marc sec review`, `marc-sec review` or
+    `marc::sec review` are suspects; `marc security review` is not (#419)."""
     for ln in _detect_lines(body):
         for k in KINDS:
-            if ln.startswith(f"@{k} review") or re.match(rf"marc\s*:\s*{k} review", ln):
+            if ln.startswith(f"@{k} review") or re.match(rf"marc[^a-z0-9]*@?{k}[^a-z0-9]*review", ln, re.ASCII):
                 return k
     return None
 
@@ -235,7 +238,7 @@ def adjudicate(pr: dict, threads: list, expect_reviewer: Optional[dict] = None) 
             blockers.append(f"trusted @{k} marker cannot be counted ({why}); fail closed until the same "
                             f"reviewer re-posts a corrected comment (never edit it as the operator): {sus['url']}")
         if v is None:
-            blockers.append(f"no trusted `## marc:{k} review` at HEAD {head[:12]} (re-review at HEAD)")
+            blockers.append(f"no trusted `## @{k} review` (or `## marc:{k} review`) at HEAD {head[:12]} (re-review at HEAD)")
         elif v["verdict"] not in OK_RESULTS:
             why = v["problem"] if v["verdict"] == MALFORMED else "reviewer BLOCK"
             blockers.append(f"@{k} counted result is {v['verdict']} ({why}); "
