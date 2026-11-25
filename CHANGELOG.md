@@ -12,6 +12,13 @@ date whose `YY.M.D` is already taken.
 - Launcher `--force` / `--force-local` for `install` and `update` (#440): re-register a
   mismatched or pinned nexaduo marketplace through a shown, consented plan (remove,
   verify, add, reinstall). Local or unverifiable sources also need `--force-local`.
+- Codex app-server live contact adapter for the engineering director (#444): the
+  probe detects `codex app-server` and `--remote` from `--help` only (new
+  `harnesses.codex.app_server`, output `schema` 3) and proposes `app-server-steer`
+  first for Codex; `eng-director` documents it as message-only (turn/steer,
+  turn/start; no permission or config changes) with transport, auth,
+  thread-verification, server-request and untrusted-input rules, and a brief
+  records the evidence and residual risks.
 
 ### Fixed
 - Launcher: a Claude marketplace registered by git URL (`https://github.com/NexaDuo/mARC.git`)
@@ -19,6 +26,10 @@ date whose `YY.M.D` is already taken.
   `root` is reported as `registered from local root <root>` (still unverified), Codex's
   `plugin list` source is used when `marketplace list` omits it, and the result table
   says `not installed` where mARC is absent.
+- The director contact probe's `--list-sessions` no longer reports a tmux
+  `error connecting to ... (Permission denied)` as "no sessions": that text now
+  counts as none running only with `No such file or directory`, and any other
+  exit-1 output returns an empty list plus an `error` (#443).
 
 ## [26.11.25.5] - 2026-11-25
 

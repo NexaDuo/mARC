@@ -71,6 +71,7 @@ practice).
 
 - [2026-11-25-decision-npx-launcher.md](2026-11-25-decision-npx-launcher.md) — accepted release-bound npx launcher, native flows refined by P1–P4 probes, publication trust model and #161 partial supersession (#424).
 - [2026-11-25-brief-director-contact-adapters.md](2026-11-25-brief-director-contact-adapters.md) — research brief: how each harness reaches or resumes a session, and harness-neutral fallbacks; basis of the director's contact-adapter model (#433).
+- [2026-11-25-brief-codex-app-server-steer.md](2026-11-25-brief-codex-app-server-steer.md) — brief: a second Codex app-server client can steer a running turn (director live test plus local schema check); transport, auth and local-injection caveats; basis of the `app-server-steer` contact adapter (#444).
 
 ## Landing process (write policy)
 

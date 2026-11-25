@@ -39,7 +39,8 @@ class ProbeTest(unittest.TestCase):
 
     def test_no_harness(self):
         d = self.data()
-        self.assertEqual(d["schema"], 2)
+        self.assertEqual(d["schema"], 3)
+        self.assertIsNone(d["harnesses"]["codex"]["app_server"])
         self.assertIsNone(d["multiplexer"]["sessions"])
         self.assertIn("rediscover", d)
         self.assertIn("display name", d["claude_address_hint"])
@@ -191,9 +192,73 @@ class ProbeTest(unittest.TestCase):
         d = self.data("--list-sessions")
         self.assertEqual(d["multiplexer"]["sessions"], {"tmux": [], "zellij": []})
 
+    def test_list_sessions_tmux_connect_errors(self):
+        fake(self.bin, "tmux",
+             'echo "error connecting to /tmp/tmux-1/default (Permission denied)" >&2; exit 1')
+        d = self.data("--list-sessions")
+        self.assertEqual(d["multiplexer"]["sessions"]["tmux"], [])
+        self.assertIn("tmux: exit 1", d["multiplexer"]["sessions"]["error"])
+        fake(self.bin, "tmux",
+             'echo "error connecting to /tmp/tmux-1/default (No such file or directory)" >&2; exit 1')
+        d = self.data("--list-sessions")
+        self.assertEqual(d["multiplexer"]["sessions"], {"tmux": [], "zellij": []})
+
+    def fake_codex(self, server, top):
+        fake(self.bin, "codex",
+             'case "$*" in "app-server --help") ' + server + ' ;; "--help") ' + top +
+             ' ;; *) echo "codex 9.9.9" ;; esac')
+
+    def test_codex_app_server_capability(self):
+        self.fake_codex('echo "      --listen <URL>"', 'echo "      --remote <ADDR>"')
+        d = self.data()
+        self.assertIs(d["harnesses"]["codex"]["app_server"], True)
+        self.assertEqual(d["adapters"]["codex"], ["app-server-steer", "exec-resume", "inbox"])
+        self.assertEqual(d["teams"], [])
+        self.assertIn("expectedTurnId", d["adapter_help"]["app-server-steer"])
+        self.assertIn("MESSAGE-ONLY", d["adapter_help"]["app-server-steer"])
+        self.assertIn("--remote-auth-token-env", d["adapter_help"]["app-server-steer"])
+        self.assertEqual(self.data("--team", "a=codex")["teams"][0]["adapters"][0], "app-server-steer")
+        fake(self.bin, "tmux", "exit 0")
+        self.assertEqual(self.data()["adapters"]["codex"],
+                         ["app-server-steer", "multiplexer-interactive", "exec-resume", "inbox"])
+        (self.bin / "tmux").unlink()
+        self.fake_codex('echo "--listen <URL>"', 'echo "no remote here"')
+        d = self.data()
+        self.assertIs(d["harnesses"]["codex"]["app_server"], False)
+        self.assertEqual(d["adapters"]["codex"], ["exec-resume", "inbox"])
+        self.fake_codex('echo "no transports"', 'echo "--remote <ADDR>"')
+        self.assertIs(self.data()["harnesses"]["codex"]["app_server"], False)
+
+    def test_codex_app_server_unknown_on_failure(self):
+        self.fake_codex("exit 2", 'echo "--remote <ADDR>"')
+        d = self.data()
+        self.assertIsNone(d["harnesses"]["codex"]["app_server"])
+        self.assertEqual(d["adapters"]["codex"], ["exec-resume", "inbox"])
+        self.fake_codex('echo "--listen <URL>"', "exec /bin/sleep 30")
+        d = self.data(env={"MARC_PROBE_TIMEOUT": "1"})
+        self.assertIsNone(d["harnesses"]["codex"]["app_server"])
+
+    def test_codex_second_help_skipped_when_first_fails(self):
+        marker = self.cwd / "second-ran"
+        self.fake_codex("exit 2", f'touch {marker}; echo "--remote <ADDR>"')
+        d = self.data()
+        self.assertIsNone(d["harnesses"]["codex"]["app_server"])
+        self.assertFalse(marker.exists())
+
+    def test_codex_user_bin_never_probed_for_app_server(self):
+        lb = self.cwd / ".local" / "bin"
+        lb.mkdir(parents=True)
+        marker = self.cwd / "ran"
+        fake(lb, "codex", f'touch {marker}; echo "--listen --remote"')
+        d = self.data()
+        self.assertFalse(marker.exists())
+        self.assertIsNone(d["harnesses"]["codex"]["app_server"])
+        self.assertEqual(d["adapters"]["codex"], ["exec-resume", "inbox"])
+
     def test_no_writes(self):
         fake(self.bin, "claude", 'echo "2.1.230"')
         fake(self.bin, "tmux", "echo s")
+        self.fake_codex('echo "--listen"', 'echo "--remote"')
         r = self.run_probe("--team", "a=claude-code", "--list-sessions",
                        env={"TMUX": "1", "TMUX_PANE": "%1"})
         self.assertEqual(r.returncode, 0)
