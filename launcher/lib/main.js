@@ -6,7 +6,8 @@ import { createInterface } from 'node:readline/promises';
 import { createRunner, resolveExecutable, safeValue } from './process.js';
 import { tagToNpm } from './version.js';
 import { createStyle, stripControls } from './style.js';
-import { safeVersion, parsePlugins, describeSource, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from './lists.js';
+import { safeVersion, parsePlugins, describeSource, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource,
+  classifyMarketplace, sourceParts, looksLocal, redactSource, enrichMarketplaces } from './lists.js';
 
 export const HARNESSES = ['claude', 'copilot', 'codex', 'agy'];
 const SCOPES = ['user', 'project', 'local'];
@@ -14,12 +15,16 @@ const SLUG = 'NexaDuo/mARC';
 const ID = 'marc@nexaduo';
 const HELP = `Usage: marc install|update|doctor|uninstall [--yes] [--dry-run]
   [--harness claude|copilot|codex|agy]... [--scope user|project|local]
-  [--version <embedded-tag>]
+  [--version <embedded-tag>] [--force [--force-local]]
 No --harness: use every harness found on PATH. Node >=20 required.
 install reads the native plugin list (read-only) before consent, also in --dry-run, and again after installing.
 install never upgrades: an existing install that differs from this release is reported STALE (run update).
 --scope applies to Claude only. Non-TTY install/update/uninstall requires --yes
 (doctor and --dry-run never change anything and need no --yes).
+--force (install/update): re-register a mismatched or stale nexaduo marketplace. The plan shows the
+registration it removes, then runs: marketplace remove nexaduo, marketplace add NexaDuo/mARC,
+reinstall marc@nexaduo. Only nexaduo is touched. A local or unverifiable source also needs
+--force-local. Without --force a mismatch is refused with a manual remedy.
 The package release selects the tag; another tag prints its npx command.`;
 
 export function parseArgs(argv) {
@@ -29,6 +34,8 @@ export function parseArgs(argv) {
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === '--yes') opts.yes = true;
+    else if (flag === '--force') opts.force = true;
+    else if (flag === '--force-local') opts.forceLocal = true;
     else if (flag === '--dry-run') opts.dryRun = true;
     else if (['--harness', '--scope', '--version'].includes(flag)) {
       const value = argv[++i];
@@ -44,6 +51,8 @@ export function parseArgs(argv) {
       }
     } else throw new Error(`Unknown option: ${flag}`);
   }
+  if (opts.forceLocal && !opts.force) throw new Error('--force-local requires --force');
+  if (opts.force && !['install', 'update'].includes(opts.command)) throw new Error('--force applies to install and update only');
   if (opts.scope && !SCOPES.includes(opts.scope)) throw new Error('Unknown Claude scope');
   if (opts.scope && opts.harnesses.length && !opts.harnesses.includes('claude')) throw new Error('--scope requires Claude');
   return opts;
@@ -284,7 +293,7 @@ async function doctor(h, run, release, out, scope, home, platform) {
     else stale ||= !match;
   }
   if (h !== 'agy') {
-    const markets = parseMarketplaces(h, await run(h, ['plugin', 'marketplace', 'list', '--json']));
+    const markets = enrichMarketplaces(h, parseMarketplaces(h, await run(h, MLIST)), rows);
     const warnings = marketplaceWarnings(markets, h);
     for (const warning of warnings) { out.line(h, 'warn', `${h}: ${warning}`); failed = true; }
     if (warnings.length) manualRemedy(h, out, scope);
@@ -321,6 +330,199 @@ async function doctor(h, run, release, out, scope, home, platform) {
   return { state: 'OK', detail: 'in sync' };
 }
 
+// ---- --force: re-register a mismatched nexaduo marketplace (#440) ----
+// Every argv below is a constant: nothing from native output reaches a command.
+const MLIST = ['plugin', 'marketplace', 'list', '--json'];
+const REMOVE = ['plugin', 'marketplace', 'remove', 'nexaduo'];
+const ADD = ['plugin', 'marketplace', 'add', SLUG];
+const installArgs = (h, scope) => ['plugin', h === 'codex' ? 'add' : 'install', ID, ...(h === 'claude' ? scopeArgs(scope) : [])];
+const settingsFile = scope => scope === 'local' ? 'settings.local.json' : 'settings.json';
+const canon = v => Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ?
+  `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}` : JSON.stringify(v);
+const clip = s => s.length > 200 ? `${s.slice(0, 200)}${String.fromCharCode(0x2026)}` : s;
+
+// Found-source text for plans: controls stripped, URL credentials redacted,
+// ?query values redacted, local paths via displayProject, visibly truncated.
+export function describeForPlan(row, home, platform) {
+  const { type, value, hasSource } = sourceParts(row);
+  if (!hasSource) {
+    return typeof row.root === 'string' ? clip(`registered from local root ${displayProject(row.root, home, platform)}`) :
+      'source: unknown (missing marketplaceSource)';
+  }
+  let v = stripControls(value ?? (typeof row.path === 'string' ? row.path : ''));
+  if (looksLocal(v)) v = displayProject(v.replace(/^Local: /, ''), home, platform);
+  else v = redactSource(v);
+  return [type != null && `sourceType: ${clip(stripControls(type))}`, `source: ${clip(v) || 'unknown'}`].filter(Boolean).join(', ');
+}
+
+async function reinstallTargets(h, opts, rows, cwd, home, platform) {
+  const targets = new Map(), skipped = [];
+  const add = (scope, dir, disabled) => {
+    const key = `${scope}\0${dir ? path.resolve(dir) : ''}`;
+    const t = targets.get(key) ?? { scope, cwd: dir, disabled: false };
+    t.disabled ||= disabled; targets.set(key, t);
+  };
+  if (h !== 'claude') return { targets: [{ disabled: rows.some(r => r.enabled === false) }], skipped };
+  for (const row of rows) {
+    const scope = row.scope || 'user', disabled = row.enabled === false;
+    if (!SCOPES.includes(scope)) { skipped.push({ text: `skipped unknown scope ${stripControls(scope)}` }); continue; }
+    if (scope === 'user') { add('user', undefined, disabled); continue; }
+    try {
+      if (typeof row.projectPath !== 'string' || !path.isAbsolute(row.projectPath)) throw new Error('invalid project path');
+      if (!(await stat(row.projectPath)).isDirectory()) throw new Error('project path is not a directory');
+      add(scope, row.projectPath, disabled);
+    } catch (e) { skipped.push({ scope, text: `skipped ${scope} scope at ${displayProject(row.projectPath, home, platform)}: ${e.message}` }); }
+  }
+  if (opts.command === 'install' || opts.scope || !targets.size) {
+    const scope = opts.scope || 'user';
+    add(scope, scope === 'user' ? undefined : cwd, false);
+  }
+  return { targets: [...targets.values()], skipped };
+}
+
+// Read-only, before consent (also --dry-run and update). Decides per harness.
+async function forcePreRead(h, { opts, run, cwd, home, platform, release }) {
+  let rows, markets;
+  try {
+    rows = parsePlugins(h, await run(h, listArgs(h)));
+    markets = parseMarketplaces(h, await run(h, MLIST));
+  } catch (error) { return { action: 'error', error }; }
+  if (!markets.length) return { action: 'none', rows };
+  if (markets.length > 1) return { action: 'refuse', rows, message: `--force refused: ${markets.length} nexaduo registrations are listed; remove them manually` };
+  const row = enrichMarketplaces(h, markets, rows)[0];
+  const cls = classifyMarketplace(h, row), desc = describeForPlan(row, home, platform);
+  const base = { rows, desc, cls, rawCanon: canon(markets) };
+  if (cls.kind === 'match') {
+    if (opts.command !== 'install') return { ...base, action: 'none', note: 'registration matches; nothing to remove' };
+    const mine = installedRows(h, rows, opts.scope || 'user', cwd);
+    if (!mine.length) return { ...base, action: 'none' };
+    return versionState(mine, release).stale ? { ...base, action: 'update', note: 'registration matches; updating the stale install' } :
+      { ...base, action: 'none', note: 'nothing to do' };
+  }
+  if (['local', 'unverifiable'].includes(cls.kind) && !opts.forceLocal) {
+    return { ...base, action: 'refuse', message: `--force refused: ${cls.reason}; add --force-local to replace it (found ${desc}); registration preserved` };
+  }
+  return { ...base, action: 'replace', ...(await reinstallTargets(h, opts, rows, cwd, home, platform)) };
+}
+
+const updateArgs = (h, scope) => [['plugin', 'marketplace', h === 'codex' ? 'upgrade' : 'update', 'nexaduo'],
+  h === 'claude' ? ['plugin', 'update', ID, ...scopeArgs(scope)] : ['plugin', h === 'codex' ? 'add' : 'update', h === 'codex' ? ID : 'marc']];
+
+const isPresent = (h, rows, t) => h !== 'claude' ? rows.length > 0 : rows.some(r => (r.scope || 'user') === t.scope &&
+  (t.scope === 'user' || (typeof r.projectPath === 'string' && samePath(r.projectPath, t.cwd))));
+// A target is reinstalled when absent or when it is the requested install scope;
+// a survivor in any other scope is updated instead.
+const bindModes = (h, rows, targets, opts) => targets.map(t => ({ t, install: !isPresent(h, rows, t) ||
+  (opts.command === 'install' && (h !== 'claude' || t.scope === (opts.scope || 'user'))) }));
+const bindCmds = (h, xs, opts, withMarket = true) => [
+  ...(withMarket && opts.command === 'update' && xs.some(x => !x.install) ? [`${h} ${updateArgs(h, 'user')[0].join(' ')}`] : []),
+  ...xs.map(x => `${h} ${(x.install ? installArgs(h, x.t.scope) : updateArgs(h, x.t.scope)[1]).join(' ')}`)];
+
+// Plan lines that replace a harness's static plan() lines.
+function forceLines(h, f, opts, home, platform) {
+  const cmd = text => ({ role: 'cmd', text });
+  if (f.action === 'refuse') return [{ role: 'warn', text: `${h}: ${f.message}` }];
+  if (f.action === 'update') return [...updateArgs(h, opts.scope || 'user').map(a => cmd(`${h} ${a.join(' ')}`)), cmd(`${h} ${listArgs(h).join(' ')}`)];
+  const L = [{ role: 'warn', text: `${h}: --force will REMOVE marketplace nexaduo (found ${f.desc}; reason: ${f.cls.reason})` },
+    cmd(`${h} ${REMOVE.join(' ')}`), cmd(`${h} ${ADD.join(' ')}`)];
+  const modes = bindModes(h, f.rows ?? [], f.targets, opts);
+  if (opts.command === 'update' && modes.some(x => !x.install)) L.push(cmd(`${h} ${updateArgs(h, 'user')[0].join(' ')}`));
+  for (const { t, install } of modes) {
+    const where = t.cwd ? `cwd ${displayProject(t.cwd, home, platform)}` : '';
+    const inst = `${h} ${installArgs(h, t.scope).join(' ')}`;
+    if (install) L.push(cmd(`${inst}${where ? `   (${where}, if missing after add)` : ''}`));
+    else {
+      L.push(cmd(`${h} ${updateArgs(h, t.scope)[1].join(' ')}   (${where ? `${where}; ` : ''}if marc is still installed after the add)`));
+      L.push(cmd(`${inst}   (${where ? `${where}; ` : ''}instead, if marc is gone after the add)`));
+    }
+  }
+  for (const t of f.targets) if (t.disabled && h === 'claude') L.push(cmd(`${h} plugin disable ${ID} ${scopeArgs(t.scope).join(' ')}`));
+  for (const t of f.targets) if (t.cwd) L.push({ role: 'warn', text: `Claude may edit ${displayProject(path.join(t.cwd, '.claude', settingsFile(t.scope)), home, platform)} (${t.scope} scope)` });
+  if (h !== 'claude' && f.targets.some(t => t.disabled)) L.push({ role: 'warn', text: `${h}: marc was disabled; re-disable it after the reinstall` });
+  for (const s of f.skipped) L.push({ role: 'warn', text: `${h}: warning: ${s.text}` });
+  L.push(cmd(`${h} ${listArgs(h).join(' ')}`));
+  return L;
+}
+
+// remove -> verify gone -> add -> bring installs onto the new source. Never
+// rolls back: restoring would re-add the old, possibly hostile, source. Once
+// the remove has succeeded, ANY later failure sets ctx.aborted (later
+// harnesses skip their remove), prints the previous registration and a
+// constant retry block.
+async function forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, platform }) {
+  if (ctx.aborted) throw new Error('skipped: earlier forced re-registration failed; nothing removed');
+  const listed = async () => parseMarketplaces(h, await run(h, MLIST));
+  if (canon(await listed()) !== f.rawCanon) throw new Error('registration changed since the plan was shown; nothing removed');
+  try { await run(h, REMOVE); } catch (e) { throw new Error(`marketplace remove failed (${e.message}); registration preserved`); }
+  const installs = ts => ts.map(t => `${h} ${installArgs(h, t.scope).join(' ')}`);
+  let retry = [`${h} ${ADD.join(' ')}`, ...installs(f.targets)];
+  let title = `${h}: nexaduo is now unregistered; retry (review first):`;
+  // Commands that could not be completed (skipped scope, failed re-disable).
+  const leftover = f.skipped.filter(s => s.scope).map(s => `${h} ${installArgs(h, s.scope).join(' ')}`);
+  // Nothing installs or updates until nexaduo is proven to be the one NexaDuo/mARC row.
+  const prove = (markets, rows, when) => {
+    const mk = enrichMarketplaces(h, markets, rows);
+    const cls = mk.length === 1 ? classifyMarketplace(h, mk[0]) : { kind: 'many', reason: `${mk.length} registrations` };
+    if (cls.kind === 'match') return;
+    title = `${h}: nexaduo is not registered from ${SLUG} ${when}; retry (review first):`;
+    retry = [`${h} ${REMOVE.join(' ')}`, `${h} ${ADD.join(' ')}`, ...installs(f.targets)];
+    throw new Error(`nexaduo is not a verified ${SLUG} registration ${when} (${cls.reason})`);
+  };
+  try {
+    if ((await listed()).length) throw new Error('nexaduo is still listed after marketplace remove; not adding');
+    try { await run(h, ADD); } catch { throw new Error('nexaduo is now unregistered: marketplace add failed'); }
+    const added = await listed();
+    if (!added.length) throw new Error('nexaduo is now unregistered: marketplace add failed');
+    let rows = parsePlugins(h, await run(h, listArgs(h)));
+    prove(added, rows, 'after add');
+    title = `${h}: failed after re-registration; retry (review first):`;
+    retry = installs(f.targets);
+    // Installs that survived the remove still point at the old source: the
+    // requested install scope is re-run, surviving update scopes are updated.
+    const todo = bindModes(h, rows, f.targets, opts);
+    let failed = f.skipped.length > 0;
+    const ready = [];
+    for (const x of todo) {
+      try {
+        if (x.t.cwd && !(await stat(x.t.cwd)).isDirectory()) throw new Error('project path is not a directory');
+        ready.push(x);
+      } catch (e) {
+        out.line(h, 'warn', `${h}: warning: skipped ${x.t.scope} scope at ${displayProject(x.t.cwd, home, platform)}: ${e.message}`);
+        failed = true; leftover.push(...bindCmds(h, [x], opts, false));
+      }
+    }
+    retry = bindCmds(h, ready, opts);
+    const options = t => t.cwd ? { cwd: t.cwd } : undefined;
+    if (opts.command === 'update' && ready.some(x => !x.install)) {
+      try { await run(h, updateArgs(h, opts.scope || 'user')[0]); } catch (e) { throw new Error(`marketplace update failed (${e.message}); the marketplace is registered`); }
+    }
+    for (const [i, { t, install }] of ready.entries()) {
+      const argv = install ? installArgs(h, t.scope) : updateArgs(h, t.scope)[1];
+      try { await run(h, argv, options(t)); } catch (e) {
+        retry = bindCmds(h, ready.slice(i), opts);
+        throw new Error(`${install ? 'reinstall' : 'update'} of ${ID} failed (${e.message}); the marketplace is registered`);
+      }
+      if (install && t.disabled && h === 'claude') {
+        try { await run(h, ['plugin', 'disable', ID, ...scopeArgs(t.scope)], options(t)); } catch (e) {
+          out.line(h, 'warn', `${h}: warning: could not re-disable ${t.scope} scope: ${e.message}`);
+          failed = true; leftover.push(`${h} plugin disable ${ID} ${scopeArgs(t.scope).join(' ')}`);
+        }
+      }
+    }
+    rows = parsePlugins(h, await run(h, listArgs(h)));
+    prove(await listed(), rows, 'after the reinstall');
+    const after = opts.command === 'install' || opts.scope ? installedRows(h, rows, opts.scope || 'user', cwd) : rows;
+    if (!after.length) throw new Error('marc is not listed after install');
+    if (leftover.length) out.remedy(h, `${h}: incomplete; run these manually, in the matching project directory for project/local scopes (review first):`, [...new Set(leftover)]);
+    return { outcome: report(after), failed };
+  } catch (e) {
+    ctx.aborted = true;
+    out.line(h, 'warn', `${h}: previous registration was: ${f.desc}`);
+    out.remedy(h, title, [...new Set([...retry, ...leftover])]);
+    throw e;
+  }
+}
+
 export async function main(argv, { release, run = createRunner(), log = console.log,
   isTTY = Boolean(process.stdin.isTTY), discover = h => resolveExecutable(h), confirm, cwd = process.cwd(), tmpRoot,
   env = process.env, platform = process.platform,
@@ -344,11 +546,22 @@ export async function main(argv, { release, run = createRunner(), log = console.
   if (opts.dryRun) out.note('dry run: no changes will be made');
   else if (style.enabled) log('');
   out.begin(opts.harnesses);
-  for (const p of plan(opts)) {
-    for (const args of p.commands) out.line(p.harness, 'cmd', `${p.harness} ${args.join(' ')}`);
+  const fstate = new Map(), ctx = { aborted: false };
+  if (opts.force) for (const h of opts.harnesses.filter(x => x !== 'agy')) {
+    fstate.set(h, await forcePreRead(h, { opts, run, cwd, home, platform, release }));
   }
+  for (const p of plan(opts)) {
+    const f = fstate.get(p.harness);
+    if (opts.force && p.harness === 'agy') out.line('agy', 'info', 'agy: --force not applicable');
+    if (f?.note) out.line(p.harness, 'info', `${p.harness}: --force: ${f.note}`);
+    if (f?.action === 'error') out.line(p.harness, 'warn', `${p.harness}: --force: cannot read registration state: ${f.error.message}`);
+    if (['replace', 'refuse', 'update'].includes(f?.action)) {
+      for (const l of forceLines(p.harness, f, opts, home, platform)) out.line(p.harness, l.role, l.text);
+    } else for (const args of p.commands) out.line(p.harness, 'cmd', `${p.harness} ${args.join(' ')}`);
+  }
+  const replacing = h => fstate.get(h)?.action === 'replace';
   let status = 0, claudeRows, claudeError;
-  if (opts.command === 'update' && opts.harnesses.includes('claude')) {
+  if (opts.command === 'update' && opts.harnesses.includes('claude') && !replacing('claude')) {
     try {
       const installed = parsePlugins('claude', await run('claude', listArgs('claude')));
       claudeRows = installed.filter(row => !opts.scope || row.scope === opts.scope);
@@ -362,12 +575,12 @@ export async function main(argv, { release, run = createRunner(), log = console.
         out.line('claude', 'warn', `Claude will edit ${path.join(target, '.claude', row.scope === 'local' ? 'settings.local.json' : 'settings.json')}`);
       }
     } catch (e) { claudeError = e; status = 1; out.line('claude', 'error', `claude: ${e.message}`); }
-  } else if (opts.harnesses.includes('claude') && opts.command !== 'doctor') {
+  } else if (opts.harnesses.includes('claude') && opts.command !== 'doctor' && !replacing('claude')) {
     const scope = opts.scope || 'user';
     if (scope !== 'user') out.line('claude', 'warn', `Claude may edit ${path.join(cwd, '.claude', scope === 'local' ? 'settings.local.json' : 'settings.json')} (${scope} scope)`);
   }
   const preRead = new Map();
-  if (opts.command === 'install') for (const h of opts.harnesses.filter(x => x !== 'agy')) {
+  if (opts.command === 'install') for (const h of opts.harnesses.filter(x => x !== 'agy' && !replacing(x))) {
     // Read-only: installed rows decide whether install has anything to do.
     try { preRead.set(h, { rows: installedRows(h, parsePlugins(h, await run(h, listArgs(h))), opts.scope || 'user', cwd) }); }
     catch (e) { preRead.set(h, { error: e }); }
@@ -376,22 +589,52 @@ export async function main(argv, { release, run = createRunner(), log = console.
   if (opts.dryRun) return status;
   if (!opts.yes && opts.command !== 'doctor') {
     let accepted;
-    if (confirm) accepted = await confirm();
+    const removes = [...fstate.values()].filter(f => f.action === 'replace').length;
+    const question = removes ? `Run this plan? It removes ${removes} marketplace registration(s)` : 'Run this plan?';
+    if (confirm) accepted = await confirm(question);
     else {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
-      try { accepted = /^y(es)?$/i.test((await rl.question(`Run this plan? ${style.paint('dim', '[y/N]')} `)).trim()); } finally { rl.close(); }
+      try { accepted = /^y(es)?$/i.test((await rl.question(`${question} ${style.paint('dim', '[y/N]')} `)).trim()); } finally { rl.close(); }
     }
     if (!accepted) return 1;
   }
   const results = [];
   for (const h of opts.harnesses) {
-    let failed = false, outcome, threw = false, detail;
+    let failed = false, outcome, threw = false, detail, notInstalled = false;
+    const f = fstate.get(h);
+    const report = rows => {
+      if (rows.some(r => r.enabled === false)) out.line(h, 'warn', `${h}: marc is installed but disabled`);
+      const { found, stale } = versionState(rows, release);
+      if (stale) {
+        out.line(h, 'warn', `${h}: already installed at ${found} (launcher release ${release.tag}); run \`npx @nexaduo/marc update\``);
+        return 'STALE';
+      }
+      out.line(h, 'info', `${h}: already installed at ${found}`);
+      return 'OK';
+    };
     try {
       if (opts.command === 'doctor') {
         const d = await doctor(h, run, release, out, opts.scope, home, platform);
         outcome = d.state === 'FAILED' ? undefined : d.state; failed = d.state === 'FAILED'; detail = d.detail;
       } else if (h === 'agy' && ['install', 'update'].includes(opts.command)) {
         await installAgy({ run, release, tmpRoot });
+      } else if (f?.action === 'error') {
+        throw f.error;
+      } else if (f?.action === 'refuse') {
+        manualRemedy(h, out, opts.scope);
+        if (!installedRows(h, f.rows ?? [], opts.scope || 'user', cwd).length) { notInstalled = true; out.line(h, 'info', `${h}: marc not installed`); }
+        throw new Error(f.message);
+      } else if (f?.action === 'replace') {
+        const r = await forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, platform });
+        outcome = r.outcome; failed = r.failed;
+      } else if (f?.action === 'update') {
+        const scope = opts.scope || 'user';
+        const [market, plugin] = updateArgs(h, scope);
+        await run(h, market);
+        await run(h, plugin, scope === 'user' || h !== 'claude' ? undefined : { cwd });
+        const after = installedRows(h, parsePlugins(h, await run(h, listArgs(h))), scope, cwd);
+        if (!after.length) throw new Error('marc is not listed after update');
+        outcome = report(after);
       } else if (h === 'claude' && opts.command === 'update') {
         if (claudeError) throw claudeError;
         const scopes = [...new Set(claudeRows.map(p => p.scope))];
@@ -417,22 +660,13 @@ export async function main(argv, { release, run = createRunner(), log = console.
         const pre = preRead.get(h);
         if (pre.error) throw pre.error;
         const scope = opts.scope || 'user';
-        const markets = parseMarketplaces(h, await run(h, ['plugin', 'marketplace', 'list', '--json']));
+        const markets = enrichMarketplaces(h, parseMarketplaces(h, await run(h, MLIST)), pre.rows);
         if (markets.length && !markets.every(m => marketplaceMatches(h, m))) {
           manualRemedy(h, out, opts.scope);
+          if (!pre.rows.length) { notInstalled = true; out.line(h, 'info', `${h}: marc not installed`); }
           const found = markets.map(describeSource).join('; ');
-          throw new Error(`nexaduo is registered from a different or unverified source (found ${found}); registration preserved`);
+          throw new Error(`nexaduo is registered from a different or unverified source (${found.startsWith('registered ') ? '' : 'found '}${found}); registration preserved`);
         }
-        const report = rows => {
-          if (rows.some(r => r.enabled === false)) out.line(h, 'warn', `${h}: marc is installed but disabled`);
-          const { found, stale } = versionState(rows, release);
-          if (stale) {
-            out.line(h, 'warn', `${h}: already installed at ${found} (launcher release ${release.tag}); run \`npx @nexaduo/marc update\``);
-            return 'STALE';
-          }
-          out.line(h, 'info', `${h}: already installed at ${found}`);
-          return 'OK';
-        };
         if (pre.rows.length) outcome = report(pre.rows);
         else {
           if (!markets.length) await run(h, ['plugin', 'marketplace', 'add', SLUG]);
@@ -447,7 +681,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
       }
     } catch (e) { out.line(h, 'error', `${h}: ${e.message}`); failed = true; threw = true; }
     const state = failed ? 'FAILED' : outcome || 'OK';
-    results.push({ harness: h, state, detail: opts.command === 'doctor' && !threw ? detail : out.detail(h) });
+    results.push({ harness: h, state, detail: notInstalled ? `not installed; ${out.detail(h)}` : opts.command === 'doctor' && !threw ? detail : out.detail(h) });
     if (state !== 'OK') status = 1;
   }
   out.results(results);

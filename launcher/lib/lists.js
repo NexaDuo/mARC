@@ -32,6 +32,7 @@ export function parsePlugins(harness, output) {
   }).filter(p => p.installed !== false).map(p => ({
     version: p.version, scope: p.scope || '', projectPath: p.projectPath,
     enabled: p.enabled, source: p.source, installedFrom: p.installedFrom,
+    ...(p.marketplaceSource !== undefined && { marketplaceSource: p.marketplaceSource }),
   }));
 }
 
@@ -63,24 +64,89 @@ export function marketplaceMatches(harness, market) {
   // matching source alone cannot prove that their registration is unpinned.
   if (marketplacePinned(market)) return false;
   if (harness === 'claude' && source === 'github') return market.repo === 'NexaDuo/mARC';
+  if (harness === 'claude' && source === 'git') return REPOS.has(market.url ?? market.repo);
   if (typeof source === 'string') return harness !== 'codex' &&
     (source === 'NexaDuo/mARC' || source === 'GitHub: NexaDuo/mARC');
   if (!source || typeof source !== 'object') return false;
   if (harness === 'codex') return (source.sourceType ?? source.source) === 'git' &&
     REPOS.has(source.sourceType ? source.source : source.url);
+  if (harness === 'claude' && source.source === 'git') return REPOS.has(source.url ?? source.repo);
   return source.source === 'github' && source.repo === 'NexaDuo/mARC';
+}
+
+const TYPE_TAGS = new Set(['github', 'git', 'directory', 'local', 'file', 'url', 'git-subdir']);
+const LOCAL_TYPES = new Set(['directory', 'local', 'file']);
+// Source value only: root/installLocation/path are catalog cache paths and
+// never describe where the registration came from.
+export function sourceParts(row) {
+  const raw = row.marketplaceSource ?? row.source;
+  let type, value;
+  if (raw && typeof raw === 'object') {
+    type = raw.sourceType ?? raw.source;
+    value = raw.sourceType ? raw.source : raw.repo ?? raw.url;
+  } else if (typeof raw === 'string' && (row.repo ?? row.url) !== undefined) { type = raw; value = row.repo ?? row.url; }
+  else if (typeof raw === 'string') { if (TYPE_TAGS.has(raw)) type = raw; else value = raw; }
+  return { type: typeof type === 'string' ? type : undefined, value: typeof value === 'string' ? value : undefined, hasSource: raw != null };
+}
+
+export const looksLocal = v => /^Local: /.test(v) || /^file:/i.test(v) || /^(?:\/|\.\.?(?:[\/\\]|$)|~)/.test(v) ||
+  /^[A-Za-z]:[\\/]/.test(v) || v.startsWith('\\\\');
+
+// One classifier for doctor, install and update --force. Checked in order,
+// deny by default: match | pinned | local | foreign-remote | unverifiable.
+export function classifyMarketplace(harness, row) {
+  if (marketplaceMatches(harness, row)) return { kind: 'match' };
+  const { type, value, hasSource } = sourceParts(row);
+  const t = String(type ?? '').toLowerCase(), v = (value ?? '').trim();
+  const repoId = v.replace(/^GitHub: /, '').split('#')[0];
+  if (marketplacePinned(row) && REPOS.has(repoId) && !LOCAL_TYPES.has(t)) return { kind: 'pinned', reason: 'pinned ref' };
+  if (LOCAL_TYPES.has(t) || looksLocal(v)) return { kind: 'local', reason: 'local checkout' };
+  if (/^(?:https|ssh):\/\/\S+$/i.test(v) || /^[\w.-]+@[\w.-]+:\S+$/.test(v) || /^(?:GitHub: )?[\w.-]+\/[\w.-]+$/.test(v)) {
+    return { kind: 'foreign-remote', reason: 'foreign source' };
+  }
+  const missing = !hasSource ? 'marketplaceSource' : value === undefined || !v ?
+    (t === 'github' ? 'repo' : t === 'git' ? 'url' : 'source') : undefined;
+  return { kind: 'unverifiable', reason: `unverifiable source (${missing ? `missing ${missing}` : 'unrecognized form'})`, missing };
+}
+
+// Codex 0.171 on Windows omits marketplaceSource from `marketplace list`;
+// `plugin list` joins by marketplace name and may still carry it.
+export function enrichMarketplaces(harness, markets, rows) {
+  if (harness !== 'codex') return markets;
+  const src = rows.find(r => r.marketplaceSource && typeof r.marketplaceSource === 'object')?.marketplaceSource;
+  return markets.map(m => src && m.marketplaceSource === undefined && m.source === undefined ? { ...m, marketplaceSource: src } : m);
 }
 
 // Human-readable "sourceType: X, source: Y" for a marketplace row, with control
 // characters stripped (native CLI output is untrusted text).
+// One redaction for every place a native source value is printed: controls
+// stripped, URL/scp userinfo replaced, query VALUES replaced. Everything else,
+// including the #fragment (a pin), is kept verbatim. Local paths are kept
+// as-is (a "#" or "?" can be part of a directory name).
+export function redactSource(value) {
+  const v = String(value ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '');
+  if (looksLocal(v)) return v;
+  const hash = v.indexOf('#');
+  let head = hash < 0 ? v : v.slice(0, hash);
+  const frag = hash < 0 ? '' : v.slice(hash);
+  head = head.replace(/^([a-z][a-z0-9+.-]*:\/\/)(?!git@)[^/]*@/i, '$1***@')
+    // scp-style tok@host:path; the conventional "git" user is not a credential
+    .replace(/^(?!git@)(?![a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+@(?=[\w.-]+:)/i, '***@')
+    .replace(/([?&;][^=&;]*=)[^&;]*/g, '$1***');
+  return head + frag;
+}
+
+// Human-readable "sourceType: X, source: Y" for a marketplace row (native CLI
+// output is untrusted text).
 export function describeSource(market) {
-  const clean = v => String(v ?? '').replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '').slice(0, 200);
+  const clean = v => redactSource(v).slice(0, 200);
   const raw = market.marketplaceSource ?? market.source;
   let type, value;
   if (raw && typeof raw === 'object') {
     type = raw.sourceType ?? raw.source;
     value = raw.sourceType ? raw.source : raw.repo ?? raw.url ?? raw.path;
   } else if (market.repo ?? market.url ?? market.path) { type = raw; value = market.repo ?? market.url ?? market.path; }
+  else if (raw == null && typeof market.root === 'string') return `registered from local root ${clean(market.root)}`;
   else value = raw;
   return [type != null && `sourceType: ${clean(type)}`, `source: ${clean(value) || 'unknown'}`].filter(Boolean).join(', ');
 }
