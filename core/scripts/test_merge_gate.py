@@ -474,5 +474,69 @@ class Detection(unittest.TestCase):
                 self.assertTrue(run(B(), body)["ok"])
 
 
+class MentionFreeGrammar(unittest.TestCase):
+    """#419 step 1: `## marc:<kind> review` is counted and detected like the legacy form."""
+
+    def N(self, kind="sec", **kw):
+        return B(kind, **kw).replace(f"## @{kind} review", f"## marc:{kind} review", 1)
+
+    def test_new_form_counted(self):
+        res = run(self.N())
+        self.assertTrue(res["ok"], res["blockers"])
+        self.assertEqual(res["verdicts"]["sec"]["verdict"], "PASS")
+
+    def test_new_form_rev_counted_and_legacy_still_counted(self):
+        res = run(B(), rev=self.N("rev", reviewer="x/rev-1", result="verdict: ADVISE"))
+        self.assertTrue(res["ok"], res["blockers"])
+        self.assertEqual(res["verdicts"]["rev"]["verdict"], "ADVISE")
+        self.assertTrue(run(B())["ok"])
+
+    def test_malformed_new_form_blocks_after_pass(self):
+        for first in ["##  marc:sec review", "## marc:SEC review", "## Marc:sec review",
+                      "## marc: sec review", "## `marc:sec` review", "Posting.\n## marc:sec review",
+                      "# marc:sec review", "## marc:sec review "[:-1] + "!"]:
+            body = f"{first}\nreviewer: x/sec-2\nreviewed-sha: {HEAD}\n\nverdict: BLOCK\n"
+            with self.subTest(first=first):
+                res = run(B(), body)
+                self.assertFalse(res["ok"], first)
+                self.assertTrue(any("cannot be counted" in b for b in res["blockers"]))
+
+    def test_malformed_body_in_new_form_blocks(self):
+        bad = self.N(result="verdict: pass")
+        self.assertFalse(run(bad)["ok"])
+
+    def test_new_form_from_non_collaborator_ignored(self):
+        forged = self.N(reviewer="x/sec-9", result="verdict: BLOCK")
+        c = mk(B())
+        c["comments"].append({"author": {"login": "z"}, "authorAssociation": "NONE", "url": "u",
+                              "createdAt": "2026-11-14T01:00:00Z", "body": forged})
+        res = mg.adjudicate(c, [], {})
+        self.assertTrue(res["ok"], res["blockers"])
+        self.assertTrue(any(i["reason"] == "untrusted author association" for i in res["ignored_markers"]))
+        c["comments"][-1].pop("authorAssociation")  # missing association fails closed
+        self.assertTrue(mg.adjudicate(c, [], {})["ok"])
+
+    def test_mixed_supersession_latest_wins_either_order(self):
+        blk_new = self.N(reviewer="x/sec-2", result="verdict: BLOCK")
+        blk_old = B(reviewer="x/sec-2", result="verdict: BLOCK")
+        self.assertFalse(run(B(), blk_new)["ok"])
+        self.assertTrue(run(blk_new, B(reviewer="x/sec-3"))["ok"])
+        self.assertFalse(run(self.N(), blk_old)["ok"])
+        self.assertTrue(run(blk_old, self.N(reviewer="x/sec-3"))["ok"])
+
+    def test_malformed_new_form_superseded_by_legacy_counted(self):
+        bad = f"##  marc:sec review\nreviewer: x/sec-2\nreviewed-sha: {HEAD}\n\nverdict: BLOCK\n"
+        self.assertTrue(run(bad, B(reviewer="x/sec-3"))["ok"])
+
+    def test_expect_reviewer_applies_to_new_form(self):
+        res = run(self.N(reviewer="x/sec-1"), expect={"sec": "x/sec-other"})
+        self.assertFalse(res["ok"])
+
+    def test_list_trusted_sees_both_forms(self):
+        cs = [{"body": self.N(), "authorAssociation": "MEMBER"}, {"body": B(), "authorAssociation": "MEMBER"},
+              {"body": self.N(), "authorAssociation": "NONE"}]
+        self.assertEqual(len(mg.trusted_markers(cs)), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -8,6 +8,12 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.25] - 2026-11-25
+
+### Changed
+
+- Mention-free markers, step 1 of #419 (parser dual-accept): `merge_gate.py` and `board_claim.py` now also count `## marc:sec review`, `## marc:rev review`, `## marc:techlead claim` and `## marc:techlead withdraw`, and still accept the legacy `@` forms. Suspect detection in the merge gate recognizes both grammars, so a malformed trusted marker in either form still fails closed. Matching is case-sensitive, as before. Emission is unchanged (claims and withdrawals still post the legacy form, so older installed versions keep parsing them); it switches in a later #419 step.
+
 ## [26.11.24] - 2026-11-24
 
 ### Changed

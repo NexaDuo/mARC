@@ -434,5 +434,50 @@ class Worktrees(unittest.TestCase):
         self.assertEqual(out["dead"], [])
 
 
+class MentionFreeMarkers(unittest.TestCase):
+    """#419 step 1: dual-accept `## marc:techlead claim|withdraw`; emission stays legacy."""
+    NC = "## marc:techlead claim"
+    NW = "## marc:techlead withdraw"
+
+    def test_emission_is_still_legacy(self):
+        self.assertEqual(bc.CLAIM_MARKER, "## @techlead claim")
+        self.assertEqual(bc.WITHDRAW_MARKER, "## @techlead withdraw")
+
+    def test_new_claim_counted(self):
+        st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=self.NC))), 226)
+        self.assertTrue(st.claimed)
+        self.assertEqual(st.owner, "claude-code/abc")
+
+    def test_new_withdraw_retires_legacy_claim_and_vice_versa(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment(claim("claude-code/ABC", marker=self.NW), idx=1))
+        self.assertFalse(bc.evaluate(p, 226).claimed)
+        p = view(view_comment(claim("claude-code/abc", marker=self.NC), idx=0),
+                 view_comment(claim("claude-code/abc", marker=bc.WITHDRAW_MARKER), idx=1))
+        self.assertFalse(bc.evaluate(p, 226).claimed)
+
+    def test_untrusted_new_claim_is_suspected(self):
+        st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=self.NC), assoc="NONE")), 226)
+        self.assertFalse(st.claimed)
+        self.assertEqual(len(st.suspected_forgeries), 1)
+
+    def test_untrusted_new_withdraw_naming_claim_is_suspected(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment(claim("claude-code/abc", marker=self.NW), assoc="NONE", idx=1))
+        st = bc.evaluate(p, 226)
+        self.assertTrue(st.claimed)
+        self.assertEqual(len(st.suspected_forgeries), 1)
+
+    def test_case_sensitive_header(self):
+        for m in ["## marc:Techlead claim", "## Marc:techlead claim", "## MARC:TECHLEAD CLAIM"]:
+            st = bc.evaluate(view(view_comment(claim("claude-code/abc", marker=m))), 226)
+            self.assertFalse(st.claimed, m)
+
+    def test_cross_form_tie_break(self):
+        p = view(view_comment(claim("claude-code/zzz"), idx=0),
+                 view_comment(claim("claude-code/aaa", marker=self.NC), idx=1))
+        self.assertEqual(bc.evaluate(p, 226).owner, "claude-code/aaa")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

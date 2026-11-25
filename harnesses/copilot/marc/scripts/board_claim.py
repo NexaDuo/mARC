@@ -6,7 +6,8 @@ the prose protocol in `references/concurrent-operators.md` into one call, so
 the operator no longer re-derives it from ~8 KB of rules on every claim.
 
 What it enforces (each rule's intent and origin stays in the prose):
-  * A claim is a comment whose first line is `## @techlead claim`, carrying
+  * A claim is a comment whose first line is `## marc:techlead claim` (or the
+    legacy `## @techlead claim`, dual-accept #419), carrying
     `operator: <harness>/<session-id>`, `issue: #<N>`, `claimed-at: <ISO>`.
     The assignee field is never read (#213).
   * A marker counts only from a trusted author (OWNER/MEMBER/COLLABORATOR).
@@ -14,7 +15,8 @@ What it enforces (each rule's intent and origin stays in the prose):
     carries: `authorAssociation` in `gh issue view --json comments`,
     `author_association` in the REST `issues/<N>/comments` list. A payload read
     with the wrong field name yields "" and fails closed (#213).
-  * A `## @techlead withdraw` retires a claim only if it is trusted, names the
+  * A withdraw (either grammar; a new-form withdraw retires a legacy claim and
+    vice versa) retires a claim only if it is trusted, names the
     same `operator:` (case-insensitive) and was posted after that claim (#216).
   * Tie-break over live, trusted claims: the case-insensitively lowest
     `operator:` keeps the item (#205/#213). Autonomous withdrawal only when
@@ -38,8 +40,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+# Emission stays on the legacy form until a later #419 step: installed older
+# plugin versions only parse `@`, and would miss a new-form claim. Parsing
+# accepts both (case-sensitive, like the legacy header).
 CLAIM_MARKER = "## @techlead claim"
 WITHDRAW_MARKER = "## @techlead withdraw"
+CLAIM_MARKERS = (CLAIM_MARKER, "## marc:techlead claim")
+WITHDRAW_MARKERS = (WITHDRAW_MARKER, "## marc:techlead withdraw")
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # <harness>/<session-id>: harness starts with a letter; the session id is at
 # least 3 chars. Rejects sort-gaming values such as `0/0`, `/x`, `a/`.
@@ -126,9 +133,9 @@ def normalize_comments(payload) -> list[Comment]:
 def parse_marker(comment: Comment, issue_number: int) -> Optional[Marker]:
     lines = comment.body.replace("\r\n", "\n").split("\n")
     first = lines[0].rstrip() if lines else ""
-    if first == CLAIM_MARKER:
+    if first in CLAIM_MARKERS:
         kind = "claim"
-    elif first == WITHDRAW_MARKER:
+    elif first in WITHDRAW_MARKERS:
         kind = "withdraw"
     else:
         return None
