@@ -259,8 +259,10 @@ export function displayProject(projectPath, home, platform = process.platform) {
   if (typeof projectPath !== 'string' || !projectPath) return '-';
   const P = platform === 'win32' ? path.win32 : path.posix;
   const clean = stripControls(projectPath);
+  if (!clean) return '-';
   const h = typeof home === 'string' ? stripControls(home) : '';
-  if (h && P.isAbsolute(clean)) {
+  // A filesystem-root home would turn every path into "~/..."; print absolute.
+  if (h && P.dirname(h) !== h && P.isAbsolute(clean)) {
     const rel = P.relative(h, clean);
     if (rel === '') return '~';
     if (rel !== '..' && !rel.startsWith(`..${P.sep}`) && !P.isAbsolute(rel)) return `~/${rel.split(P.sep).join('/')}`;
@@ -278,7 +280,8 @@ async function doctor(h, run, release, out, scope, home, platform) {
     const match = sameVersion(row.version, release);
     const project = h === 'claude' && ['project', 'local'].includes(row.scope) ? displayProject(row.projectPath, home, platform) : undefined;
     out.row(h, [h, safeVersion(row.version), row.scope || '-', row.enabled === false ? 'disabled' : 'enabled'], !match, project);
-    stale ||= !match;
+    if (!row.version || !String(row.version).trim()) { out.line(h, 'warn', `${h}: version unreported`); failed = true; }
+    else stale ||= !match;
   }
   if (h !== 'agy') {
     const markets = parseMarketplaces(h, await run(h, ['plugin', 'marketplace', 'list', '--json']));
@@ -295,8 +298,15 @@ async function doctor(h, run, release, out, scope, home, platform) {
       out.line(h, 'warn', `${h}: catalog pointer unavailable in native lists; cannot verify release source`);
       failed = true;
     } else if (!sources.every(s => sourceHasPointer(s, release.tag, h))) {
-      out.line(h, 'warn', `${h}: main-tracking with no matching release pointer; upgrade the marketplace catalog`);
-      stale = true;
+      // STALE only when the source matches the expected release source in every
+      // field except ref; anything else (foreign repo/type/path) is FAILED.
+      if (sources.every(s => s !== null && typeof s === 'object' && sourceHasPointer({ ...s, ref: release.tag }, release.tag, h))) {
+        out.line(h, 'warn', `${h}: main-tracking with no matching release pointer; upgrade the marketplace catalog`);
+        stale = true;
+      } else {
+        out.line(h, 'warn', `${h}: marketplace source does not match the expected release source`);
+        failed = true;
+      }
     }
   }
   if (failed) {

@@ -48,8 +48,8 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 - `install` never upgrades an existing install. If the installed version differs
   from the launcher release it prints `STALE` and exits non-zero; run `update`.
 - `doctor` changes nothing and exits non-zero when it finds drift. Claude
-  `project` and `local` rows end with the project they belong to (`~/repos/app`
-  under your home directory, otherwise the absolute path). A harness whose only
+  `project` and `local` rows add the project they belong to as an extra field
+  (`~/repos/app` under your home directory, otherwise the absolute path). A harness whose only
   problem is an older version, or a marketplace catalog still tracking `main`,
   is `STALE`: run `npx @nexaduo/marc update`. `FAILED` means something else is
   wrong (marketplace missing or drifted, plugin missing, release source

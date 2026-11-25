@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStyle, stripControls } from '../lib/style.js';
-import { main, makeOut, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
+import { main, displayProject, makeOut, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
 import { tagToNpm, npmToTag } from '../lib/version.js';
 import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/process.js';
 import { describeSource, safeVersion, parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
@@ -1015,6 +1015,33 @@ test('doctor codex catalog behind (main-tracking, version matches) is STALE', as
   const { code, text } = await doctorRun('codex', { list });
   assert.equal(code, 1);
   assert.ok(text.includes('codex: STALE') && text.some(l => l.includes('main-tracking')), text.join('|'));
+});
+
+test('doctor source classification: only a ref-only difference is STALE, foreign sources are FAILED', async () => {
+  const good = claudeRow('user').source;
+  const cases = [[{ ...good, ref: 'main' }, 'STALE'], [{ source: 'git-subdir', url: 'NexaDuo/mARC', path: good.path }, 'STALE'],
+    [{ ...good, url: 'Evil/mARC' }, 'FAILED'], [{ source: 'directory', path: '/tmp/x' }, 'FAILED'], ['NexaDuo/mARC', 'FAILED'],
+    [{ ...good, path: 'harnesses/other/marc' }, 'FAILED'], [{ ...good, source: 'github', ref: 'main' }, 'FAILED']];
+  for (const [source, want] of cases) {
+    const { text } = await doctorRun('claude', { list: JSON.stringify([{ ...claudeRow('user'), source }]) });
+    assert.ok(text.includes(`claude: ${want}`), `${JSON.stringify(source)}: ${text.join('|')}`);
+    if (want === 'FAILED') assert.ok(text.some(l => l.includes('does not match the expected release source')), text.join('|'));
+  }
+});
+
+test('doctor row with a missing or empty version is FAILED (version unreported)', async () => {
+  for (const version of [undefined, '', '  ']) {
+    const { code, text } = await doctorRun('claude', { list: JSON.stringify([{ ...claudeRow('user'), version }]) });
+    assert.equal(code, 1);
+    assert.ok(text.includes('claude: FAILED') && text.some(l => l.includes('claude: version unreported')), text.join('|'));
+  }
+});
+
+test('displayProject: empty after stripping is "-", and a root home is never shortened', () => {
+  assert.equal(displayProject(String.fromCharCode(7), '/home/u', 'linux'), '-');
+  assert.equal(displayProject('/srv/app', '/', 'linux'), '/srv/app');
+  assert.equal(displayProject('C:\\work\\app', 'C:\\', 'win32'), 'C:\\work\\app');
+  assert.equal(displayProject('/home/u/app', '/home/u', 'linux'), '~/app');
 });
 
 test('doctor FAILED cases: codex local source, missing marketplace, missing plugin, unverifiable, errors', async () => {
