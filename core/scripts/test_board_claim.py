@@ -504,6 +504,49 @@ class MentionFreeMarkers(unittest.TestCase):
             st = bc.evaluate(view(view_comment(body)), 226)
             self.assertEqual(st.suspected_forgeries, [])
 
+    def test_397_shape_near_miss_then_valid_claim_is_own(self):
+        p = view(view_comment("## @techlead claim withdrawn\nnote", idx=0),
+                 view_comment(claim("claude-code/abc"), idx=1))
+        st = bc.evaluate(p, 226, "claude-code/abc")
+        self.assertEqual(st.decision, "own")
+        self.assertEqual(st.suspected_forgeries, [])
+
+    def test_near_miss_alone_escalates_with_remedy(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment("## @techlead claim withdrawn", idx=1))
+        st = bc.evaluate(p, 226, "claude-code/abc")
+        self.assertEqual(st.decision, "escalate")
+        self.assertIn("edits or deletes", st.advice)
+
+    def test_near_miss_after_valid_claim_escalates(self):
+        p = view(view_comment(claim("claude-code/abc"), idx=0),
+                 view_comment("## @techlead claim withdrawn", idx=1))
+        self.assertEqual(bc.evaluate(p, 226, "claude-code/abc").decision, "escalate")
+
+    def test_later_withdraw_supersedes_near_miss(self):
+        p = view(view_comment("## @techlead claim withdrawn", idx=0),
+                 view_comment(claim("claude-code/abc", marker=bc.WITHDRAW_MARKER), idx=1))
+        self.assertEqual(bc.evaluate(p, 226).suspected_forgeries, [])
+
+    def test_untrusted_or_malformed_later_marker_does_not_supersede(self):
+        p = view(view_comment("## @techlead claim withdrawn", idx=0),
+                 view_comment(claim("claude-code/abc"), assoc="NONE", idx=1))
+        self.assertEqual(len(bc.evaluate(p, 226).suspected_forgeries), 2)
+        p = view(view_comment("## @techlead claim withdrawn", idx=0),
+                 view_comment(claim("claude-code/abc", n=999), idx=1))
+        self.assertGreaterEqual(len(bc.evaluate(p, 226).suspected_forgeries), 1)
+        p = view(view_comment("## @techlead claim withdrawn", idx=0),
+                 view_comment("## marc-techlead claim", idx=1))
+        self.assertEqual(len(bc.evaluate(p, 226).suspected_forgeries), 2)
+
+    def test_normalisation_parity(self):
+        for body in ["\n## @techlead claim", "<h2>@techlead claim</h2>", "## &#64;techlead claim",
+                     "## @ techlead claim", "## @\u200etechlead claim", "## \u200f@techlead claim"]:
+            with self.subTest(body=body):
+                st = bc.evaluate(view(view_comment(body + "\noperator: claude-code/abc\nissue: #226\n")), 226)
+                self.assertFalse(st.claimed)
+                self.assertEqual(len(st.suspected_forgeries), 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

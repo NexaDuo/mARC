@@ -12,7 +12,8 @@ date whose `YY.M.D` is already taken.
 
 ### Changed
 
-- Mention-free markers, step 1 of #419 (parser dual-accept): `merge_gate.py` and `board_claim.py` now also count `## marc:sec review`, `## marc:rev review`, `## marc:techlead claim` and `## marc:techlead withdraw`, and still accept the legacy `@` forms. Suspect detection in the merge gate recognizes both grammars, so a malformed trusted marker in either form still fails closed. Matching is case-sensitive, as before. Emission is unchanged (claims and withdrawals still post the legacy form, so older installed versions keep parsing them); it switches in a later #419 step.
+- Mention-free markers, step 1 of #419 (parser dual-accept): `merge_gate.py` and `board_claim.py` now also count `## marc:sec review`, `## marc:rev review`, `## marc:techlead claim` and `## marc:techlead withdraw`, and still accept the legacy `@` forms. Counting is exact and case-sensitive. In the merge gate, suspect detection for the new `marc` form is deliberately looser than counting (any separators, optional `@`), so a malformed trusted `marc` marker still fails closed until superseded. Legacy-form near-misses (for example `@sec-review`) remain exact-prefix detection only, as before this change; that is a known pre-existing gap tracked separately. Emission is unchanged (claims and withdrawals still post the legacy form, so older installed versions keep parsing them); it switches in a later #419 step.
+- `board_claim.py` now escalates (exit 3) when a trusted comment's first non-blank line looks like a claim or withdraw header but is not the exact grammar (for example `## @techlead claim withdrawn`). Remedy: the author edits or deletes that comment, or posts a later well-formed claim or withdraw marker, which supersedes it.
 
 ## [26.11.24] - 2026-11-24
 

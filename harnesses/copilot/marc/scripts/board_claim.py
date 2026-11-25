@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import re
+import html
 import shlex
 import unicodedata
 from dataclasses import asdict, dataclass, field
@@ -54,7 +55,7 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 OPERATOR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]{2,}$")
 # A heading that LOOKS like a claim/withdraw but is not the exact header (#419):
 # looser than counting, so a trusted near-miss is surfaced, never silently ignored.
-_NEAR_RE = re.compile(r"(?:marc[^a-z0-9]*@?|@)techlead[^a-z0-9]*(claim|withdraw)", re.ASCII)
+_NEAR_RE = re.compile(r"(?:marc[^a-z0-9]*@?\s*|@\s*)techlead[^a-z0-9]*(claim|withdraw)", re.ASCII)
 _FIELD_RE = re.compile(r"^\s*(operator|issue|claimed-at)\s*:\s*(.*?)\s*$", re.IGNORECASE)
 
 Runner = Callable[[list], str]
@@ -135,6 +136,19 @@ def normalize_comments(payload) -> list[Comment]:
     return out
 
 
+def _near_text(body: str) -> str:
+    """First non-blank line, normalised like merge_gate's detection (NFKC, entities,
+    tags, zero-width/LRM/RLM, emphasis), for near-miss detection only (never counting)."""
+    t = html.unescape(unicodedata.normalize("NFKC", body))
+    t = re.sub(r"[\u200b-\u200f\u2060\ufeff\u00ad]", "", unicodedata.normalize("NFKC", t))
+    t = re.sub(r"[`*_~\\]", "", re.sub(r"<!--|-->|<[^>]*>", " ", t))
+    for ln in re.split(r"[\r\n\u2028\u2029\x0b\x0c]", t):
+        ln = re.sub(r"\s+", " ", ln).strip().lower()
+        if ln:
+            return ln.lstrip("#> -+=|").lstrip()
+    return ""
+
+
 def parse_marker(comment: Comment, issue_number: int) -> Optional[Marker]:
     lines = comment.body.replace("\r\n", "\n").split("\n")
     first = lines[0].rstrip() if lines else ""
@@ -143,9 +157,8 @@ def parse_marker(comment: Comment, issue_number: int) -> Optional[Marker]:
     elif first in WITHDRAW_MARKERS:
         kind = "withdraw"
     else:
-        norm = unicodedata.normalize("NFKC", first)
-        norm = re.sub(r"[`*_~\\\u200b-\u200d\u2060\ufeff\u00ad]", "", norm).lower()
-        m = _NEAR_RE.match(norm.lstrip("#> -+=|\t "))
+        norm = _near_text(comment.body)
+        m = _NEAR_RE.match(norm)
         if not m:
             return None
         near = Marker(kind=m.group(1), index=comment.index, operator="", issue="", claimed_at="",
@@ -187,14 +200,19 @@ def _brief(m: Marker) -> dict:
 def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> ClaimStatus:
     """Pure decision function over one issue's comments."""
     markers = [m for m in (parse_marker(c, issue_number) for c in normalize_comments(payload)) if m]
-    suspected_near = [m for m in markers if m.near_miss and m.trusted]
+    near = [m for m in markers if m.near_miss and m.trusted]
     markers = [m for m in markers if not m.near_miss]
+    # A trusted near-miss is superseded by any LATER trusted, well-formed exact
+    # marker (claim or withdraw) on the issue, mirroring merge_gate (#419).
+    suspected_near = [n for n in near
+                      if not any(x.index > n.index and x.trusted and x.well_formed for x in markers)]
+    superseded_near = [n for n in near if n not in suspected_near]
     claims = [m for m in markers if m.kind == "claim"]
     withdrawals = [m for m in markers if m.kind == "withdraw"]
     claim_ops = {c.operator.casefold() for c in claims if c.operator}
 
     suspected: list[Marker] = list(suspected_near)
-    ignored: list[Marker] = []
+    ignored: list[Marker] = list(superseded_near)
     valid_claims: list[Marker] = []
     for c in claims:
         if c.trusted and c.well_formed:
@@ -246,7 +264,9 @@ def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> Clai
             status.decision = "escalate"
             status.advice = ("you hold the lowest trusted claim, but a suspected forged marker "
                              "competes: do not withdraw, surface it and leave the item pending "
-                             "the user's decision")
+                             "the user's decision. Remedy: the author edits or deletes the "
+                             "near-miss comment, or posts a later well-formed claim/withdraw "
+                             "marker (a trusted later marker supersedes it)")
         else:
             status.decision = "own"
             status.advice = "you hold the claim; proceed"

@@ -159,8 +159,8 @@ def classify(body: str, kind: str) -> dict:
     out: dict = {"reviewer": None, "reviewed_sha": None, "header_error": None,
                  "verdict": MALFORMED, "problem": ""}
     if lines[0] not in headers_for(kind):
-        out["header_error"] = (f"line 1 is not exactly `## marc:{kind} review` "
-                               f"(or legacy `## @{kind} review`): {_clip(lines[0])}")
+        out["header_error"] = (f"line 1 is not exactly `## @{kind} review` "
+                               f"(or `## marc:{kind} review`): {_clip(lines[0])}")
     m = _REVIEWER_RE.fullmatch(lines[1])
     if m:
         out["reviewer"] = m.group(1)
