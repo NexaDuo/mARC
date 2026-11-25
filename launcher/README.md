@@ -70,6 +70,19 @@ trusted publisher is bound (#426); until then npm may lag the git tag. `npx` doe
 `npm audit signatures` in a project that depends on the package; pinning an
 exact version then keeps you on the release you checked.
 
+## Console colors
+
+Output is colored only when stdout is a terminal. Piped, redirected and CI
+output is plain text with no escape sequences, identical to earlier releases.
+
+- `NO_COLOR=1` (any non-empty value) turns color off.
+- `FORCE_COLOR=1|2|3` turns it on even when piped (`2` implies 256 colors, `3`
+  truecolor); `FORCE_COLOR=0` turns it off. `NO_COLOR` wins over `FORCE_COLOR`.
+- Truecolor is used when `COLORTERM` is `truecolor` or `24bit`, 256 colors when
+  `TERM` contains `256color`, otherwise 16 colors. `TERM=dumb` and legacy
+  Windows consoles stay plain.
+- `COLORFGBG` ending in `7` or `15` selects a light-background palette.
+
 ## Links
 
 - Source, docs and issues: https://github.com/NexaDuo/mARC

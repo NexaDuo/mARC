@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createStyle, stripControls } from '../lib/style.js';
 import { main, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
 import { tagToNpm, npmToTag } from '../lib/version.js';
 import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/process.js';
@@ -781,4 +782,119 @@ test('source-mismatch refusal names the found registration, strips control chara
   assert.ok(logs.some(s => s.includes('found sourceType: local, source: /dev/clone[31mevil')), logs.join('|'));
   assert.deepEqual(mutating(calls), []);
   assert.ok(logs.includes('codex plugin marketplace remove nexaduo'));
+});
+
+// ---- console styling (#431) ----
+const ESC = String.fromCharCode(27);
+const SGR = new RegExp(ESC + '\\[[0-9;]*m', 'g');
+const TTY = { isTTY: true, platform: 'linux' };
+const style = (env, extra = {}) => createStyle({ env, ...TTY, ...extra });
+const hasControl = s => [...s].some(c => { const n = c.charCodeAt(0); return n < 32 || (n >= 127 && n <= 159) || n === 0x202e; });
+
+test('color gating: TTY, NO_COLOR, FORCE_COLOR, TERM=dumb and non-TTY', () => {
+  assert.equal(style({}).enabled, true);
+  assert.equal(style({}, { isTTY: false }).enabled, false);
+  assert.equal(style({ TERM: 'dumb' }).enabled, false);
+  assert.equal(style({ NO_COLOR: '1' }).enabled, false);
+  assert.equal(style({ NO_COLOR: '' }).enabled, true, 'empty NO_COLOR is unset');
+  assert.equal(style({ NO_COLOR: '1', FORCE_COLOR: '1' }).enabled, false, 'NO_COLOR beats FORCE_COLOR');
+  for (const v of ['0', 'false']) assert.equal(style({ FORCE_COLOR: v }).enabled, false);
+  for (const v of ['1', '2', '3', 'true']) {
+    assert.equal(style({ FORCE_COLOR: v }, { isTTY: false }).enabled, true, `FORCE_COLOR=${v} beats non-TTY`);
+    assert.equal(style({ FORCE_COLOR: v, TERM: 'dumb' }, { isTTY: false }).enabled, true);
+  }
+  assert.equal(style({ FORCE_COLOR: '' }, { isTTY: false }).enabled, false, 'empty FORCE_COLOR is unset');
+  for (const s of [style({}, { isTTY: false }), style({ NO_COLOR: '1' }), style({ FORCE_COLOR: '0' })]) {
+    for (const role of ['brand', 'ok', 'error', 'info']) assert.equal(s.paint(role, 'x'), 'x');
+    assert.deepEqual(s.deco(['a']), []);
+  }
+});
+
+test('color gating: Windows rule', () => {
+  const win = (env, extra = {}) => style(env, { platform: 'win32', ...extra });
+  assert.equal(win({}).enabled, false, 'legacy conhost stays plain');
+  assert.equal(win({ WT_SESSION: 'x' }).enabled, true);
+  assert.equal(win({ ConEMUANSI: 'ON' }).enabled, true);
+  assert.equal(win({ ConEMUANSI: 'OFF' }).enabled, false);
+  assert.equal(win({ ANSICON: '1' }).enabled, true);
+  assert.equal(win({ TERM_PROGRAM: 'vscode' }).enabled, true);
+  assert.equal(win({ WT_SESSION: 'x' }, { isTTY: false }).enabled, false, 'CI/non-TTY stays plain');
+  const forced = win({ FORCE_COLOR: '1', COLORTERM: 'truecolor' }, { isTTY: false });
+  assert.equal(forced.enabled, true);
+  assert.equal(forced.depth, 4, 'forced legacy conhost is capped at 16 colors');
+  assert.equal(win({ WT_SESSION: 'x', COLORTERM: 'truecolor' }).depth, 24);
+});
+
+test('color depth selection and role table', () => {
+  assert.equal(style({ COLORTERM: 'truecolor' }).depth, 24);
+  assert.equal(style({ COLORTERM: '24bit' }).depth, 24);
+  assert.equal(style({ TERM: 'xterm-256color' }).depth, 8);
+  assert.equal(style({ TERM: 'xterm' }).depth, 4);
+  assert.equal(style({ FORCE_COLOR: '2' }).depth, 8);
+  assert.equal(style({ FORCE_COLOR: '3' }).depth, 24);
+  assert.equal(style({ FORCE_COLOR: '1', TERM: 'xterm' }).depth, 4);
+  assert.equal(style({ COLORTERM: 'truecolor' }).paint('ok', 'a'), `${ESC}[1;38;2;124;255;178ma${ESC}[0m`);
+  assert.equal(style({ TERM: 'xterm-256color' }).paint('stale', 'a'), `${ESC}[1;38;5;222ma${ESC}[0m`);
+  assert.equal(style({}).paint('failed', 'a'), `${ESC}[1;95ma${ESC}[0m`);
+  assert.equal(style({}).paint('warn', 'a'), `${ESC}[93ma${ESC}[0m`);
+  assert.equal(style({}).paint('dim', 'a'), `${ESC}[2ma${ESC}[0m`);
+  assert.equal(style({}).paint('info', 'a'), 'a');
+  // Light backgrounds (COLORFGBG last field 7 or 15) use the normal-intensity 16-color table.
+  for (const bg of ['0;15', '0;7']) {
+    assert.equal(style({ COLORFGBG: bg, COLORTERM: 'truecolor' }).paint('ok', 'a'), `${ESC}[1;32ma${ESC}[0m`);
+  }
+  assert.equal(style({ COLORFGBG: '15;0', COLORTERM: 'truecolor' }).light, false);
+  assert.throws(() => style({}).paint('not-a-role', 'a'), /Unknown style role/);
+});
+
+test('hostile native strings cannot inject SGR or controls', async () => {
+  const bidi = String.fromCharCode(0x202e), c1 = String.fromCharCode(0x9b), nl = String.fromCharCode(10);
+  const hostile = `${ESC}[31mred${ESC}[0m${c1}31m${bidi}evil${nl}next${String.fromCharCode(7)}`;
+  const s = style({ COLORTERM: 'truecolor' });
+  const painted = s.paint('error', hostile);
+  assert.equal(stripControls(hostile), '[31mred[0m31mevilnext');
+  assert.equal([...painted].filter(c => c === ESC).length, 2, 'only the two constant SGR sequences');
+  assert.ok(!hasControl(painted.replace(SGR, '')), 'no control characters survive in the body');
+  // End to end: a native CLI failure message carrying escapes, in color mode.
+  const logs = [];
+  const run = async (h, args) => { if (args[1] === 'list') throw new Error(hostile); return ''; };
+  const code = await main(['doctor', '--harness', 'codex'], { release, run, log: l => logs.push(l), isTTY: false, style: s });
+  assert.equal(code, 1);
+  const all = logs.join(nl);
+  assert.ok(all.includes(ESC), 'color mode is on');
+  assert.ok(!hasControl(all.replace(SGR, '').split(nl).join('')), 'only our own SGR sequences contain controls');
+  assert.ok(!all.includes(`${ESC}[31m`) && !all.includes(c1) && !all.includes(bidi), all);
+});
+
+test('plain install --dry-run output is pinned byte for byte, with no escapes', async () => {
+  const rel = { tag: 'v26.11.25.4', sha: 'a'.repeat(40), npm: '26.1125.4' };
+  const expected = ["mARC v26.11.25.4 (26.1125.4); install","claude plugin list --json","claude plugin marketplace list --json","claude plugin marketplace add NexaDuo/mARC","claude plugin install marc@nexaduo --scope user","claude plugin list --json","codex plugin list --json","codex plugin marketplace list --json","codex plugin marketplace add NexaDuo/mARC","codex plugin add marc@nexaduo","codex plugin list --json"];
+  const argv = ['install', '--dry-run', '--harness', 'claude', '--harness', 'codex'];
+  for (const [env, stdoutIsTTY] of [[{}, false], [{ TERM: 'dumb' }, true], [{ NO_COLOR: '1' }, true], [{ FORCE_COLOR: '0' }, true], [{ FORCE_COLOR: '3', NO_COLOR: '1' }, true]]) {
+    const logs = [];
+    assert.equal(await main(argv, { release: rel, run: async () => '[]', log: l => logs.push(l), isTTY: false, env, stdoutIsTTY, cwd: '/work/project' }), 0);
+    assert.deepEqual(logs, expected);
+    assert.ok(!logs.join('').includes(ESC));
+  }
+});
+
+test('color mode re-lays out the same text: headings, prompt glyph, remedy block, result table', async () => {
+  const rel = { tag: 'v26.11.25.4', sha: 'a'.repeat(40), npm: '26.1125.4' };
+  const logs = [];
+  const run = async (h, args) => args[1] === 'marketplace' && args[2] === 'list' ? JSON.stringify([{ name: 'nexaduo', source: 'github', repo: 'evil/x' }]) :
+    args[1] === 'list' ? '[]' : '';
+  const code = await main(['install', '--yes', '--harness', 'claude'],
+    { release: rel, run, log: l => logs.push(l), isTTY: false, env: { FORCE_COLOR: '1' }, stdoutIsTTY: false });
+  assert.equal(code, 1);
+  const text = logs.map(l => l.replace(SGR, ''));
+  assert.equal(text[0], 'mARC v26.11.25.4 (26.1125.4); install');
+  assert.ok(text.includes('# claude'));
+  assert.ok(text.includes('  $ claude plugin list --json'));
+  assert.ok(text.some(l => l.startsWith('  +- claude: Manual remedy (review first;')));
+  assert.ok(text.includes('  |  $ claude plugin marketplace remove nexaduo'));
+  assert.ok(text.some(l => l.startsWith('  x claude: nexaduo is registered from a different')));
+  assert.ok(text.includes('* result'));
+  assert.ok(text.some(l => /^ {2}claude {3}FAILED {2}nexaduo is registered/.test(l)), text.join('|'));
+  assert.ok(text.every(l => [...l].every(c => c.charCodeAt(0) < 128)), 'ASCII only');
+  assert.ok(logs.some(l => l.includes(`${ESC}[1;95mFAILED`)));
 });

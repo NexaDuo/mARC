@@ -23,6 +23,13 @@ date whose `YY.M.D` is already taken.
   (source type and source, control characters stripped). It still never removes
   or alters the registration (#428).
 
+### Added
+- Colored, structured launcher output in the mARC palette (#431): per-harness
+  headings, `$` command lines, a manual-remedy block and a result table. Color
+  is on only for a TTY (`NO_COLOR`, `FORCE_COLOR` and `COLORTERM` are honored,
+  legacy Windows consoles stay plain), native-CLI text is stripped of control
+  characters before it is painted, and plain/piped output is unchanged.
+
 ### Changed
 - All four harnesses and the catalog pointers move to `v26.11.25.4` (npm
   `26.1125.4`).
@@ -40,7 +47,8 @@ date whose `YY.M.D` is already taken.
   `Release` workflow with npm trusted publishing and provenance.
 - Addendum (26.11.25.4): that claim did not hold. `v26.11.25.3` was tagged, but its
   npm publish failed (E404 on PUT: the trusted publisher was not yet bound, #426),
-  so npm `26.1125.3` never reached the registry.
+  so the first publish failed. It was completed by re-running the `Release` job
+  after the trusted publisher was bound.
 
 ## [26.11.25.2] - 2026-11-25
 
