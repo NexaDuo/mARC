@@ -21,10 +21,14 @@ const fixtures = {
   agy: JSON.stringify([{ name: 'marc', version: '26.11.26', enabled: true }]),
 };
 const marketFixtures = {
-  claude: [{ name: 'nexaduo', source: { source: 'github', repo: 'NexaDuo/mARC' } }],
-  copilot: [{ name: 'nexaduo', source: 'GitHub: NexaDuo/mARC' }],
-  codex: [{ name: 'nexaduo', marketplaceSource: { sourceType: 'git', source: 'https://github.com/NexaDuo/mARC.git', ref: null } }],
+  // Operator captures, 2026-11-25: Claude 2.1.322, Copilot 1.0.89-1,
+  // Codex 0.167.1. Copilot/Codex pinned and unpinned lists are identical.
+  claude: [{ name: 'nexaduo', source: 'github', repo: 'NexaDuo/mARC', installLocation: '/home/<u>/.claude/plugins/marketplaces/nexaduo' }],
+  copilot: [{ name: 'nexaduo', source: 'GitHub: NexaDuo/mARC', isDefault: false }],
+  codex: { marketplaces: [{ name: 'nexaduo', root: '<CODEX_HOME>/.tmp/marketplaces/nexaduo',
+    marketplaceSource: { sourceType: 'git', source: 'https://github.com/NexaDuo/mARC.git' } }] },
 };
+const marketRow = h => parseMarketplaces(h, JSON.stringify(marketFixtures[h]))[0];
 const silent = () => {};
 function runner(calls, overrides = {}) {
   return async (h, args, options) => {
@@ -339,7 +343,7 @@ test('observed native JSON list fixtures, text fallback and cached-catalog point
     const catalog = path.join(dir, location, 'marketplace.json');
     const source = { source: h === 'copilot' ? 'github' : 'git-subdir', [h === 'copilot' ? 'repo' : 'url']: 'NexaDuo/mARC', path: `harnesses/${h === 'claude' ? 'claude-code' : h}/marc`, ref: release.tag };
     await writeFile(catalog, JSON.stringify({ name: 'nexaduo', plugins: [{ name: 'marc', source }] }));
-    const nativeMarkets = [{ ...marketFixtures[h][0], root: dir }];
+    const nativeMarkets = [{ ...marketRow(h), root: dir }];
     const run = async (name, a) => a[1] === 'marketplace' ? JSON.stringify(nativeMarkets) : JSON.stringify(observed[h]);
     assert.equal(await invoke(['doctor', '--harness', h, '--yes'], [], { run }), 0);
     assert.deepEqual(await readCatalogSource(h, nativeMarkets, []), source);
@@ -402,6 +406,30 @@ test('allowlist rejects embedded and trailing metacharacters, including JS end-a
 });
 
 for (const h of ['claude', 'copilot', 'codex']) {
+  test(`captured ${h} registration matches and doctor has no false source drift`, async () => {
+    assert.equal(marketplaceMatches(h, marketRow(h)), true);
+    assert.deepEqual(marketplaceWarnings([marketRow(h)], h), []);
+    const calls = [], logs = [];
+    assert.equal(await invoke(['doctor', '--harness', h], calls, { log: s => logs.push(s) }), 0);
+    assert.ok(!logs.some(s => /source drift|legacy-pinned|manual remedy/i.test(s)));
+    assert.equal(logs.includes(`${h}: pin state unverifiable from native list`), h !== 'claude');
+    assert.ok(calls.every(([, args]) => args.includes('list')));
+  });
+  test(`${h} rejects marketplace lookalikes without changing registration`, async () => {
+    for (const repo of ['nexaduo/mARC', 'NexaDuo/marc', 'NexaDuo/mARC/', 'git@github.com:NexaDuo/mARC.git',
+      'ssh://git@github.com/NexaDuo/mARC.git', 'https://github.com/NexaDuo/mARC.git/', 'NexaDuo/other', 'NexaDuo/mARC\n']) {
+      const market = structuredClone(marketRow(h));
+      if (h === 'claude') market.repo = repo;
+      else if (h === 'copilot') market.source = `GitHub: ${repo}`;
+      else market.marketplaceSource.source = /^(?:git@|ssh:|https:)/.test(repo) ? repo : `https://github.com/${repo}.git`;
+      assert.equal(marketplaceMatches(h, market), false, repo);
+      const calls = [], logs = [];
+      const run = async (name, args) => { calls.push(args); return JSON.stringify([market]); };
+      assert.equal(await invoke(['install', '--harness', h, '--yes'], [], { run, log: s => logs.push(s) }), 1);
+      assert.deepEqual(calls, [['plugin', 'marketplace', 'list', '--json']]);
+      assert.ok(logs.includes(`${h} plugin marketplace remove nexaduo`));
+    }
+  });
   test(`install ${h} adds absent registration, skips expected existing registration`, async () => {
     const calls = [];
     const run = async (name, args) => {
@@ -438,6 +466,59 @@ for (const h of ['claude', 'copilot', 'codex']) {
     }
   });
 }
+
+test('Codex captured legacy local source is preserved with a manual remedy', async () => {
+  const market = { name: 'nexaduo', root: '/path/to/clone', marketplaceSource: { sourceType: 'local', source: '/path/to/clone' } };
+  assert.equal(marketplaceMatches('codex', market), false);
+  for (const command of ['install', 'doctor']) {
+    const calls = [], logs = [];
+    const run = async (h, args) => {
+      calls.push(args);
+      return args[1] === 'marketplace' ? JSON.stringify({ marketplaces: [market] }) : fixtures.codex;
+    };
+    assert.equal(await invoke([command, '--harness', 'codex', '--yes'], [], { run, log: s => logs.push(s) }), 1);
+    assert.ok(calls.every(args => args.includes('list')));
+    assert.ok(logs.includes('codex plugin marketplace remove nexaduo'));
+    assert.ok(logs.some(s => /different or unverified source|source drift/.test(s)));
+    assert.ok(!logs.some(s => s.includes('pin state unverifiable')));
+  }
+});
+
+test('Claude flat ref and repo fragment pins are legacy conflicts', async () => {
+  for (const extra of [{ ref: 'v26.11.25' }, { repo: 'NexaDuo/mARC#v26.11.25' }, { ref: 'main' }]) {
+    const market = { ...marketRow('claude'), ...extra };
+    assert.equal(marketplaceMatches('claude', market), false);
+    assert.ok(marketplaceWarnings([market], 'claude').some(s => s.includes('legacy-pinned')));
+    for (const command of ['install', 'doctor']) {
+      const calls = [], logs = [];
+      const run = async (h, args) => {
+        calls.push(args);
+        return args[1] === 'marketplace' ? JSON.stringify([market]) : fixtures.claude;
+      };
+      assert.equal(await invoke([command, '--harness', 'claude', '--yes'], [], { run, log: s => logs.push(s) }), 1);
+      assert.ok(calls.every(args => args.includes('list')));
+      assert.ok(logs.includes('claude plugin marketplace remove nexaduo'));
+    }
+  }
+});
+
+test('Copilot default marketplace does not interfere with captured nexaduo source', () => {
+  const markets = parseMarketplaces('copilot', JSON.stringify([
+    { name: 'copilot-plugins', source: 'GitHub: github/copilot-plugins', isDefault: true }, ...marketFixtures.copilot,
+  ]));
+  assert.deepEqual(markets, marketFixtures.copilot);
+});
+
+test('absent requested Claude scope lists installed scopes, including during dry-run', async () => {
+  for (const installed of [JSON.parse(fixtures.claude), []]) for (const dry of [true, false]) {
+    const calls = [], logs = [];
+    assert.equal(await invoke(['update', '--harness', 'claude', '--scope', 'local', ...(dry ? ['--dry-run'] : ['--yes'])], [],
+      { run: runner(calls, { claude: JSON.stringify(installed) }), log: s => logs.push(s) }), 1);
+    assert.ok(logs.includes(`claude: marc is not installed at scope local; installed scopes: ${installed.length ? 'user, project' : 'none'}`));
+    assert.ok(!logs.some(s => s.includes('run install first')));
+    assert.deepEqual(calls.map(c => c[1]), [['plugin', 'list', '--json']]);
+  }
+});
 
 test('failed list or native command never aborts remaining harnesses', async () => {
   for (const command of ['install', 'update', 'doctor', 'uninstall']) {
@@ -489,11 +570,29 @@ for (const h of ['claude', 'copilot', 'codex']) test(`doctor ${h} rejects matchi
 
 test('native Windows temp root expands RUNNER~1 and prefers a root without spaces', () => {
   const short = 'C:\\Users\\RUNNER~1\\Temp';
-  const calls = [];
-  assert.deepEqual(tempRoots(short, { platform: 'win32', realpath: p => { calls.push(p); return 'C:\\Users\\runneradmin\\Temp'; } }), ['C:\\Users\\runneradmin\\Temp']);
-  assert.deepEqual(calls, [short]);
-  const roots = tempRoots(undefined, { platform: 'win32', env: { TMP: short, TEMP: 'C:\\with space' }, realpath: p => p === short ? 'C:\\Users\\runneradmin\\Temp' : 'C:\\with space' });
-  assert.equal(roots[0], 'C:\\Users\\runneradmin\\Temp');
+  const home = 'C:\\Users\\runneradmin', root = `${home}\\Temp`;
+  const realpath = p => p === short ? root : p;
+  assert.deepEqual(tempRoots(short, { platform: 'win32', home, realpath }), [root]);
+  assert.deepEqual(tempRoots(undefined, { platform: 'win32', home, env: { TMP: short, TEMP: `${home}\\with space` }, realpath }), [root]);
+});
+
+test('Windows temp selection fails closed instead of falling back to shared system temp', () => {
+  const home = 'C:\\Users\\with space', shared = 'C:\\Windows\\Temp';
+  const options = { platform: 'win32', home, env: { SystemRoot: 'C:\\Windows', TMP: `${home}\\Temp`, TEMP: shared },
+    realpath: p => [home, `${home}\\Temp`].includes(p) ? p : shared };
+  assert.throws(() => tempRoots(undefined, options), /set TMP\/TEMP to a user-owned writable directory without spaces/);
+  for (const root of [shared, 'C:\\Users\\Public\\Temp', 'C:\\Users\\with space-other\\Temp']) {
+    assert.throws(() => tempRoots(root, { ...options, realpath: p => p }), /No private temp root/);
+  }
+  // Canonicalization must reject a profile-local junction into shared temp.
+  assert.throws(() => tempRoots(`${home}\\alias`, options), /No private temp root/);
+});
+
+test('POSIX temp roots require user ownership and reject shared writable roots', () => {
+  for (const info of [{ uid: 0, mode: 0o1777 }, { uid: 1000, mode: 0o777 }, { uid: 1000, mode: 0o770 }]) {
+    assert.throws(() => tempRoots('/shared', { platform: 'linux', uid: 1000, realpath: p => p,
+      stat: () => ({ ...info, isDirectory: () => true }) }), /No private temp root/);
+  }
 });
 
 test('Windows generated paths allow short names and separators only on marked argv', () => {

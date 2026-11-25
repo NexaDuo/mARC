@@ -1,6 +1,6 @@
 import { mkdtemp, rm, lstat, stat, readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createRunner, resolveExecutable, safeValue } from './process.js';
@@ -88,13 +88,25 @@ async function checkTree(root, top = true) {
   }
 }
 
-export function tempRoots(tmpRoot, { platform = process.platform, env = process.env, realpath = realpathSync.native } = {}) {
-  const candidates = tmpRoot ? [tmpRoot] : [os.tmpdir(), env.TMP, env.TEMP,
-    ...(platform === 'win32' && env.SystemRoot ? [path.win32.join(env.SystemRoot, 'Temp')] : [])];
+export function tempRoots(tmpRoot, { platform = process.platform, env = process.env, realpath = realpathSync.native,
+  stat = statSync, home = os.homedir(), uid = process.getuid?.() } = {}) {
+  const candidates = tmpRoot ? [tmpRoot] : [os.tmpdir(), env.TMP, env.TEMP];
   const roots = [...new Set(candidates.filter(Boolean).flatMap(p => { try { return [realpath(p)]; } catch { return []; } }))];
-  // Prefer an existing root without spaces. Never create a shared root or
-  // weaken the batch check if all available roots contain spaces.
-  return platform === 'win32' ? [...roots.filter(p => !/\s/.test(p)), ...roots.filter(p => /\s/.test(p))] : roots;
+  const safe = roots.filter(root => {
+    try {
+      if (platform === 'win32') {
+        // Node cannot verify Windows ACL ownership. Only accept canonical
+        // paths inside the user's profile, never a system/shared fallback.
+        const relative = path.win32.relative(realpath(home), root);
+        return !/\s/.test(root) && relative !== '' && relative !== '..' &&
+          !relative.startsWith('..\\') && !path.win32.isAbsolute(relative);
+      }
+      const info = stat(root);
+      return info.isDirectory() && info.uid === uid && (info.mode & 0o022) === 0;
+    } catch { return false; }
+  });
+  if (!safe.length) throw new Error('No private temp root available; set TMP/TEMP to a user-owned writable directory without spaces');
+  return safe;
 }
 
 export async function installAgy({ run, release, tmpRoot }) {
@@ -149,8 +161,12 @@ async function doctor(h, run, release, log, scope) {
   }
   if (h !== 'agy') {
     const markets = parseMarketplaces(h, await run(h, ['plugin', 'marketplace', 'list', '--json']));
-    for (const warning of marketplaceWarnings(markets, h)) { log(`${h}: ${warning}`); drift = true; }
-    if (marketplaceWarnings(markets, h).length) manualRemedy(h, log, scope);
+    const warnings = marketplaceWarnings(markets, h);
+    for (const warning of warnings) { log(`${h}: ${warning}`); drift = true; }
+    if (warnings.length) manualRemedy(h, log, scope);
+    if (['codex', 'copilot'].includes(h) && markets.some(m => marketplaceMatches(h, m))) {
+      log(`${h}: pin state unverifiable from native list`);
+    }
     if (!markets.length) { log(`${h}: nexaduo marketplace missing`); drift = true; }
     const source = await readCatalogSource(h, markets, rows);
     const sources = source !== null ? [source] : rows.map(r => r.source).filter(Boolean);
@@ -187,8 +203,12 @@ export async function main(argv, { release, run = createRunner(), log = console.
   let status = 0, claudeRows, claudeError;
   if (opts.command === 'update' && opts.harnesses.includes('claude')) {
     try {
-      claudeRows = parsePlugins('claude', await run('claude', listArgs('claude')))
-        .filter(row => !opts.scope || row.scope === opts.scope);
+      const installed = parsePlugins('claude', await run('claude', listArgs('claude')));
+      claudeRows = installed.filter(row => !opts.scope || row.scope === opts.scope);
+      if (opts.scope && !claudeRows.length) {
+        const scopes = [...new Set(installed.map(row => row.scope || 'unknown'))];
+        throw new Error(`marc is not installed at scope ${opts.scope}; installed scopes: ${scopes.join(', ') || 'none'}`);
+      }
       for (const row of claudeRows) if (row.scope !== 'user') {
         const target = row.projectPath || cwd;
         if (!path.isAbsolute(target)) throw new Error('Claude: invalid project path');

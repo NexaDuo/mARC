@@ -45,13 +45,20 @@ export function parseMarketplaces(harness, output) {
 
 const REPOS = new Set(['NexaDuo/mARC', 'https://github.com/NexaDuo/mARC', 'https://github.com/NexaDuo/mARC.git']);
 
+function marketplacePinned(value) {
+  if (typeof value === 'string') return value.includes('#');
+  return value && typeof value === 'object' && Object.entries(value).some(([key, v]) =>
+    (['ref', 'branch', 'tag', 'rev', 'commit', 'sha', 'gitRef'].includes(key) && v != null && v !== '') ||
+    (['repo', 'url', 'source'].includes(key) && typeof v === 'string' && v.includes('#')) ||
+    (typeof v === 'object' && marketplacePinned(v)));
+}
+
 export function marketplaceMatches(harness, market) {
   const source = market.marketplaceSource ?? market.source;
-  // Pins are registration drift even if the plugin catalog itself is current.
-  const pinned = value => value && typeof value === 'object' && Object.entries(value).some(([key, v]) =>
-    (['ref', 'branch', 'tag', 'rev', 'commit', 'sha', 'gitRef'].includes(key) && v != null && v !== '') ||
-    (typeof v === 'object' && pinned(v)));
-  if (pinned(market)) return false;
+  // Reject visible pins. Codex and Copilot native lists hide the ref, so a
+  // matching source alone cannot prove that their registration is unpinned.
+  if (marketplacePinned(market)) return false;
+  if (harness === 'claude' && source === 'github') return market.repo === 'NexaDuo/mARC';
   if (typeof source === 'string') return harness !== 'codex' &&
     (source === 'NexaDuo/mARC' || source === 'GitHub: NexaDuo/mARC');
   if (!source || typeof source !== 'object') return false;
@@ -61,10 +68,12 @@ export function marketplaceMatches(harness, market) {
 }
 
 export function marketplaceWarnings(marketplaces, harness) {
-  const text = JSON.stringify(marketplaces);
-  const pinned = /#[^"\s]+|"(?:ref|branch|tag)"\s*:\s*"[^"\s]+"/.test(text);
-  if (pinned) return ['legacy-pinned marketplace; manual re-registration required'];
-  return marketplaces.some(m => !marketplaceMatches(harness, m)) ? ['marketplace source drift; expected NexaDuo/mARC unpinned'] : [];
+  const warnings = [];
+  if (marketplaces.some(marketplacePinned)) warnings.push('legacy-pinned marketplace; manual re-registration required');
+  if (marketplaces.some(m => !marketplacePinned(m) && !marketplaceMatches(harness, m))) {
+    warnings.push('marketplace source drift; expected NexaDuo/mARC unpinned');
+  }
+  return warnings;
 }
 
 export function sourceHasPointer(source, tag, harness) {

@@ -1047,6 +1047,7 @@ prepare_arm_catalog() {
     local source_root="$1"
     if [ -z "${BENCH_CATALOG_ROOT:-}" ]; then
         BENCH_CATALOG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/marc-bench-catalogs.XXXXXX")"
+        # shellcheck disable=SC2016
         register_exit_cleanup 'rm -rf -- "$BENCH_CATALOG_ROOT"'
     fi
     ARM_CATALOG="$(mktemp -d "$BENCH_CATALOG_ROOT/arm.XXXXXX")"
