@@ -8,7 +8,7 @@
         "source": "git-subdir",
         "url": "NexaDuo/mARC",
         "path": "harnesses/codex/marc",
-        "ref": "v26.11.25.3"
+        "ref": "v26.11.25.4"
       }
     }
   ]
