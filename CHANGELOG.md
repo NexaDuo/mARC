@@ -8,6 +8,8 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.25.6] - 2026-11-25
+
 ### Changed
 - Tooling (#441): a repo-root `VERSION` file is the only hand-edited release version.
   `scripts/bump_version.py <ver>` stamps the four manifests, the three catalog `ref`
@@ -16,6 +18,7 @@ date whose `YY.M.D` is already taken.
   `check_catalog_pointers.py`, and the release plan now reads `VERSION`. Launcher and
   release-guard tests derive the current version from `VERSION`. `launcher/package.json`
   gains `homepage` and `bugs` (shown on npmjs.com after the next publish).
+- All four harnesses and the catalog pointers move to `v26.11.25.6` (npm `26.1125.6`); the first release cut from the single `VERSION` source (#441).
 
 ### Added
 - Launcher `--force` / `--force-local` for `install` and `update` (#440): re-register a
