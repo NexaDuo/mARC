@@ -105,7 +105,7 @@ Think of your project as an IRC channel. **`@techlead`** holds channel-operator 
 | `@sec`       | security (read-only) | pre-merge diff review; one half of the mandatory merge gate |
 | `@rev`       | review (read-only)   | pre-merge correctness review; the other half of the mandatory merge gate |
 | `@research`  | researcher (read-only) | external evidence (such as benchmarks or documentation) as a cited brief |
-| `@arch`      | architect (read-only) | one hard decision, escalated to on explicit triggers; advises in a `## @arch decision` comment |
+| `@arch`      | architect (read-only) | one hard decision, escalated to on explicit triggers; advises in a `## marc:arch decision` comment |
 
 `@techlead` and `@eng-director` are leadership **skills** you invoke in a
 session. The specialists are subagents dispatched for individual tasks. Start

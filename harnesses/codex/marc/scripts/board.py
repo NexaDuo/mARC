@@ -1084,7 +1084,7 @@ def main() -> int:
     create_p.set_defaults(func=_cmd_create)
 
     # Concurrent-operator claim protocol (origin #378; rules #205/#213/#214/#216).
-    cs_p = subparsers.add_parser("claim-status", help="resolve who holds an issue's `## @techlead claim`")
+    cs_p = subparsers.add_parser("claim-status", help="resolve who holds an issue's `## marc:techlead claim`")
     _add_common_args(cs_p)
     cs_p.add_argument("--issue", type=int, required=True)
     cs_p.add_argument("--operator", default=None, help="your <harness>/<session-id>, to get a decision")
@@ -1097,7 +1097,7 @@ def main() -> int:
     claim_p.add_argument("--note", default=None, help="free text appended after the marker fields")
     claim_p.set_defaults(func=_cmd_claim)
 
-    wd_p = subparsers.add_parser("withdraw", help="post `## @techlead withdraw` for your own claim")
+    wd_p = subparsers.add_parser("withdraw", help="post `## marc:techlead withdraw` for your own claim")
     _add_common_args(wd_p)
     wd_p.add_argument("--issue", type=int, required=True)
     wd_p.add_argument("--operator", required=True, help="the <harness>/<session-id> that claimed it")

@@ -126,10 +126,11 @@ before searching — an unfocused search burns the timebox on noise.
 
 ## Deliverable: ONE structured brief
 Comment it on the motivating issue (`gh issue comment <N> --body-file …`), then
-report the comment URL back to @techlead. Structure:
+report the comment URL back to @techlead. Start with `## marc:research brief: <question>`
+(origin: #419 · 2026-11-25). Structure:
 
 ```markdown
-## Research brief: <question>
+## marc:research brief: <question>
 **TL;DR** — <3–6 lines: the answer as far as evidence supports it, and the
 confidence level.>
 

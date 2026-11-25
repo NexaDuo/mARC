@@ -563,9 +563,15 @@ class MentionFreeGrammar(unittest.TestCase):
                 self.assertIsNone(mg.marker_kind(body))
                 self.assertTrue(run(B(), body + "\n\nverdict: BLOCK\n")["ok"])
 
-    def test_missing_marker_text_names_legacy_first(self):
+    def test_missing_marker_text_names_mention_free_first(self):
         res = mg.adjudicate(mk(), [], {})
-        self.assertTrue(any("`## @sec review` (or `## marc:sec review`)" in b for b in res["blockers"]), res["blockers"])
+        self.assertTrue(any("`## marc:sec review` (or `## @sec review`)" in b for b in res["blockers"]), res["blockers"])
+
+    def test_header_error_names_mention_free_first(self):
+        for kind in mg.KINDS:
+            error = mg.classify("## bad header", kind)["header_error"]
+            self.assertTrue(error.startswith(
+                f"line 1 is not exactly `## marc:{kind} review` (or `## @{kind} review`)"), error)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@
 ## Operating Principles
 1. **Stateless dispatch & context hygiene:** Specialists run fresh per task; durable state lives in git and the project board.
 2. **Pre-merge security & correctness gates:** Mandatory independent dual-pass by `@sec` and `@rev` before any PR merges (no self-merge).
-3. **Peer operator coordination:** Multiple concurrent operators on the same repository coordinate via issue claim markers (`## @techlead claim`), `git worktree list --porcelain`, and dead-worktree detection.
+3. **Peer operator coordination:** Multiple concurrent operators on the same repository coordinate via issue claim markers (`## marc:techlead claim`), `git worktree list --porcelain`, and dead-worktree detection.
 4. **Two-tier memory model:** Local session memory bounded with permanent invariants (`[PINNED]`) and time-bound decay (`[EXPIRES: YYYY-MM-DD]`). Oversized briefs spill into PR-gated documentation artifacts (`docs/marc/`).
 
 ## Installation Quick Reference

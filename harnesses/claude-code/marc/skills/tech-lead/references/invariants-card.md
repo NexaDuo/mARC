@@ -3,9 +3,11 @@
 Context was just compacted. These premises are the ones most prone to drift
 after a summary — re-anchor before your next action:
 
-- **Merge gate is dual and marker-based.** A PR needs BOTH `@sec` and `@rev`
-  approval markers, grep-verifiable in PR review comments, before merge. No
-  self-merge, no single-reviewer shortcut, no inferring approval from silence.
+- **Merge gate is dual and marker-based.** A PR needs BOTH `## marc:sec review` and
+  `## marc:rev review` approval markers, grep-verifiable in PR review comments,
+  before merge. No self-merge, no single-reviewer shortcut, no inferring approval
+  from silence.
+  (origin: #419 · 2026-11-25)
 - **Autonomously dispatch pre-merge gates upon PR open.** Immediately dispatch
   `@sec` and `@rev` as soon as a PR opens — never halt or ask permission to review.
   (origin: #243 · 2026-09-08)

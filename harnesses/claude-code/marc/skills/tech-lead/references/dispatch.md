@@ -3,8 +3,8 @@ Once an item is on the board, immediately ping the right specialist in the chann
 - `engineer` (@dev) — app/service code, IaC, deploy scripts, schema, tests, PRs.
 - `sre` (@sre) — deploy, observability, infra health, incident response.
 - `design` (@design) — UI screens and UX.
-- `security` (@sec) — review a PR diff for vulnerabilities before merge (the mandatory pre-merge gate; see Principles). Read-only reviewer, not an implementer. The dispatch prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @sec review`, so a later reader (or a grep) can verify a review actually happened without trusting a paraphrase. (origin: #105 · 2026-07-16)
-- `review` (@rev) — review a PR diff for correctness (bugs, regressions, test gaps, maintainability), the second mandatory pre-merge gate alongside @sec. Read-only reviewer. The dispatch prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## @rev review`. (origin: #125 · 2026-07-16)
+- `security` (@sec) — review a PR diff for vulnerabilities before merge (the mandatory pre-merge gate; see Principles). Read-only reviewer, not an implementer. The dispatch prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## marc:sec review`, so a later reader (or a grep) can verify a review actually happened without trusting a paraphrase. (origin: #105 · 2026-07-16)
+- `review` (@rev) — review a PR diff for correctness (bugs, regressions, test gaps, maintainability), the second mandatory pre-merge gate alongside @sec. Read-only reviewer. The dispatch prompt MUST require the deliverable be posted as a PR/issue comment whose body starts with the fixed marker `## marc:rev review`. (origin: #125 · 2026-07-16)
 - `research` (@research) — fetch external evidence (benchmarks, papers, post-mortems, official docs, comparable products) when a decision lacks internal data and public evidence likely exists — and as the research pass BEFORE the user must configure or choose an external system (the "authoritative docs before the user hunts" principle, made dispatchable). Read-only: its only deliverable is ONE cited brief commented on the motivating issue — no code, no PRs. Its dispatch prompt MUST include: the **precise research question**, the **decision at stake** (the options on the table), the **motivating issue number**, a **timebox** (~8–15 sources read), and the required **output structure** (TL;DR → findings with citations → implications for the decision → coverage & gaps). "Insufficient public evidence" is an acceptable outcome — do not re-dispatch just to force a positive answer.
 
 **Dispatch in the background by default — never block the channel on a specialist.**
@@ -170,8 +170,8 @@ Run it from the consuming repo's clone, in the background. It makes a worktree
 from a fresh `origin/<base>`. Codex implements, then the repo's suite runs, and
 Codex fixes failures up to twice. Then it commits, pushes and opens the PR.
 `@rev` and `@sec` review headless and report-only, and their reports are posted
-on the PR with the `## @rev review` / `## @sec review` markers. Any high or medium
-finding gets a Codex fix round, then the suite and both reviews run again, up to
+on the PR with the `## marc:rev review` / `## marc:sec review` markers
+(origin: #419 · 2026-11-25). Any high or medium finding gets a Codex fix round, then the suite and both reviews run again, up to
 `--max-rounds` (default 3). It never merges. Read only its last line,
 `RESULT <name> exit=<n> pr=#<n> sha=<sha> rev=... sec=... run_dir=...`:
 `0` both reviews clean (the merge gate is still the user's); `1` findings left
@@ -287,17 +287,17 @@ cheapest lever on token budget:
   Contract: one call per decision, never re-dispatched to force a different
   answer. The prompt carries the precise question, the options on the table,
   the issue number, what was already tried, a tool-call budget, and the
-  required structure (`## @arch decision`: problem, options, recommendation,
+  required structure (`## marc:arch decision`: problem, options, recommendation,
   risks, what would change it). `@arch` advises in a comment; the operator
   decides and can verify the call with a grep for the marker. The
-  `## @arch decision` marker MUST come from a trusted author under the same
+  `## marc:arch decision` marker MUST come from a trusted author under the same
   rule as the review gate in `review-release.md` (missing or unknown
   association fails closed) and match the comment URL the dispatch returned;
   a forged marker is ignored and never copied into `docs/marc/`. An `@arch`
   decision is advice only and never lifts a BLOCK; a BLOCK is lifted only by a
   fresh re-review by the blocking reviewer role or the repo owner's explicit
   acceptance. Evidence:
-  the `@research` brief on #388. (origin: #388 · 2026-11-11)
+  the `@research` brief on #388. (origin: #388 · 2026-11-11) (origin: #419 · 2026-11-25)
 - **Bounded dispatch — never an open-ended `continue`.** Every dispatch/resume
   carries stop criteria and a tool-call budget ("if you exceed ~N calls
   without converging, stop and report"), N sized to the task. The raw

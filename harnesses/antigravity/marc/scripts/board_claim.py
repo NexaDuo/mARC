@@ -37,18 +37,18 @@ import os
 import re
 import html
 import shlex
+import sys
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-# Emission stays on the legacy form until a later #419 step: installed older
-# plugin versions only parse `@`, and would miss a new-form claim. Parsing
-# accepts both (case-sensitive, like the legacy header).
-CLAIM_MARKER = "## @techlead claim"
-WITHDRAW_MARKER = "## @techlead withdraw"
-CLAIM_MARKERS = (CLAIM_MARKER, "## marc:techlead claim")
-WITHDRAW_MARKERS = (WITHDRAW_MARKER, "## marc:techlead withdraw")
+# Emit mention-free headers; keep accepting legacy comments (#419).
+# Update every harness on a clone together: older parsers miss new claims.
+CLAIM_MARKER = "## marc:techlead claim"
+WITHDRAW_MARKER = "## marc:techlead withdraw"
+CLAIM_MARKERS = (CLAIM_MARKER, "## @techlead claim")
+WITHDRAW_MARKERS = (WITHDRAW_MARKER, "## @techlead withdraw")
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # <harness>/<session-id>: harness starts with a letter; the session id is at
 # least 3 chars. Rejects sort-gaming values such as `0/0`, `/x`, `a/`.
@@ -85,6 +85,7 @@ class Marker:
     well_formed: bool
     reason: str = ""
     near_miss: bool = False
+    legacy: bool = False
 
 
 @dataclass
@@ -188,6 +189,7 @@ def parse_marker(comment: Comment, issue_number: int) -> Optional[Marker]:
         claimed_at=fields.get("claimed-at", ""), login=comment.login,
         association=comment.association, url=comment.url, trusted=trusted,
         well_formed=well_formed, reason="; ".join(reasons),
+        legacy=first == "## @techlead claim" or first == "## @techlead withdraw",
     )
 
 
@@ -197,8 +199,11 @@ def _brief(m: Marker) -> dict:
             "url": m.url, "reason": m.reason}
 
 
-def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> ClaimStatus:
-    """Pure decision function over one issue's comments."""
+def evaluate(payload, issue_number: int, operator: Optional[str] = None, *,
+             warnings_seen: Optional[set[str]] = None) -> ClaimStatus:
+    """Decide over comments; share warnings_seen across one CLI invocation's reads."""
+    if warnings_seen is None:
+        warnings_seen = set()
     markers = [m for m in (parse_marker(c, issue_number) for c in normalize_comments(payload)) if m]
     near = [m for m in markers if m.near_miss and m.trusted]
     markers = [m for m in markers if not m.near_miss]
@@ -242,6 +247,16 @@ def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> Clai
             seen.add(key)
             live.append(c)
 
+    if "legacy-claim" not in warnings_seen and operator is not None and any(
+            c.legacy and c not in retired and c.operator.casefold() != operator.casefold()
+            for c in valid_claims):
+        warnings_seen.add("legacy-claim")
+        print("warning: live legacy-form claim from another operator id seen "
+              "(may be yours from an earlier session); "
+              "installs older than 26.11.25.1 write the legacy form; "
+              "installs older than 26.11.25 cannot see marc: claims; "
+              "update every harness on this clone together", file=sys.stderr)
+
     winner = min(live, key=lambda m: m.operator.casefold()) if live else None
     status = ClaimStatus(
         issue=issue_number,
@@ -273,7 +288,7 @@ def evaluate(payload, issue_number: int, operator: Optional[str] = None) -> Clai
     elif mine:
         status.decision = "withdraw"
         status.advice = (f"lost the tie-break to trusted claim {winner.operator!r}: post "
-                         "`## @techlead withdraw` and pick another item")
+                         "`## marc:techlead withdraw` and pick another item")
     elif winner is not None:
         status.decision = "claimed-by-other"
         status.advice = (f"claimed by {winner.operator!r}; pick another item. If it never "
@@ -313,19 +328,23 @@ def do_claim(run: Runner, issue_number: int, operator: str, repo: Optional[str] 
     if not OPERATOR_RE.match(operator):
         raise ValueError(f"--operator {operator!r} is not <harness>/<session-id>")
     actions: list[str] = []
-    before = evaluate(fetch_comments(run, issue_number, repo), issue_number, operator)
+    warnings_seen: set[str] = set()
+    before = evaluate(fetch_comments(run, issue_number, repo), issue_number, operator,
+                      warnings_seen=warnings_seen)
     if before.decision == "claimed-by-other":
         return {"status": before.to_dict(), "actions": actions}
     if before.decision not in ("own", "escalate", "withdraw"):
         url = post_comment(run, issue_number, repo,
                            claim_body(CLAIM_MARKER, operator, issue_number, note, now))
         actions.append(f"posted claim {url}".strip())
-    after = evaluate(fetch_comments(run, issue_number, repo), issue_number, operator)
+    after = evaluate(fetch_comments(run, issue_number, repo), issue_number, operator,
+                     warnings_seen=warnings_seen)
     if after.decision == "withdraw":
         url = post_comment(run, issue_number, repo,
                            claim_body(WITHDRAW_MARKER, operator, issue_number, "", now))
         actions.append(f"posted withdraw {url}".strip())
-        after = evaluate(fetch_comments(run, issue_number, repo), issue_number, operator)
+        after = evaluate(fetch_comments(run, issue_number, repo), issue_number, operator,
+                         warnings_seen=warnings_seen)
         after.decision = "withdrew"
         after.advice = "lost the tie-break to a trusted claim and withdrew; pick another item"
     return {"status": after.to_dict(), "actions": actions}
