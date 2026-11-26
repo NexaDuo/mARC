@@ -63,7 +63,14 @@ register_exit_cleanup() {
 run_exit_cleanups() {
     local cmd
     for cmd in "${EXIT_CLEANUP_CMDS[@]}"; do
-        eval "$cmd"
+        # `@sec` (issue #324 review, round 2): under `set -eo pipefail`, one
+        # registered cleanup failing (nonzero exit, or an uncaught internal
+        # error) would abort this loop and skip every cleanup after it --
+        # including the ARM_A_DIR worktree removal. The registry's whole
+        # value is that each entry runs independently, so guard the `eval`
+        # itself here too, on top of each entry guarding its own risky
+        # commands.
+        eval "$cmd" || true
     done
 }
 
@@ -727,15 +734,42 @@ restore_team_toml() {
     fi
     if [ "$TEAM_TOML_EXISTED" = "true" ]; then
         if [ -n "$TEAM_TOML_BACKUP" ] && [ -f "$TEAM_TOML_BACKUP" ]; then
-            mkdir -p "$(dirname "$TEAM_TOML_PATH")"
-            cp "$TEAM_TOML_BACKUP" "$TEAM_TOML_PATH"
-            rm -f "$TEAM_TOML_BACKUP"
-            echo "Restored $TEAM_TOML_PATH to its pre-run contents." >&2
+            mkdir -p "$(dirname "$TEAM_TOML_PATH")" 2>/dev/null || true
+            if cp "$TEAM_TOML_BACKUP" "$TEAM_TOML_PATH" 2>/dev/null; then
+                rm -f "$TEAM_TOML_BACKUP" 2>/dev/null || true
+                echo "Restored $TEAM_TOML_PATH to its pre-run contents." >&2
+            else
+                # `@sec` (issue #324 review, round 2): copying the backup
+                # over failed (e.g. the destination dir vanished). Do NOT
+                # silently no-op here -- that manufactures false confidence
+                # that the operator is protected while leaving the mutated
+                # file in place, the exact #287 shape this trap exists to
+                # close. Warn loudly, naming both the file and the state
+                # left behind, so a LOCAL_RUN=true operator can fix it by
+                # hand. This function deliberately never calls `exit` --
+                # doing so from inside an EXIT-trap cleanup would abort the
+                # rest of the cleanup chain (item 2 below), so a failed
+                # restore is surfaced via a loud stderr warning rather than
+                # a changed process exit status.
+                echo "WARNING: failed to restore $TEAM_TOML_PATH from its backup ($TEAM_TOML_BACKUP) -- the file has been LEFT IN ITS MUTATED STATE from this run. Restore it by hand, e.g. from $TEAM_TOML_BACKUP if it still exists on disk." >&2
+            fi
+        else
+            # The backup file we created in setup_team_toml_restore() is
+            # gone by the time cleanup runs (e.g. something swept /tmp).
+            # Same rule: warn loudly rather than no-op silently.
+            echo "WARNING: $TEAM_TOML_PATH existed before this run, but its backup is missing (expected at '$TEAM_TOML_BACKUP') -- cannot restore. $TEAM_TOML_PATH has been LEFT IN ITS MUTATED STATE from this run; a LOCAL_RUN=true operator must restore it by hand." >&2
         fi
     else
-        rm -f "$TEAM_TOML_PATH"
+        rm -f "$TEAM_TOML_PATH" 2>/dev/null || true
         echo "Removed $TEAM_TOML_PATH (it did not exist before this run) -- restoring absence, not leaving an empty/mutated file behind." >&2
     fi
+    # Always return 0: this runs inside run_exit_cleanups() under
+    # `set -eo pipefail` (issue #324 review, `@sec` finding 2 below) -- one
+    # cleanup's internal failure must never abort the rest of the
+    # registered cleanup chain (e.g. the ARM_A_DIR worktree removal). Every
+    # mutating step above is already `|| true`-guarded for the same reason;
+    # this is the belt-and-suspenders backstop.
+    return 0
 }
 
 is_real_run() {

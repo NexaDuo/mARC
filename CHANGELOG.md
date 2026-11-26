@@ -8,6 +8,9 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Fixed
+- Benchmark (#324 round 2): `run_token_benchmark.sh` keeps running later EXIT cleanups when one fails, and warns loudly on stderr instead of silently no-oping when the `.agents/team.toml` restore can't happen (backup missing or copy failed).
+
 ## [26.11.25.7] - 2026-11-25
 
 ### Added

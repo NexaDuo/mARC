@@ -784,6 +784,62 @@ else
     fail "team.toml was NOT restored after a simulated mid-run abort -- got: $(cat "$TEAM_TOML_TESTDIR/.agents/team.toml" 2>/dev/null || echo '<missing>')"
 fi
 
+# 10e: the backup vanishes before cleanup runs (`@sec` review round 2,
+# MEDIUM). restore_team_toml() must not silently no-op -- it must warn
+# loudly (stderr) naming the file it could not restore, and it must leave
+# the mutated file in place rather than pretending nothing happened. It
+# must also not change the process's exit status (see the comment in
+# restore_team_toml() for why: an EXIT-trap cleanup calling `exit` would
+# abort the rest of the cleanup chain).
+result_10e_dir="$(mktemp -d)"
+(
+    cd "$result_10e_dir" || exit 1
+    mkdir -p .agents
+    printf '[telemetry]\noriginal = true\n' > .agents/team.toml
+    # shellcheck source=/dev/null
+    source "$TARGET"
+    EXIT_CLEANUP_CMDS=()
+    setup_team_toml_restore
+    printf '[token_guard]\nbulk_reader = true\n' > .agents/team.toml
+    rm -f "$TEAM_TOML_BACKUP" # simulate the backup vanishing before cleanup
+    run_exit_cleanups 2> "$result_10e_dir/stderr.log"
+) > /dev/null
+if grep -qi "WARNING" "$result_10e_dir/stderr.log" 2>/dev/null && grep -q "$result_10e_dir/.agents/team.toml" "$result_10e_dir/stderr.log" 2>/dev/null; then
+    pass "restore_team_toml() warns loudly on stderr, naming the file, when its backup has vanished (does not silently no-op)"
+else
+    fail "restore_team_toml() did not warn about the vanished backup -- stderr was: $(cat "$result_10e_dir/stderr.log" 2>/dev/null || echo '<missing>')"
+fi
+if [ "$(cat "$result_10e_dir/.agents/team.toml" 2>/dev/null)" = "$(printf '[token_guard]\nbulk_reader = true')" ]; then
+    pass "restore_team_toml() leaves the mutated file in place (not silently 'restored' to something wrong) when the backup is gone, matching its warning"
+else
+    fail "restore_team_toml() left team.toml in an unexpected state when the backup vanished -- got: $(cat "$result_10e_dir/.agents/team.toml" 2>/dev/null || echo '<missing>')"
+fi
+rm -rf "$result_10e_dir"
+
+# 10f: one registered cleanup failing must not cancel the others (`@sec`
+# review round 2, LOW). Register a failing command BEFORE a marker-writing
+# command and assert the marker still gets written -- the registry's whole
+# value is that each entry runs independently of the others' success.
+result_10f_dir="$(mktemp -d)"
+(
+    cd "$result_10f_dir" || exit 1
+    set -eo pipefail
+    # shellcheck source=/dev/null
+    source "$TARGET"
+    # shellcheck disable=SC2034
+    EXIT_CLEANUP_CMDS=()
+    trap run_exit_cleanups EXIT
+    register_exit_cleanup 'false' # a cleanup that fails outright
+    register_exit_cleanup 'touch after-failure-marker'
+    true # normal (non-abort) exit -- the trap alone must not skip later entries
+)
+if [ -f "$result_10f_dir/after-failure-marker" ]; then
+    pass "run_exit_cleanups() still runs a later registered cleanup after an earlier one fails (one failing entry does not cancel the chain)"
+else
+    fail "a failing cleanup cancelled the rest of the chain -- the later marker was never written"
+fi
+rm -rf "$result_10f_dir"
+
 rm -rf "$TEAM_TOML_TESTDIR"
 
 echo
