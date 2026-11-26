@@ -1263,6 +1263,7 @@ test('local and unverifiable --force under --yes (even on a TTY) or without a TT
       assert.equal(r.code, 1); assert.deepEqual(wargs(r.calls), []); assert.equal(asked, 0, 'a typed answer is never requested under --yes');
       assert.ok(r.logs.includes(`${h}: ${REFUSED(reason, desc)}`), r.logs.join('\n'));
       assert.ok(r.logs.includes(`${h} plugin marketplace remove nexaduo`), 'manual remedy');
+      assert.ok(r.logs.indexOf(`${h}: ${REFUSED(reason, desc)}`) < r.logs.findIndex(l => l.includes('Manual remedy')), 'the message precedes the commands it points at');
       assert.ok(r.logs.includes(`${h}: FAILED`));
     }
     // The deprecated alias grants nothing extra.

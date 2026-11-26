@@ -585,7 +585,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
   for (const [h, f] of fstate) {
     if (f.action !== 'replace' || !f.typed) continue;
     if (opts.yes || !isTTY) {
-      fstate.set(h, { ...f, action: 'refuse', message: `--force refused: ${f.cls.reason} (found ${f.desc}); a local or unverifiable registration is only replaced after a typed confirmation in a terminal; registration preserved. Rerun npx @nexaduo/marc install --force interactively without --yes, or run the commands below.` });
+      fstate.set(h, { ...f, action: 'refuse', remedyAfter: true, message: `--force refused: ${f.cls.reason} (found ${f.desc}); a local or unverifiable registration is only replaced after a typed confirmation in a terminal; registration preserved. Rerun npx @nexaduo/marc install --force interactively without --yes, or run the commands below.` });
       continue;
     }
     const question = `${h}: nexaduo is registered from ${f.desc} (${f.cls.reason}). This may be a development clone. Type replace to remove it and register ${SLUG}, or press Enter to keep it: `;
@@ -620,9 +620,11 @@ export async function main(argv, { release, run = createRunner(), log = console.
       } else if (f?.action === 'error') {
         throw f.error;
       } else if (f?.action === 'refuse') {
-        if (!f.quiet) manualRemedy(h, out, opts.scope);
+        if (!f.quiet && !f.remedyAfter) manualRemedy(h, out, opts.scope);
         if (!f.mine.length) { notInstalled = true; out.line(h, 'info', `${h}: marc not installed`); }
-        throw new Error(f.message);
+        if (!f.remedyAfter) throw new Error(f.message);
+        // The message points at "the commands below": print it first, then the remedy block.
+        out.line(h, 'error', `${h}: ${f.message}`); manualRemedy(h, out, opts.scope); failed = true; threw = true;
       } else if (f?.action === 'replace') {
         const r = await forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, platform });
         outcome = r.outcome; failed = r.failed;
