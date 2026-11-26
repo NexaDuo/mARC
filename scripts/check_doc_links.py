@@ -33,13 +33,13 @@ def anchors(path):
     return found
 
 
-def resolve(target, base, errors, where):
+def resolve(target, base, errors, where, root=ROOT):
     path_part, _, frag = target.partition('#')
     path = (base / path_part).resolve() if path_part else base
     if path_part and not path.exists():
         errors.append(f'{where}: missing path {target}')
     elif frag and path.suffix == '.md' and frag.lower() not in anchors(path):
-        errors.append(f'{where}: missing anchor #{frag} in {path.relative_to(ROOT)}')
+        errors.append(f'{where}: missing anchor #{frag} in {path.relative_to(root)}')
 
 
 def check(root=ROOT):
@@ -49,11 +49,11 @@ def check(root=ROOT):
         for target in MD_LINK.findall(text):
             if re.match(r'[a-z][a-z0-9+.-]*:', target):
                 continue
-            resolve(target, md if target.startswith('#') else md.parent, errors, md.relative_to(root))
+            resolve(target, md if target.startswith('#') else md.parent, errors, md.relative_to(root), root)
     for name in ('index.html', 'llms.txt'):
         f = root / 'docs' / name
         for rel in BLOB_URL.findall(f.read_text(encoding='utf-8')):
-            resolve(rel.rstrip('.,;'), root, errors, f'docs/{name}')
+            resolve(rel.rstrip('.,;'), root, errors, f'docs/{name}', root)
     return errors
 
 

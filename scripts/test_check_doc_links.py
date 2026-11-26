@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,6 +21,20 @@ class DocLinks(unittest.TestCase):
                   'install.md': {'declarative-per-repo-install-claude-code'}}
         for name, slugs in wanted.items():
             self.assertTrue(slugs <= c.anchors(c.ROOT / 'docs' / name), name)
+
+    def test_broken_link_and_anchor_are_reported(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            (root / 'docs').mkdir()
+            (root / 'docs' / 'index.html').write_text('', encoding='utf-8')
+            (root / 'docs' / 'llms.txt').write_text('', encoding='utf-8')
+            (root / 'docs' / 'a.md').write_text('# Real\n', encoding='utf-8')
+            (root / 'README.md').write_text(
+                '[x](docs/nope.md) [y](docs/a.md#ghost)\n', encoding='utf-8')
+            errors = c.check(root)
+        self.assertEqual(len(errors), 2, errors)
+        self.assertTrue(any('missing path docs/nope.md' in e for e in errors))
+        self.assertTrue(any('missing anchor #ghost' in e for e in errors))
 
 
 if __name__ == '__main__':

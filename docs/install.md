@@ -56,12 +56,19 @@ After installation, invoke `/marc:tech-lead` in your harness.
 ## Update
 
 ```bash
-npx @nexaduo/marc update
+npx @nexaduo/marc install
 ```
 
-The launcher updates all detected harnesses to its embedded release and preserves
-disabled plugins. Use `npx @nexaduo/marc doctor` to check for drift or legacy
-marketplace pins; it exits 1 if either needs attention and prints guidance.
+`install` converges: it installs when missing, updates a stale install (and a
+marketplace catalog that lags behind) and does nothing when everything is current.
+`update` is a deprecated alias with identical behavior. Claude Code acts on one
+scope (`--scope`, default `user`); a stale install at another scope is reported with
+the command to run from that directory, never written. Antigravity reinstalls its
+embedded tag, while Claude Code, Copilot and Codex follow the marketplace catalog.
+Disabled plugins are preserved. Use `npx @nexaduo/marc doctor` to check for drift: a
+harness that is only older is `STALE` (run `install`), anything else is `FAILED`, and
+it exits non-zero in both cases. See the [launcher README](../launcher/README.md) for
+details.
 
 A `SessionStart` hook checks for newer versions once per session and prints an
 update reminder. Offline checks are silent and do not block the session.
