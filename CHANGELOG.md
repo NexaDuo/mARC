@@ -16,6 +16,14 @@ date whose `YY.M.D` is already taken.
   exact update argv, and a failed read changes nothing (new fail-closed mode: `install`
   now reads `marketplace list` before consent). Unattended `install --yes`, which used to
   report `STALE`, now updates.
+- Launcher (#451, review round 1): before the first write of any converging action
+  (fresh install, registered-but-not-installed install, stale update) `install` re-lists the
+  plugins and marketplaces and fails that harness with no writes if either changed since the
+  plan; a mismatch that `--force` would be needed for is shown as a refusal in the plan (not
+  as install argv) and a run where every harness is refused, unreadable or already current
+  skips the "Run this plan?" prompt; a failed pre-read now warns in the plan and makes
+  `--dry-run` exit non-zero; and a current version whose catalog pointer is behind the
+  release is converged with `marketplace update` + `plugin update` (verified afterwards).
 - Launcher (#451): `update` is a deprecated alias of `install` with a deprecation note. It
   no longer refreshes every Claude scope; only the requested scope (default `user`).
 - Launcher (#451): a single `--force`. Foreign and pinned remote registrations are replaced
