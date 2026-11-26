@@ -6,7 +6,7 @@
 - **Engineering Director:** `/marc:eng-director` coordinates several techlead sessions in one or multiple repositories. It reads queues, routes dependencies and owner decisions, reports evidence, and guides authorized recovery, watcher reconciliation and shared resource use. Leadership skills run in sessions; monitoring and wake-up require local adapters. Private environment bindings stay in the coordination workspace.
 - **Channel Operator / Router:** `@techlead` (channel operator invoked with `/marc:tech-lead`).
 - **Specialist Pool:** `@dev` (engineering), `@sre` (reliability & infrastructure), `@design` (front-end & UX), `@sec` (security audit gate), `@rev` (correctness review gate), `@research` (external technical evidence & citations), and `@arch` (architecture advice).
-- **Supported Harnesses:** Claude Code, OpenAI Codex, Google Antigravity, and GitHub Copilot CLI, automatically detected by `npx @nexaduo/marc install` (or select with `--harness <claude|copilot|codex|agy>`). See README for Codex compatibility limits.
+- **Supported Harnesses:** Claude Code, OpenAI Codex, Google Antigravity, and GitHub Copilot CLI, automatically detected by `npx @nexaduo/marc install` (or select with `--harness <claude|copilot|codex|agy>`). See https://github.com/NexaDuo/mARC/blob/main/docs/harnesses.md#openai-codex for Codex compatibility limits.
 - **GitHub Project Board Integration:** Tasks map to issues and the consuming project’s own status meanings on GitHub Project boards using runtime `gh` CLI discovery (zero hardcoded stack config).
 
 ## Operating Principles
@@ -28,7 +28,7 @@ npx @nexaduo/marc uninstall
 
 The launcher runs native plugin CLIs and never writes configuration itself.
 Use repeatable `--harness <claude|copilot|codex|agy>`, Claude-only `--scope <user|project|local>`, `--dry-run` to preview, and `--yes` for non-interactive mutations.
-After installation, invoke `/marc:tech-lead` in your harness. For declarative per-repo Claude team installation, see the README's "For teams" note.
+After installation, invoke `/marc:tech-lead` in your harness. For declarative per-repo Claude team installation, see https://github.com/NexaDuo/mARC/blob/main/docs/install.md#declarative-per-repo-install-claude-code
 
 ## Coordinate Several Teams
 
