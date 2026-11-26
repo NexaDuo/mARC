@@ -8,6 +8,11 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Added
+- Launcher (#453): the mARC block-letter banner prints above the one-line header in color mode on
+  UTF-8-safe terminals of 40+ columns. Plain, `NO_COLOR`, piped, narrow, C-locale and Windows
+  without `WT_SESSION`/`TERM_PROGRAM` output is unchanged. No new flag or env var.
+
 ### Documentation
 - README (#452): the root README is now short (pitch, install and options, the team in brief, links). Moved verbatim into linked docs: `docs/install.md`, `docs/harnesses.md`, `docs/teams.md`, `docs/releases.md`, and a Repository layout section in `docs/ARCHITECTURE.md`. Landing page and `llms.txt` links updated (fixes the dead `#openai-codex` anchor, #426). New `scripts/check_doc_links.py` CI gate checks relative links and anchors.
 

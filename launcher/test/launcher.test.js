@@ -1787,3 +1787,38 @@ test('README and HELP parity: every flag in --help appears in the root and launc
   }
   assert.ok((await readFile(path.join(ROOT, 'README.md'), 'utf8')).includes('npx @nexaduo/marc install --force'));
 });
+
+test('banner (#453): shown only for color + 40+ columns + unicode; plain output unchanged', () => {
+  const html = readFileSync(new URL('../../docs/index.html', import.meta.url), 'utf8').split('\n');
+  const s = html.findIndex(l => l.trimStart().startsWith('█████╗'));
+  const rows = html.slice(s, s + 6);
+  const ind = Math.min(...rows.map(r => r.length - r.trimStart().length));
+  const expected = rows.map(r => r.slice(ind).trimEnd());
+  const header = `mARC ${release.tag} (${release.npm}); install`;
+  const capture = ({ env, columns, platform = 'linux', stdoutIsTTY = true }) => {
+    const logs = [];
+    makeOut(l => logs.push(l), createStyle({ env, isTTY: stdoutIsTTY, platform }), { columns }).header(release, 'install');
+    return logs;
+  };
+  const strip = l => l.replace(/\x1b\[[0-9;]*m/g, '');
+  const color = { FORCE_COLOR: '3', COLORTERM: 'truecolor' };
+  const on = capture({ env: color, columns: 80 });
+  assert.equal(on.length, 8);
+  assert.deepEqual(on.slice(0, 6).map(strip), expected, 'banner art equals docs/index.html');
+  assert.equal(on[6], '');
+  assert.equal(strip(on[7]), header);
+  assert.match(on[0], /\x1b\[38;2;94;241;255m█+\x1b\[0m\x1b\[1;38;2;184;146;255m╗/);
+  assert.equal(capture({ env: color, columns: 40 }).length, 8);
+  for (const c of [{ env: color, columns: 39 }, { env: color, columns: undefined }, { env: color, columns: 80, platform: 'win32' },
+    { env: { ...color, ANSICON: '1' }, columns: 80, platform: 'win32' }, { env: { ...color, LANG: 'C' }, columns: 80 },
+    { env: { ...color, LC_ALL: 'POSIX', LANG: 'en_US.UTF-8' }, columns: 80 }]) {
+    const r = capture(c);
+    assert.equal(r.length, 1, JSON.stringify(c));
+    assert.equal(strip(r[0]), header);
+  }
+  assert.equal(capture({ env: { ...color, WT_SESSION: 'x' }, columns: 80, platform: 'win32' }).length, 8);
+  assert.equal(capture({ env: { ...color, LANG: 'en_US.UTF-8' }, columns: 80 }).length, 8);
+  for (const c of [{ env: { NO_COLOR: '1', FORCE_COLOR: '3' } }, { env: { TERM: 'dumb' } }, { env: {}, stdoutIsTTY: false }]) {
+    assert.deepEqual(capture({ ...c, columns: 200 }), [header], 'plain mode is byte-identical');
+  }
+});

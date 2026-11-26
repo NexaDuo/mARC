@@ -164,7 +164,17 @@ export async function installAgy({ run, release, tmpRoot }) {
 // Console output. Plain mode forwards every message to `log` unchanged and
 // adds nothing; color mode re-lays the same text out with headings, prompts
 // and a result table. Every colored fragment goes through style.paint.
-export function makeOut(log, st) {
+// The 6-row wordmark from docs/index.html (pinned byte-for-byte by a test). ASCII-only source: \u escapes.
+const BANNER = [
+  '             \u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2588\u2588\u2588\u2588\u2557   \u2588\u2588\u2588\u2588\u2588\u2588\u2557',
+  '            \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557 \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557 \u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255D',
+  '\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551 \u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255D \u2588\u2588\u2551',
+  '\u2588\u2588\u2551 \u2588\u2588\u2551 \u2588\u2588\u2551 \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2551 \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557 \u2588\u2588\u2551',
+  '\u2588\u2588\u2551 \u2588\u2588\u2551 \u2588\u2588\u2551 \u2588\u2588\u2551  \u2588\u2588\u2551 \u2588\u2588\u2551  \u2588\u2588\u2551 \u255A\u2588\u2588\u2588\u2588\u2588\u2588\u2557',
+  '\u255A\u2550\u255D \u255A\u2550\u255D \u255A\u2550\u255D \u255A\u2550\u255D  \u255A\u2550\u255D \u255A\u2550\u255D  \u255A\u2550\u255D  \u255A\u2550\u2550\u2550\u2550\u2550\u255D',
+];
+
+export function makeOut(log, st, { columns } = {}) {
   const p = st.paint;
   const pending = new Map();
   const last = new Map();
@@ -179,6 +189,10 @@ export function makeOut(log, st) {
   return {
     header(release, command) {
       if (!st.enabled) return log(`mARC ${release.tag} (${release.npm}); ${command}`);
+      if (st.unicode && Number.isInteger(columns) && columns >= 40) {
+        for (const row of BANNER) log(row.replace(/\u2588+|[\u2554\u2557\u2551\u255A\u255D\u2550]+/g, run => p(run[0] === '\u2588' ? 'tag' : 'harness', run)));
+        log('');
+      }
       log(`${p('brand', 'mARC')} ${p('tag', release.tag)} ${p('dim', `(${release.npm})`)}; ${p('strong', command)}`);
     },
     deprecated(text) { log(st.enabled ? p('warn', `! ${text}`) : text); },
@@ -550,7 +564,7 @@ async function forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, plat
 export async function main(argv, { release, run = createRunner(), log = console.log,
   isTTY = Boolean(process.stdin.isTTY), discover = h => resolveExecutable(h), confirm, confirmLocal, cwd = process.cwd(), tmpRoot,
   env = process.env, platform = process.platform,
-  home = (platform === 'win32' ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir(), stdoutIsTTY = Boolean(process.stdout.isTTY),
+  home = (platform === 'win32' ? env.USERPROFILE || env.HOME : env.HOME || env.USERPROFILE) || os.homedir(), stdoutIsTTY = Boolean(process.stdout.isTTY), columns = process.stdout.columns,
   style = createStyle({ env, isTTY: stdoutIsTTY, platform }) } = {}) {
   const opts = parseArgs(argv);
   if (opts.help) { log(HELP); return 0; }
@@ -565,7 +579,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
   if (!opts.harnesses.length) opts.harnesses = HARNESSES.filter(h => { try { discover(h); return true; } catch { return false; } });
   if (!opts.harnesses.length) throw new Error('No supported harness found on PATH');
   if (opts.scope && !opts.harnesses.includes('claude')) throw new Error('--scope requires Claude');
-  const out = makeOut(log, style);
+  const out = makeOut(log, style, { columns });
   out.header(release, opts.command);
   if (opts.deprecatedUpdate) out.deprecated('update is deprecated: it is now an alias for install, which also updates a stale install');
   if (opts.deprecatedForceLocal) out.deprecated('--force-local is deprecated and ignored; --force now covers local sources with a typed confirmation');
