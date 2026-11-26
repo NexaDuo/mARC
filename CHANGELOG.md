@@ -8,6 +8,8 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.25.7] - 2026-11-25
+
 ### Added
 - Launcher (#453): the mARC block-letter banner prints above the one-line header in color mode on
   UTF-8-safe terminals of 40+ columns. Plain, `NO_COLOR`, piped, narrow, C-locale and Windows
@@ -44,6 +46,7 @@ date whose `YY.M.D` is already taken.
 - Launcher (#451): every refusal names the next step (`run npx @nexaduo/marc install --force`),
   STALE hints say `run npx @nexaduo/marc install`, and the root and launcher READMEs list
   the options, checked against `--help` by a test.
+- All four harnesses and the catalog pointers move to `v26.11.25.7` (npm `26.1125.7`).
 
 ## [26.11.25.6] - 2026-11-25
 
