@@ -4,23 +4,7 @@ mARC packages an agent *team* as a portable Claude Code plugin. This document
 describes how the repo is meant to grow — along three independent axes — and why
 the layout is shaped the way it is.
 
-```
-mARC/                                    # repo root
-├── .claude-plugin/
-│   └── marketplace.json                 # marketplace "nexaduo"; lists the plugin(s)
-├── harnesses/
-│   └── claude-code/
-│       └── marc/                        # THE Claude Code plugin
-│           ├── .claude-plugin/plugin.json
-│           ├── skills/<leader>/SKILL.md  # leaders (tech-lead today)
-│           ├── agents/<specialist>.md    # shared flat specialist bench
-│           └── hooks/hooks.json
-├── docs/
-│   ├── ARCHITECTURE.md                  # this file
-│   └── team.toml.example
-├── launcher/                            # npx launcher for native plugin CLIs
-└── README.md  LICENSE  CHANGELOG.md  .gitignore
-```
+The full directory tree is under [Repository layout](#repository-layout).
 
 The root `marketplace.json` and the plugin's own `plugin.json` live in **separate**
 `.claude-plugin/` directories (root vs. `harnesses/claude-code/marc/`). The
@@ -93,3 +77,49 @@ does**. To keep that future step cheap, the role prose in `skills/` and `agents/
 is written **harness-neutral** (describing behavior and responsibilities, not
 Claude-Code-specific mechanics) — so the eventual extraction is mostly a move, not
 a rewrite.
+
+## Repository layout
+
+```
+.claude-plugin/marketplace.json  # marketplace "nexaduo"; lists the plugin(s)
+core/                            # core specialist agent templates and leader skills
+harnesses/
+  claude-code/
+    marc/                        # compiled Claude Code plugin
+      .claude-plugin/plugin.json # plugin manifest
+      skills/eng-director/       # multi-team coordination and operational recovery
+      skills/tech-lead/          # `@techlead` leader skill (/marc:tech-lead)
+      skills/init/               # `/marc:init`, opt-in per-repo onboarding
+      agents/                    # `@dev`, `@sre`, `@design`, `@sec`, `@research` shared specialist bench
+      hooks/hooks.json           # SessionStart hook to inject `.agents/team.toml`
+  antigravity/
+    marc/                        # compiled Google Antigravity plugin
+      plugin.json                # plugin manifest
+      skills/                    # symlinked leader skills (e.g. `/marc:tech-lead`, `/marc:init`)
+      agents/                    # symlinked specialist agents
+      COMPATIBILITY.md           # compatibility tracker for Google Antigravity
+  copilot/
+    marc/                        # compiled GitHub Copilot CLI plugin
+      plugin.json                # Copilot plugin manifest
+      skills/eng-director/       # multi-team coordination and operational recovery
+      skills/tech-lead/          # `@techlead` leader skill
+      skills/init/               # `/marc:init`, Copilot config flow
+      agents/                    # `@dev`, `@sre`, `@design`, `@sec`, `@research` bench
+      hooks/hooks.json           # Copilot `version: 1` hooks config
+      COMPATIBILITY.md           # compatibility tracker for GitHub Copilot
+  codex/
+    marc/                        # compiled OpenAI Codex plugin
+      plugin.json                # Codex plugin manifest
+      skills/eng-director/       # multi-team coordination and operational recovery
+      skills/tech-lead/          # `@techlead` leader skill
+      agents/                    # Codex specialist agent definitions
+      hooks/hooks.json           # Codex hooks configuration
+docs/
+  ARCHITECTURE.md                # growth model covering the different roles and harnesses
+  marc/                          # durable team artifacts like decision records and research briefs
+  team.toml.example
+launcher/                        # npx launcher delegating to native plugin CLIs
+README.md  LICENSE  CHANGELOG.md  VERSION
+```
+
+The plugin is structured so that the core logic under `core/` compiles into platform-specific configurations in the `harnesses/` directory. This allows the project to grow sideways into new harnesses or upward into further leader skills like `founder` without restructuring the repository. The growth plans are above.

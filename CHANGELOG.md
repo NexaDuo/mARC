@@ -8,6 +8,9 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Documentation
+- README (#452): the root README is now short (pitch, install and options, the team in brief, links). Moved verbatim into linked docs: `docs/install.md`, `docs/harnesses.md`, `docs/teams.md`, `docs/releases.md`, and a Repository layout section in `docs/ARCHITECTURE.md`. Landing page and `llms.txt` links updated (fixes the dead `#openai-codex` anchor, #426). New `scripts/check_doc_links.py` CI gate checks relative links and anchors.
+
 ### Changed
 - Launcher (#451): `install` converges. It installs when missing, updates a stale install
   (requested scope only, default `user`; a stale Claude row at another scope gets a hint,

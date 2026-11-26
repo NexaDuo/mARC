@@ -87,7 +87,7 @@
           "name": "Which AI harnesses are supported by mARC?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "mARC currently supports Claude Code, OpenAI Codex, Google Antigravity (agy), and GitHub Copilot CLI. Host capabilities and validation limits are documented in the README."
+            "text": "mARC currently supports Claude Code, OpenAI Codex, Google Antigravity (agy), and GitHub Copilot CLI. Host capabilities and validation limits are documented in the harness compatibility notes (docs/harnesses.md)."
           }
         },
         {
@@ -467,7 +467,7 @@
         <li>Coordinate shared resource limits and report outcomes with evidence.</li>
       </ul>
       <p>Paths, session mappings, quotas and schedules stay in your private workspace. Session wake-up and recovery require local adapters; invoking the skill does not install a background supervisor.</p>
-      <p><a href="https://github.com/NexaDuo/mARC#coordinate-several-teams">Read the coordination guide ↗</a> · <a href="https://github.com/NexaDuo/mARC#openai-codex">Codex setup and compatibility ↗</a></p>
+      <p><a href="https://github.com/NexaDuo/mARC/blob/main/docs/teams.md#coordinate-several-teams">Read the coordination guide ↗</a> · <a href="https://github.com/NexaDuo/mARC/blob/main/docs/harnesses.md#openai-codex">Codex setup and compatibility ↗</a></p>
     </div>
   </section>
 
@@ -537,7 +537,7 @@
         </div>
       </div>
       <p class="note">Requires Node.js 20+ and harness CLIs on PATH. For Antigravity, use its <a href="https://antigravity.google/cli/" target="_blank" rel="noopener noreferrer">CLI installer</a> first. Claude Code, Copilot, Codex and Antigravity are detected automatically; select one with <code>--harness &lt;claude|copilot|codex|agy&gt;</code>.</p>
-      <p class="note">Use <code>npx @nexaduo/marc doctor</code> to check your install. Then convene <b class="nick">@techlead</b> with <code>/marc:tech-lead</code>. See the <a href="https://github.com/NexaDuo/mARC#readme" target="_blank" rel="noopener noreferrer">README</a> for options, team setup and Codex compatibility limits.</p>
+      <p class="note">Use <code>npx @nexaduo/marc doctor</code> to check your install. Then convene <b class="nick">@techlead</b> with <code>/marc:tech-lead</code>. See the <a href="https://github.com/NexaDuo/mARC/blob/main/docs/install.md" target="_blank" rel="noopener noreferrer">install guide</a> for options and team setup, and the <a href="https://github.com/NexaDuo/mARC/blob/main/docs/harnesses.md#openai-codex" target="_blank" rel="noopener noreferrer">harness notes</a> for Codex compatibility limits.</p>
     </div>
   </section>
 
