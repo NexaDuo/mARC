@@ -8,6 +8,35 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+### Changed
+- Launcher (#451): `install` converges. It installs when missing, updates a stale install
+  (requested scope only, default `user`; a stale Claude row at another scope gets a hint,
+  not a write) and does nothing when current. All read-only checks (plugin list,
+  marketplace list, classification) run before the plan and consent, so the plan shows the
+  exact update argv, and a failed read changes nothing (new fail-closed mode: `install`
+  now reads `marketplace list` before consent). Unattended `install --yes`, which used to
+  report `STALE`, now updates.
+- Launcher (#451, review round 1): before the first write of any converging action
+  (fresh install, registered-but-not-installed install, stale update) `install` re-lists the
+  plugins and marketplaces and fails that harness with no writes if either changed since the
+  plan; a mismatch that `--force` would be needed for is shown as a refusal in the plan (not
+  as install argv) and a run where every harness is refused, unreadable or already current
+  skips the "Run this plan?" prompt; a failed pre-read now warns in the plan and makes
+  `--dry-run` exit non-zero; and a current version whose catalog pointer is behind the
+  release is converged with `marketplace update` + `plugin update` (verified afterwards).
+- Launcher (#451): `update` is a deprecated alias of `install` with a deprecation note. It
+  no longer refreshes every Claude scope; only the requested scope (default `user`).
+- Launcher (#451): a single `--force`. Foreign and pinned remote registrations are replaced
+  after the plan's consent as before. A local or unverifiable one (a possible dev clone)
+  needs a per-harness typed `replace` read from a terminal, after the plan's `y/N`;
+  `--yes` or no terminal refuses it and declining refuses that harness (non-zero exit).
+  There is no unattended override. Old scripts that ran `--yes --force --force-local`
+  against a local row now refuse. `--force-local` stays as a hidden, deprecated alias that
+  grants nothing extra.
+- Launcher (#451): every refusal names the next step (`run npx @nexaduo/marc install --force`),
+  STALE hints say `run npx @nexaduo/marc install`, and the root and launcher READMEs list
+  the options, checked against `--help` by a test.
+
 ## [26.11.25.6] - 2026-11-25
 
 ### Changed

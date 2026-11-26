@@ -19,8 +19,8 @@ harness found on your `PATH`:
 Requires Node.js 20 or later and at least one harness CLI on your `PATH`.
 
 ```bash
-npx @nexaduo/marc install     # install on every detected harness
-npx @nexaduo/marc update      # update the plugin on every detected harness
+npx @nexaduo/marc install     # install, or update a stale install, on every detected harness
+npx @nexaduo/marc update      # deprecated alias of install
 npx @nexaduo/marc doctor      # read-only: versions, drift, marketplace source
 npx @nexaduo/marc uninstall   # remove the plugin (marketplaces are kept)
 ```
@@ -30,19 +30,18 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 | Flag | Effect |
 |---|---|
 | `--harness <claude\|copilot\|codex\|agy>` | Act only on the named harness; repeat for several. Default: every harness on `PATH` |
-| `--scope <user\|project\|local>` | Claude Code only: the scope to install, update or uninstall |
+| `--scope <user\|project\|local>` | Claude Code only: the scope to install (and update) or uninstall; default `user` |
 | `--version <tag>` | Must equal the release embedded in this package; otherwise prints the matching `npx` command and exits |
-| `--dry-run` | Print the plan and change nothing (`install` still runs the read-only `plugin list` first) |
-| `--force` | `install`/`update` only: re-register a mismatched nexaduo marketplace (see below). The plan names the registration it removes |
-| `--force-local` | With `--force`: also replace a local-checkout or unverifiable registration (a possible dev clone) |
-| `--yes` | Skip the confirmation prompt. Required for `install`, `update` and `uninstall` when not in a terminal; `doctor` and `--dry-run` never need it |
+| `--dry-run` | Print the plan and change nothing (`install` still runs the read-only `plugin list` and `plugin marketplace list` first) |
+| `--force` | `install` only: re-register a nexaduo marketplace registered from another source (see below). The plan names the registration it removes. A local or unverifiable source (a possible dev clone) also needs you to type `replace` in a terminal |
+| `--yes` | Skip the plan confirmation. Required for `install` and `uninstall` when not in a terminal; `doctor` and `--dry-run` never need it. It never answers the typed `replace` prompt |
 
 ## What it does, and what it doesn't
 
 - It runs only each harness's own plugin commands. It never writes harness
   settings or config files itself.
 - Before anything changes it prints a plan and asks for confirmation. A few
-  steps (such as the Antigravity clone path or Claude update scopes) are
+  steps (such as the Antigravity clone path) are
   resolved while running and printed when they run.
 - Antigravity installs from a shallow clone of the release tag, checked against
   the commit embedded in this package, then deletes the clone.
@@ -58,17 +57,26 @@ Then open any repository in your harness and run `/marc:tech-lead`.
   reinstall commands, and nothing runs before your confirmation (`--yes` works
   without a terminal). Only `nexaduo` and `marc@nexaduo` are touched; if more than
   one nexaduo registration is listed it refuses. A foreign or pinned source needs
-  only `--force`; a local-checkout or unverifiable source also needs
-  `--force-local`. The registration is re-read after you confirm and nothing is
+  the plan's confirmation. A local-checkout or unverifiable source is only
+  replaced after you type `replace` at a per-harness prompt in a terminal, asked
+  after the plan's `y/N`; `--yes` or no terminal refuses it, and declining
+  refuses that harness only (the run exits non-zero). There is no unattended
+  override: automation that must replace a dev clone runs the printed manual
+  commands itself. The registration is re-read after you confirm and nothing is
   removed if it changed. If `add` fails the old source is not restored, the later
   harnesses skip their remove, and the exact retry commands are printed.
-- `install` never upgrades an existing install. If the installed version differs
-  from the launcher release it prints `STALE` and exits non-zero; run `update`.
+- `install` converges. It installs when missing, updates a stale install of the
+  requested scope (default `user`) and does nothing when current. All read-only
+  checks run before the plan, so the exact `marketplace update` / `plugin update`
+  commands are shown before you confirm; if a read fails, nothing changes. A
+  stale Claude row at another scope is reported with the command to run from
+  that directory, never written. `update` is a deprecated alias with identical
+  behavior.
 - `doctor` changes nothing and exits non-zero when it finds drift. Claude
   `project` and `local` rows add the project they belong to as an extra field
   (`~/repos/app` under your home directory, otherwise the absolute path). A harness whose only
   problem is an older version, or a marketplace catalog still tracking `main`,
-  is `STALE`: run `npx @nexaduo/marc update`. `FAILED` means something else is
+  is `STALE`: run `npx @nexaduo/marc install`. `FAILED` means something else is
   wrong (marketplace missing or drifted, plugin missing, release source
   unverifiable, a native CLI error) and wins over `STALE`.
 

@@ -43,16 +43,27 @@ is shown before it runs.
 
 | Command | Purpose |
 |---|---|
-| `npx @nexaduo/marc install` | Install on detected harnesses |
-| `npx @nexaduo/marc update` | Update installed plugins to the launcher's release |
+| `npx @nexaduo/marc install` | Install, or update a stale install, on detected harnesses |
+| `npx @nexaduo/marc update` | Deprecated alias of `install` |
 | `npx @nexaduo/marc doctor` | Check versions and marketplace pointers (read-only) |
 | `npx @nexaduo/marc uninstall` | Remove plugins, keeping marketplaces |
 
-Flags: `--harness <claude|copilot|codex|agy>` selects a harness (repeatable);
-`--scope <user|project|local>` selects a Claude scope only; `--dry-run` previews;
-`--yes` confirms mutations in scripts. Claude update previews list the actual
-settings paths that its CLI will edit. Antigravity uses a temporary,
-SHA-verified clone that is deleted afterwards.
+Options (details in [`launcher/README.md`](launcher/README.md)):
+
+- `--yes`: confirm mutations without a prompt (required in scripts)
+- `--dry-run`: print the plan and change nothing
+- `--harness <claude|copilot|codex|agy>`: act on one harness (repeatable)
+- `--scope <user|project|local>`: Claude scope only
+- `--version <tag>`: must equal the launcher's embedded release
+- `--force`: replace a nexaduo marketplace registered from another source or a dev clone
+
+```bash
+npx @nexaduo/marc install --force
+```
+
+`install` also updates a stale install, and `update` is a deprecated alias for it.
+A local or unverifiable source is replaced only after you type `replace` in a
+terminal. Antigravity uses a temporary, SHA-verified clone that is deleted afterwards.
 
 Each npm package version maps to one release tag. For example, `v26.12.1` maps to npm
 `26.1201.0` (the live version is in `VERSION`).
