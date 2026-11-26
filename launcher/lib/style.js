@@ -68,5 +68,7 @@ export function createStyle({ env = process.env, isTTY = Boolean(process.stdout.
   };
   // Decoration lines exist only in color mode.
   const deco = lines => enabled ? lines : [];
-  return { enabled, depth: depth >= 24 ? 24 : depth >= 8 ? 8 : 4, light, paint, deco };
+  const locale = env.LC_ALL || env.LC_CTYPE || env.LANG || '';
+  const unicode = platform === 'win32' ? Boolean(env.WT_SESSION || env.TERM_PROGRAM) : !locale || /utf-?8/i.test(locale);
+  return { enabled, unicode, depth: depth >= 24 ? 24 : depth >= 8 ? 8 : 4, light, paint, deco };
 }

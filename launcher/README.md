@@ -113,6 +113,7 @@ output is plain text with no escape sequences, identical to earlier releases.
   `TERM` contains `256color`, otherwise 16 colors. `TERM=dumb` and legacy
   Windows consoles stay plain.
 - `COLORFGBG` ending in `7` or `15` selects a light-background palette.
+- A block-letter banner prints in color mode on terminals of 40+ columns; `NO_COLOR` or a narrow or non-UTF-8 terminal gets the one-line header.
 
 ## Links
 
