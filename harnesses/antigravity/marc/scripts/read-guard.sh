@@ -55,12 +55,15 @@ def main():
     if os.environ.get('MARC_BULK_READER_ACTIVE') == '1':
         sys.exit(0)
 
-    try:
-        out = subprocess.check_output(['ps', '-o', 'args=', '-s', str(os.getsid(0))], text=True)
-        if re.search(r'(--agent\s+(sec|rev)|/marc:(sec|rev))', out):
-            sys.exit(0)
-    except Exception:
-        pass
+    # @sec/@rev bypass (issue #289): identified from the PreToolUse payload's
+    # 'agent_type' common input field, which Claude Code sets for hooks that
+    # fire inside a subagent (https://code.claude.com/docs/en/hooks, 'Common
+    # input fields'; plugin subagents report the plugin-scoped name, e.g.
+    # 'marc:security'). This replaces a session-wide 'ps' argv regex that any
+    # process could forge. A missing/other value means NO bypass (fail-closed
+    # for the bypass). Robustness, not an access boundary.
+    if payload.get('agent_type') in ('marc:security', 'marc:review'):
+        sys.exit(0)
 
     # 'tool_name'/'tool_input' are Claude Code's actual PreToolUse stdin field
     # names (snake_case, confirmed at docs.claude.com/en/docs/claude-code/hooks
