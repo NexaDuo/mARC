@@ -8,6 +8,38 @@ date whose `YY.M.D` is already taken.
 
 ## [Unreleased]
 
+## [26.11.27] - 2026-11-27
+
+### Added
+- Launcher (#466): `install` now finds stale Claude installs at project and local scope.
+  In a terminal it offers a multi-select (path, scope, installed → target version). Rows whose
+  project directory no longer exists are marked, never selectable and never written (removal
+  is tracked in #470). New `install --all-scopes` updates every existing stale entry
+  unattended; it cannot be combined with `--scope`, requires Claude, and exits non-zero when
+  nothing could be updated because the nexaduo marketplace is not registered. `--yes` and
+  non-TTY runs without `--all-scopes` keep printing hints only. Each selected project runs
+  `claude plugin update marc@nexaduo --scope <project|local>` with cwd set to that project,
+  listed in the plan before consent. Unselected projects are never written.
+
+### Fixed
+- Launcher doctor (#466): remedies now name the command that actually fixes the row:
+  `install --all-scopes` for stale project/local rows, `plugin marketplace add NexaDuo/mARC`
+  when no nexaduo marketplace is registered, and a diagnosis only for rows whose directory is
+  gone or whose path the harness did not report.
+- Launcher (#458): the plan shows `already current` for a current harness instead of argv that
+  never runs. It says the marketplace is not registered when that is the case. A refusal
+  already shown in the plan is not repeated at execution. The "catalog still behind" remedy is
+  worded conditionally and points at `doctor`. `doctor` reads the injected home/env instead of
+  `process.env`, which also fixes the Copilot doctor tests from #430.
+- Board script (#467): `board.py set-status` (and `create --status`) resolves the issue's
+  project item with a direct GraphQL lookup matched on project id instead of scanning
+  `gh project item-list --limit 200`, fixing not-found errors and 30 s timeouts on boards with
+  more than 200 items. It reports an archived item and an issue on more than 100 projects
+  distinctly. `reconcile` warns only when the board listing was really truncated.
+- Release tooling (#448): `scripts/bump_version.py` writes each stamped file through an
+  exclusive `mkstemp` temp file (mode set with `fchmod` on the open fd) instead of a
+  fixed-name `<name>.tmp`, so a planted symlink can no longer redirect the write.
+
 ## [26.11.25.7] - 2026-11-25
 
 ### Added
