@@ -84,7 +84,7 @@ Then open any repository in your harness and run `/marc:tech-lead`.
   problem is an older version, or a marketplace catalog still tracking `main`,
   is `STALE`: run `npx @nexaduo/marc install` (`install --all-scopes` when a
   `project` or `local` row with an existing directory is the stale one; a row whose
-  directory is gone is reported separately with a manual remedy, see #470). `FAILED` means something else is
+  directory is gone is reported separately and not fixable by install, see #470). `FAILED` means something else is
   wrong (marketplace missing, fixed by `<harness> plugin marketplace add NexaDuo/mARC`, or drifted, plugin missing, release source
   unverifiable, a native CLI error) and wins over `STALE`.
 

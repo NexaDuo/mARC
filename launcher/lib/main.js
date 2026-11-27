@@ -349,27 +349,25 @@ async function doctor(h, run, release, out, scope, home, platform, env = process
     // directory exists. A row whose directory is gone can never be fixed by install (#466/#470): it is
     // reported apart, with a manual remedy, so doctor never points at a command that leaves it STALE.
     const staleScoped = h === 'claude' ? rows.filter(r => ['project', 'local'].includes(r.scope) && !sameVersion(r.version, release)) : [];
-    const missing = [], existing = [];
+    const missing = [], existing = [], noPath = [];
+    const hasPath = r => typeof r.projectPath === 'string' && path.isAbsolute(r.projectPath);
     for (const r of staleScoped) {
+      if (!hasPath(r)) { noPath.push(r); continue; }
       let ok = false;
-      try { ok = typeof r.projectPath === 'string' && path.isAbsolute(r.projectPath) && (await stat(r.projectPath)).isDirectory(); } catch { /* missing */ }
+      try { ok = (await stat(r.projectPath)).isDirectory(); } catch { /* missing */ }
       (ok ? existing : missing).push(r);
     }
     const userStale = rows.some(r => (!r.scope || r.scope === 'user') && !sameVersion(r.version, release));
-    const needInstall = userStale || catalogStale || (!missing.length && !existing.length);
+    const needInstall = userStale || catalogStale || (!missing.length && !existing.length && !noPath.length);
     const fixes = [];
     if (existing.length) fixes.push(scope ? `npx @nexaduo/marc install --scope ${scope}` : 'npx @nexaduo/marc install --all-scopes');
     else if (needInstall) fixes.push('npx @nexaduo/marc install');
     if (fixes.length) out.line(h, 'warn', `${h}: out of date; run \`${fixes[0]}\`${existing.length && !scope ? ' (or `npx @nexaduo/marc install` in a terminal to choose the projects)' : scope && existing.length ? ' from that directory' : ''}`);
     for (const r of missing) {
-      const where = displayProject(r.projectPath, home, platform);
-      out.line(h, 'warn', `${h}: ${r.scope} scope at ${where} is out of date, but the project directory no longer exists; registry entry removal is tracked in #470`);
-      if (typeof r.projectPath === 'string' && path.isAbsolute(r.projectPath) && !/[\r\n"$`\\]/.test(r.projectPath)) {
-        out.remedy(h, `${h}: manual remedy for ${where} (review first; doctor does not run it):`,
-          [`mkdir -p "${r.projectPath}" && cd "${r.projectPath}" && ${h} plugin uninstall ${ID} --scope ${r.scope}`]);
-      }
+      out.line(h, 'warn', `${h}: ${r.scope} scope at ${displayProject(r.projectPath, home, platform)} is out of date, but the project directory no longer exists; registry entry removal is tracked in #470`);
     }
-    const note = missing.length ? `${missing.length} entr${missing.length === 1 ? 'y' : 'ies'} with a missing project directory (#470)` : '';
+    for (const r of noPath) out.line(h, 'warn', `${h}: ${r.scope} scope entry is out of date, but the project path was not reported by the harness; install cannot update it`);
+    const note = [missing.length ? `${missing.length} with a missing project directory (#470)` : '', noPath.length ? `${noPath.length} with no project path reported` : ''].filter(Boolean).join(', ');
     const detail = [fixes.length ? `run \`${fixes[0]}\`` : '', note].filter(Boolean).join('; ');
     return { state: 'STALE', detail: `out of date${detail ? `; ${detail}` : ''}` };
   }
@@ -502,9 +500,9 @@ async function readState(h, { opts, run, cwd, home, platform, release, env }) {
     const others = h !== 'claude' ? [] : rows.filter(r => !mine.includes(r) && SCOPES.includes(r.scope || 'user') && STALE_ROW(r, release));
     const scoped = await staleScoped(others, release);
     const gone = new Set(scoped.filter(e => !e.exists).map(e => e.key));
-    const hints = others.map(r => {
+    const hints = others.filter(r => !gone.has(scopedKey(r))).map(r => {
       const sc = r.scope || 'user', where = sc === 'user' ? '' : ` in ${displayProject(r.projectPath, home, platform)}`;
-      if (gone.has(scopedKey(r))) return { key: scopedKey(r), text: `${h}: marc is also out of date at ${sc} scope${where}, but the project directory no longer exists; registry entry removal is tracked in #470` };
+      if (sc !== 'user' && !(typeof r.projectPath === 'string' && path.isAbsolute(r.projectPath))) return { key: scopedKey(r), text: `${h}: marc is also out of date at ${sc} scope, but the project path was not reported by the harness; install cannot update it` };
       return { key: scopedKey(r), text: `${h}: marc is also out of date at ${sc} scope${where}; run npx @nexaduo/marc install --scope ${sc}${sc === 'user' ? '' : ' from that directory'}` };
     });
     base.scoped = scoped;
@@ -726,8 +724,8 @@ export async function main(argv, { release, run = createRunner(), log = console.
     if (f?.scopedBlocked && !f.registered && !f.mine.length) out.line(p.harness, 'warn', NO_MARKET(p.harness));
     const gone = (f?.unselected ?? []).filter(e => !e.exists), fixable = (f?.unselected ?? []).filter(e => e.exists);
     if (fixable.length && !opts.allScopes && !opts.scope) out.line(p.harness, 'info', `${p.harness}: ${fixable.length} project/local install(s) out of date; run npx @nexaduo/marc install --all-scopes (or install in a terminal to choose)`);
-    if (opts.allScopes) for (const e of gone) out.line(p.harness, 'warn', `${p.harness}: skipped ${e.scope} scope at ${displayProject(e.projectPath, home, platform)}: project directory no longer exists (registry entry removal is tracked in #470)`);
-    else if (gone.length) out.line(p.harness, 'info', `${p.harness}: ${gone.length} project/local entr${gone.length === 1 ? 'y points' : 'ies point'} at a missing directory; not updated (registry entry removal is tracked in #470)`);
+    // A missing row is reported once, here (its hint is suppressed in readState).
+    for (const e of gone) out.line(p.harness, opts.allScopes ? 'warn' : 'info', `${p.harness}: skipped ${e.scope} scope at ${displayProject(e.projectPath, home, platform)}: project directory no longer exists; registry entry removal is tracked in #470`);
     if (['replace', 'update', 'refuse'].includes(f?.action)) {
       for (const l of forceLines(p.harness, f, opts, home, platform)) out.line(p.harness, l.role, l.text);
       if (f.action === 'refuse') f.shown = true;

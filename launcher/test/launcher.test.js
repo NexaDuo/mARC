@@ -2002,7 +2002,7 @@ test('#466 round 1 (REV-1): a missing-dir row is never pointed at --all-scopes; 
   assert.equal(before.code, 1);
   assert.ok(before.text.some(l => l.includes('no longer exists') && l.includes('#470')), before.text.join('|'));
   assert.ok(!before.text.some(l => l.includes('--all-scopes')), 'a missing row is not pointed at --all-scopes');
-  assert.ok(before.text.some(l => l.includes('plugin uninstall marc@nexaduo --scope project')), 'manual remedy is printed');
+  assert.ok(!before.text.some(l => /mkdir|uninstall/.test(l)), 'no manual remedy is printed');
   const calls = [], logs = [];
   const run = async (h, a, o) => { calls.push([h, a, o]); return a[1] === 'marketplace' ? JSON.stringify(marketFixtures.claude) : a[1] === 'list' ? list : ''; };
   assert.equal(await main(['install', '--all-scopes', '--yes', '--harness', 'claude'], { release, run, log: x => logs.push(x), isTTY: false, env: {}, stdoutIsTTY: false, home: dir, cwd: dir, platform: process.platform }), 0, logs.join('\n'));
@@ -2037,4 +2037,15 @@ test('#466 round 1 (SEC-1): selections must be plain positive integers', () => {
   const es = [{ exists: true }, { exists: true }, { exists: true }];
   for (const bad of ['0x2', '1e0', '2.0', '+1', '0', '-1', '01']) assert.throws(() => parseSelection(bad, es), /Invalid selection/, bad);
   assert.deepEqual(parseSelection('3 1', es), [es[0], es[2]]);
+});
+
+test('#466 round 2 (REV-5/6): a row with no path is worded apart; a missing row appears once in the install plan', async t => {
+  const s = await scopedRegistry(t), logs = [];
+  s.plugins.push({ id: 'marc@nexaduo', version: '26.11.1', scope: 'project', enabled: true });
+  await main(['install', '--dry-run', '--harness', 'claude'], baseOpts(s, { log: x => logs.push(x) }));
+  assert.equal(logs.filter(l => l.includes('app-gone') || l.includes('/gone')).length, 1, logs.join('\n'));
+  assert.equal(logs.filter(l => l.includes('path was not reported by the harness')).length, 1, logs.join('\n'));
+  const list = JSON.stringify(JSON.parse(fixtures.claude).map(r => r.scope === 'project' ? { ...r, version: '26.11.14' } : r));
+  const d = await doctorRun('claude', { list });
+  assert.ok(d.text.some(l => l.includes('project path was not reported by the harness')) && !d.text.some(l => l.includes('--all-scopes') || l.includes('no longer exists')), d.text.join('|'));
 });
