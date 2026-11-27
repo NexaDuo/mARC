@@ -53,7 +53,9 @@ changes it fails here instead of silently drifting.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
+import io
 import json
 import os
 import re
@@ -374,7 +376,36 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
     # OLDPWD: a CLI inherits whatever the user's shell exported, usually the
     # previous directory, never reliably the project (#370).
     ad.ctx.update(MARC_STATE_DIR=state, MARC_REMOTE_PLUGIN_JSON_URL="file://" + remote, OLDPWD="/")
+    # TRUST ASSUMPTION (#172). Every adapter's hook_run hands a field read from
+    # the installed hooks.json (`command` / `bash`) to `bash -c` / `bash -lc` /
+    # `sh -c`. Executing is necessary here: the point of this matrix is that the
+    # hook BODY really runs the way the CLI runs it (cwd, env, shell, stdin), so
+    # resolving the script path without a shell (as the Antigravity command
+    # allow-list in AgyAdapter.hook_run does for its fixed dispatcher form) cannot
+    # prove it. That is only safe because the input is trusted, and the trust
+    # rests on these properties; a change that breaks one is breaking a stated
+    # assumption and must re-evaluate this sink:
+    #   1. Trigger: ci.yml runs on `push` / `pull_request`, never
+    #      `pull_request_target`, so a fork PR's code runs with no secrets and a
+    #      read-only token (`permissions: contents: read`).
+    #   2. Provenance: the installed plugin is this checkout's own compiled
+    #      output (harnesses/<h>/marc), installed into a temp dir from a local
+    #      marketplace (local_test_marketplace.prepare). Its hooks.json is
+    #      generated from core/hooks/hooks.spec.json by compile_prompts.py and
+    #      drift-gated by core/scripts/test_hooks_parity.py (#173/#170).
+    #   3. Isolation: HOME, config dirs and state stay in the temp dir, and
+    #      base_env() strips credential-looking variables from the environment.
+    # Mechanical guard for (2): never execute a command that is not byte-for-byte
+    # one of the commands in this checkout's compiled hooks.json for the same
+    # harness. It does not change what the test concludes: for the intended
+    # installs the two files are identical.
+    src_root = os.path.join(ROOT, "harnesses", ad.name, "marc")
+    with contextlib.redirect_stdout(io.StringIO()):
+        compiled = {c for _l, _e, _m, c in ad.hooks(src_root)}
     for label, event, matcher, command in entries:
+        if not check(command in compiled,
+                     f"{label}: command matches the compiled harnesses/{ad.name}/marc hooks.json (not run otherwise)"):
+            continue
         r = ad.hook_run(plugin, ws, event, matcher, command, seed)
         if r is None:
             continue
