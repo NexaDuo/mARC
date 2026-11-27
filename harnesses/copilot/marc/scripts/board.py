@@ -331,7 +331,8 @@ class BoardProvider(ABC):
         ...
 
     @abstractmethod
-    def set_status(self, issue_number: int, status: str) -> StatusResult:
+    def set_status(self, issue_number: int, status: str,
+                    item_id: Optional[str] = None) -> StatusResult:
         """Resolve the board item linked to `issue_number` and move it to
         `status` (must exactly match one of the project's Status field
         options). MUST raise `BoardError` — never silently no-op — if the
@@ -417,6 +418,11 @@ class GitHubProvider(BoardProvider):
                              f"`gh auth refresh -s project,read:project`): {e}")
             return items, board_configured, self.config.project_number, self.config.project_title, warnings
 
+        if len(payload.get("items", [])) >= limit:
+            warnings.append(
+                f"board listing truncated at {limit} items (--open-limit); items beyond "
+                f"the first {limit} are not shown"
+            )
         for it in payload.get("items", []):
             content = it.get("content", {})
             number = content.get("number")
@@ -554,7 +560,47 @@ class GitHubProvider(BoardProvider):
 
         return MainDrift(local_sha, remote_sha, ahead, behind, in_sync, notes)
 
-    def set_status(self, issue_number: int, status: str) -> StatusResult:
+    def _lookup_project_item(self, issue_number: int) -> dict:
+        """Resolve the project item for one issue/PR by direct GraphQL lookup
+        (`projectItems` filtered to the configured project), never by scanning
+        the board: cost is constant as the board grows (origin: #467)."""
+        gh_repo = self.config.gh_repo
+        if not gh_repo or "/" not in gh_repo:
+            raise BoardError(
+                "cannot resolve the board item without a repo (missing gh_repo "
+                "in team.toml / origin remote) — refusing to guess"
+            )
+        owner, repo = gh_repo.split("/", 1)
+        frag = ("projectItems(first:100) { nodes { id project { number } "
+                "fieldValueByName(name:\"Status\") { ... on ProjectV2ItemFieldSingleSelectValue { name } } } }")
+        query = (
+            "query($owner:String!,$repo:String!,$n:Int!) { repository(owner:$owner, name:$repo) "
+            "{ issueOrPullRequest(number:$n) { ... on Issue { " + frag + " } "
+            "... on PullRequest { " + frag + " } } } }"
+        )
+        try:
+            raw = self._run([
+                "gh", "api", "graphql",
+                "-f", f"query={query}",
+                "-f", f"owner={owner}",
+                "-f", f"repo={repo}",
+                "-F", f"n={issue_number}",
+            ])
+            data = json.loads(raw)
+        except Exception as e:  # noqa: BLE001
+            raise BoardError(f"gh api graphql (projectItems lookup) failed: {e}") from e
+        node = ((data.get("data") or {}).get("repository") or {}).get("issueOrPullRequest") or {}
+        for it in (node.get("projectItems") or {}).get("nodes") or []:
+            if ((it or {}).get("project") or {}).get("number") == self.config.project_number:
+                sv = it.get("fieldValueByName") or {}
+                return {"id": it["id"], "status": sv.get("name")}
+        raise BoardError(
+            f"issue #{issue_number} was not found on project #{self.config.project_number} "
+            f"— has it been added to the board? (`gh project item-add`)"
+        )
+
+    def set_status(self, issue_number: int, status: str,
+                    item_id: Optional[str] = None) -> StatusResult:
         if not (self.config.project_number and self.config.gh_org):
             raise BoardError(
                 "no board configured (missing project_number/gh_org in team.toml) "
@@ -604,21 +650,12 @@ class GitHubProvider(BoardProvider):
                 f"Status field are: {valid}"
             )
 
-        try:
-            items_raw = self._run(
-                ["gh", "project", "item-list", str(self.config.project_number),
-                 "--owner", self.config.gh_org, "--format", "json", "--limit", "200"]
-            )
-            items = json.loads(items_raw).get("items", [])
-        except Exception as e:  # noqa: BLE001
-            raise BoardError(f"gh project item-list failed: {e}") from e
-
-        item = next((it for it in items if (it.get("content") or {}).get("number") == issue_number), None)
-        if not item:
-            raise BoardError(
-                f"issue #{issue_number} was not found on project #{self.config.project_number} "
-                f"— has it been added to the board? (`gh project item-add`)"
-            )
+        if item_id:
+            # Caller already holds the item id (e.g. `item-add` just returned
+            # it): no lookup at all (origin: #467).
+            item = {"id": item_id, "status": None}
+        else:
+            item = self._lookup_project_item(issue_number)
 
         previous_status = item.get("status")
         try:
@@ -735,7 +772,7 @@ class GitHubProvider(BoardProvider):
 
             if board_added and status:
                 try:
-                    status_result = self.set_status(issue_number, status)
+                    status_result = self.set_status(issue_number, status, item_id=board_item_id)
                     result_status = status_result.status
                 except BoardError as e:
                     warnings.append(
