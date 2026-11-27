@@ -13,8 +13,8 @@ VERSION = (ROOT / 'VERSION').read_text().strip()  # the single source; never a l
 TAG = 'v' + VERSION
 NPM = subprocess.run(['node', '--input-type=module', '-e', "import {tagToNpm} from './launcher/lib/version.js'; console.log(tagToNpm(process.argv[1]))", TAG],
                      cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
-# Deliberately wrong identities for the mismatch tests. Never a real calendar version
-# (YY = 99 is far beyond any release), so they can't collide with VERSION on a release day.
+# Deliberately wrong identities for the mismatch tests: a valid but far-future date (YY = 99),
+# never a plausible release, so they can't collide with VERSION on a release day.
 WRONG_TAG = 'v99.12.31'
 WRONG_NPM = '99.1231.0'
 assert WRONG_TAG != TAG and WRONG_NPM != NPM
@@ -118,7 +118,9 @@ class NpmReleaseGuards(unittest.TestCase):
         pkg = json.loads(path.read_text())
         pkg['version'] = WRONG_NPM
         path.write_text(json.dumps(pkg))
-        self.assertNotEqual(self.gate().returncode, 0)
+        result = self.gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('npm form of VERSION', result.stderr)  # refused for the version mismatch, not anything else
 
 
 if __name__ == '__main__':
