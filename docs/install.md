@@ -72,7 +72,8 @@ run `claude plugin marketplace add NexaDuo/mARC` first, then `install` again. An
 embedded tag, while Claude Code, Copilot and Codex follow the marketplace catalog.
 Disabled plugins are preserved. Use `npx @nexaduo/marc doctor` to check for drift: a
 harness that is only older is `STALE` (run `install`, or `install --all-scopes` when a
-project or local row is the stale one), anything else is `FAILED`, and
+project or local row with an existing directory is the stale one; a row whose directory is
+gone is reported separately with a manual remedy, tracked in #470), anything else is `FAILED`, and
 it exits non-zero in both cases. See the [launcher README](../launcher/README.md) for
 details.
 
