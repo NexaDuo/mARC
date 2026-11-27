@@ -269,7 +269,20 @@ def test_toml_get_zero_dependency_extraction():
     check(toml_get(text, "nonexistent_key") is None, "toml_get returns None for a missing key")
 
 
-def _set_status_run(project_view=None, field_list=None, item_list=None, item_edit_raises=None):
+def project_items_graphql_fixture(items: dict, status_by_number=None, archived=False,
+                                  has_next=False, ids=None) -> str:
+    """GraphQL `issueOrPullRequest.projectItems` reply for ONE issue.
+    `items` maps project_number -> item id."""
+    return json.dumps({"data": {"repository": {"issueOrPullRequest": {"projectItems": {"pageInfo": {"hasNextPage": has_next}, "nodes": [
+        {"id": iid, "isArchived": archived,
+         "project": {"id": (ids or {}).get(n, "PVT_project2"), "number": n},
+         "fieldValueByName": ({"name": status_by_number} if status_by_number else None)}
+        for n, iid in items.items()
+    ]}}}}})
+
+
+def _set_status_run(project_view=None, field_list=None, item_list=None, item_edit_raises=None,
+                    graphql=None):
     """Builds a `run` callable that routes `gh project {view,field-list,item-list,
     item-edit}` (all share the ("gh","project") prefix, so `make_fake_run`'s
     two-token keying can't disambiguate them) to per-subcommand fixtures."""
@@ -289,6 +302,10 @@ def _set_status_run(project_view=None, field_list=None, item_list=None, item_edi
             if isinstance(item_list, Exception):
                 raise item_list
             return item_list
+        if cmd[:3] == ["gh", "api", "graphql"]:
+            if isinstance(graphql, Exception):
+                raise graphql
+            return graphql
         if cmd[:3] == ["gh", "project", "item-edit"]:
             if item_edit_raises:
                 raise item_edit_raises
@@ -325,7 +342,7 @@ def test_set_status_happy_path():
     run = _set_status_run(
         project_view=json.dumps({"id": "PVT_project2"}),
         field_list=status_field_fixture(),
-        item_list=project_item_list_fixture(),
+        graphql=project_items_graphql_fixture({7: "PVTI_other", 2: "PVTI_abc123"}, "In Progress"),
     )
     provider = GitHubProvider(cfg, run=run)
 
@@ -391,7 +408,7 @@ def test_set_status_issue_not_on_board_fails_loudly():
     run = _set_status_run(
         project_view=json.dumps({"id": "PVT_project2"}),
         field_list=status_field_fixture(),
-        item_list=project_item_list_fixture(),
+        graphql=project_items_graphql_fixture({7: "PVTI_other_project"}),
     )
     provider = GitHubProvider(cfg, run=run)
 
@@ -421,7 +438,7 @@ def test_set_status_missing_project_scope_fails_loudly():
 
 
 def _create_run(issue_create=None, item_add=None, project_view=None, field_list=None,
-                 item_list=None, issue_list=None):
+                 item_list=None, issue_list=None, graphql=None):
     """Builds a `run` callable covering the full `create_issue` call chain:
     (new, #135) `gh issue list --state open` dedup scan -> `gh issue create`
     -> `gh project item-add` -> (reused) `set_status`'s `gh project
@@ -458,6 +475,10 @@ def _create_run(issue_create=None, item_add=None, project_view=None, field_list=
             if isinstance(item_list, Exception):
                 raise item_list
             return item_list
+        if cmd[:3] == ["gh", "api", "graphql"]:
+            if isinstance(graphql, Exception):
+                raise graphql
+            return graphql
         if cmd[:3] == ["gh", "project", "item-edit"]:
             return ""
         raise RuntimeError(f"unhandled create_issue fixture: {cmd}")
@@ -487,7 +508,8 @@ def test_create_issue_happy_path_with_board_and_status():
         item_add=json.dumps({"id": "PVTI_new1"}),
         project_view=json.dumps({"id": "PVT_project2"}),
         field_list=status_field_fixture(),
-        item_list=new_issue_item_list_fixture(),
+        item_list=RuntimeError("timed out after 30 seconds"),  # must never be reached (#467)
+        graphql=RuntimeError("graphql must not be needed: item-add returned the id"),
     )
     provider = GitHubProvider(cfg, run=run)
 
@@ -499,6 +521,11 @@ def test_create_issue_happy_path_with_board_and_status():
     check(result.board_item_id == "PVTI_new1", "create_issue records the board item id from item-add")
     check(result.status == "Todo", "create_issue sets and echoes the requested initial status")
     check(result.warnings == [], "create_issue happy path carries no warnings")
+    edit = [c for c in run.calls if c[:3] == ["gh", "project", "item-edit"]]  # type: ignore[attr-defined]
+    check(len(edit) == 1 and edit[0][edit[0].index("--id") + 1] == "PVTI_new1",
+          "create --status edits the item id returned by item-add (no lookup)")
+    check(not [c for c in run.calls if c[:3] in (["gh", "project", "item-list"], ["gh", "api", "graphql"])],  # type: ignore[attr-defined]
+          "create --status makes no item-list / graphql lookup call")
 
     create_calls = [c for c in run.calls if c[:3] == ["gh", "issue", "create"]]  # type: ignore[attr-defined]
     check(len(create_calls) == 1, "create_issue issues exactly one gh issue create call")
@@ -547,12 +574,11 @@ def test_create_issue_status_failure_keeps_the_board_add():
         issue_create="https://github.com/YourOrg/your-repo/issues/203\n",
         item_add=json.dumps({"id": "PVTI_new2"}),
         project_view=json.dumps({"id": "PVT_project2"}),
-        field_list=status_field_fixture(),
-        item_list=json.dumps({"items": []}),  # issue #203 not found -> set_status raises
+        field_list=status_field_fixture(),  # unknown status name -> set_status raises
     )
     provider = GitHubProvider(cfg, run=run)
 
-    result = provider.create_issue("status-fail issue", "", [], status="Todo")
+    result = provider.create_issue("status-fail issue", "", [], status="Kinda Done")
     check(result.board_added is True, "create_issue keeps board_added True when only set_status fails")
     check(result.status is None, "create_issue leaves status unset when set_status fails")
     check(any("setting status" in w for w in result.warnings),
@@ -673,6 +699,113 @@ def test_unbound_board_notice_silent_when_board_configured():
     check(unbound_board_notice(cfg) is None, "unbound_board_notice is silent once the board is bound")
 
 
+def test_set_status_direct_lookup_on_large_board_never_lists():
+    """#467: a 259-item board (the real one) whose target is past item 200, with an `item-list`
+    that would time out. set_status must resolve the item via the per-issue
+    GraphQL lookup and never call `gh project item-list`."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _set_status_run(
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        item_list=RuntimeError("timed out after 30 seconds"),
+        graphql=project_items_graphql_fixture({2: "PVTI_259"}, "Todo"),
+    )
+    result = GitHubProvider(cfg, run=run).set_status(259, "Done")
+    check(result.item_id == "PVTI_259", "set_status resolves an item past position 200 by direct lookup")
+    check(result.previous_status == "Todo", "direct lookup carries the previous status")
+    check(not [c for c in run.calls if c[:3] == ["gh", "project", "item-list"]],  # type: ignore[attr-defined]
+          "set_status never calls `gh project item-list`")
+    gql = [c for c in run.calls if c[:3] == ["gh", "api", "graphql"]]  # type: ignore[attr-defined]
+    check(len(gql) == 1 and "n=259" in gql[0] and "projectItems" in " ".join(gql[0]),
+          "set_status issues exactly one projectItems GraphQL lookup for the issue")
+
+
+def _lookup_provider(**gql_kwargs):
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _set_status_run(project_view=json.dumps({"id": "PVT_project2"}),
+                          field_list=status_field_fixture(), **gql_kwargs)
+    return GitHubProvider(cfg, run=run), run
+
+
+def test_set_status_matches_project_id_not_just_number():
+    # Same project number (2) under another owner, different node id.
+    prov, run = _lookup_provider(graphql=json.dumps({"data": {"repository": {"issueOrPullRequest": {
+        "projectItems": {"pageInfo": {"hasNextPage": False}, "nodes": [
+            {"id": "PVTI_wrong", "isArchived": False, "project": {"id": "PVT_other", "number": 2}},
+            {"id": "PVTI_right", "isArchived": False, "project": {"id": "PVT_project2", "number": 2}},
+        ]}}}}}))
+    check(prov.set_status(5, "Done").item_id == "PVTI_right",
+          "lookup picks the item whose project id matches, not the same-numbered other project")
+    prov, run = _lookup_provider(graphql=project_items_graphql_fixture({2: "PVTI_wrong"}, ids={2: "PVT_other"}))
+    try:
+        prov.set_status(5, "Done"); ok = False
+    except BoardError:
+        ok = True
+    check(ok, "only a same-number, different-id project -> not found")
+
+
+def test_set_status_has_next_page_is_distinct_error():
+    prov, _ = _lookup_provider(graphql=project_items_graphql_fixture({7: "PVTI_o"}, has_next=True))
+    try:
+        prov.set_status(5, "Done"); msg = ""
+    except BoardError as e:
+        msg = str(e)
+    check("more than 100 projects" in msg and "not found" not in msg,
+          "unmatched with hasNextPage raises a distinct pagination error")
+
+
+def test_set_status_archived_item_warns():
+    prov, run = _lookup_provider(graphql=project_items_graphql_fixture({2: "PVTI_a"}, archived=True))
+    r = prov.set_status(5, "Done")
+    check(any("archived" in w for w in r.warnings), "archived item: status set with an archived warning")
+    check(len([c for c in run.calls if c[:3] == ["gh", "project", "item-edit"]]) == 1,
+          "archived item still gets its status edited")
+
+
+def test_set_status_lookup_failure_paths():
+    prov, _ = _lookup_provider(graphql=RuntimeError("HTTP 502"))
+    try:
+        prov.set_status(5, "Done"); msg = ""
+    except BoardError as e:
+        msg = str(e)
+    check("graphql" in msg and "502" in msg, "GraphQL call failure surfaces as BoardError")
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo=None, project_number=2, provider="github")
+    run = _set_status_run(project_view=json.dumps({"id": "PVT_project2"}), field_list=status_field_fixture())
+    try:
+        GitHubProvider(cfg, run=run).set_status(5, "Done"); msg = ""
+    except BoardError as e:
+        msg = str(e)
+    check("gh_repo" in msg, "missing gh_repo raises BoardError")
+
+
+def test_set_status_explicit_item_id_skips_lookup():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _set_status_run(project_view=json.dumps({"id": "PVT_project2"}),
+                          field_list=status_field_fixture(),
+                          item_list=RuntimeError("no"), graphql=RuntimeError("no"))
+    result = GitHubProvider(cfg, run=run).set_status(5, "Todo", item_id="PVTI_x")
+    check(result.item_id == "PVTI_x", "set_status honours a caller-supplied item id")
+
+
+def test_reconcile_warns_only_when_more_than_limit():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+
+    def mk(n):
+        return json.dumps({"items": [
+            {"id": f"PVTI_{i}", "status": "Todo", "content": {"number": i, "title": f"t{i}"}}
+            for i in range(1, n + 1)]})
+
+    # gh is asked for limit+1; 4 back for limit 3 -> truncated, 3 shown
+    run = _set_status_run(item_list=mk(4), graphql=graphql_no_linked_pr_fixture())
+    items, _, _, _, w = GitHubProvider(cfg, run=run).list_open_items(3)
+    check(any("truncated at 3" in x for x in w) and len(items) == 3, "warns and caps at limit when more exist")
+    lim = [c for c in run.calls if c[:3] == ["gh", "project", "item-list"]][0]  # type: ignore[attr-defined]
+    check(lim[lim.index("--limit") + 1] == "4", "item-list is fetched with limit+1")
+    run = _set_status_run(item_list=mk(3), graphql=graphql_no_linked_pr_fixture())
+    items, _, _, _, w = GitHubProvider(cfg, run=run).list_open_items(3)
+    check(not any("truncated" in x for x in w) and len(items) == 3, "exactly the limit: no warning")
+
+
 def main() -> int:
     test_board_configured_happy_path()
     test_zero_config_fallback()
@@ -682,6 +815,13 @@ def main() -> int:
     test_set_status_missing_board_config_fails_loudly()
     test_set_status_issue_not_on_board_fails_loudly()
     test_set_status_missing_project_scope_fails_loudly()
+    test_set_status_direct_lookup_on_large_board_never_lists()
+    test_set_status_explicit_item_id_skips_lookup()
+    test_set_status_matches_project_id_not_just_number()
+    test_set_status_has_next_page_is_distinct_error()
+    test_set_status_archived_item_warns()
+    test_set_status_lookup_failure_paths()
+    test_reconcile_warns_only_when_more_than_limit()
     test_create_issue_happy_path_with_board_and_status()
     test_create_issue_no_board_configured_degrades_gracefully()
     test_create_issue_item_add_failure_keeps_the_issue()
