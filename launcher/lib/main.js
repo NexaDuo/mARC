@@ -304,7 +304,7 @@ export function displayProject(projectPath, home, platform = process.platform) {
 // version mismatch and/or a catalog that tracks main. Anything else is FAILED.
 async function doctor(h, run, release, out, scope, home, platform, env = process.env) {
   const rows = parsePlugins(h, await run(h, listArgs(h))).filter(p => h !== 'claude' || !scope || p.scope === scope);
-  let failed = !rows.length, stale = false;
+  let failed = !rows.length, stale = false, catalogStale = false;
   if (!rows.length) out.alt(h, `${h}\tmissing\t-`, 'error', `${h}: missing`);
   for (const row of rows) {
     const match = sameVersion(row.version, release);
@@ -332,7 +332,7 @@ async function doctor(h, run, release, out, scope, home, platform, env = process
       // field except ref; anything else (foreign repo/type/path) is FAILED.
       if (sources.every(s => s !== null && typeof s === 'object' && sourceHasPointer({ ...s, ref: release.tag }, release.tag, h))) {
         out.line(h, 'warn', `${h}: main-tracking with no matching release pointer; upgrade the marketplace catalog`);
-        stale = true;
+        stale = true; catalogStale = true;
       } else {
         out.line(h, 'warn', `${h}: marketplace source does not match the expected release source`);
         failed = true;
@@ -345,11 +345,33 @@ async function doctor(h, run, release, out, scope, home, platform, env = process
     return { state: 'FAILED', detail };
   }
   if (stale) {
-    // Plain install converges the user scope only; --all-scopes also reaches the project/local rows (#466).
-    const scoped = h === 'claude' && rows.some(r => ['project', 'local'].includes(r.scope) && !sameVersion(r.version, release));
-    const fix = scoped ? 'npx @nexaduo/marc install --all-scopes' : 'npx @nexaduo/marc install';
-    out.line(h, 'warn', `${h}: out of date; run \`${fix}\`${scoped ? ' (or `npx @nexaduo/marc install` in a terminal to choose the projects)' : ''}`);
-    return { state: 'STALE', detail: `out of date; run \`${fix}\`` };
+    // Plain install converges the user scope only; --all-scopes also reaches project/local rows whose
+    // directory exists. A row whose directory is gone can never be fixed by install (#466/#470): it is
+    // reported apart, with a manual remedy, so doctor never points at a command that leaves it STALE.
+    const staleScoped = h === 'claude' ? rows.filter(r => ['project', 'local'].includes(r.scope) && !sameVersion(r.version, release)) : [];
+    const missing = [], existing = [];
+    for (const r of staleScoped) {
+      let ok = false;
+      try { ok = typeof r.projectPath === 'string' && path.isAbsolute(r.projectPath) && (await stat(r.projectPath)).isDirectory(); } catch { /* missing */ }
+      (ok ? existing : missing).push(r);
+    }
+    const userStale = rows.some(r => (!r.scope || r.scope === 'user') && !sameVersion(r.version, release));
+    const needInstall = userStale || catalogStale || (!missing.length && !existing.length);
+    const fixes = [];
+    if (existing.length) fixes.push(scope ? `npx @nexaduo/marc install --scope ${scope}` : 'npx @nexaduo/marc install --all-scopes');
+    else if (needInstall) fixes.push('npx @nexaduo/marc install');
+    if (fixes.length) out.line(h, 'warn', `${h}: out of date; run \`${fixes[0]}\`${existing.length && !scope ? ' (or `npx @nexaduo/marc install` in a terminal to choose the projects)' : scope && existing.length ? ' from that directory' : ''}`);
+    for (const r of missing) {
+      const where = displayProject(r.projectPath, home, platform);
+      out.line(h, 'warn', `${h}: ${r.scope} scope at ${where} is out of date, but the project directory no longer exists; registry entry removal is tracked in #470`);
+      if (typeof r.projectPath === 'string' && path.isAbsolute(r.projectPath) && !/[\r\n"$`\\]/.test(r.projectPath)) {
+        out.remedy(h, `${h}: manual remedy for ${where} (review first; doctor does not run it):`,
+          [`mkdir -p "${r.projectPath}" && cd "${r.projectPath}" && ${h} plugin uninstall ${ID} --scope ${r.scope}`]);
+      }
+    }
+    const note = missing.length ? `${missing.length} entr${missing.length === 1 ? 'y' : 'ies'} with a missing project directory (#470)` : '';
+    const detail = [fixes.length ? `run \`${fixes[0]}\`` : '', note].filter(Boolean).join('; ');
+    return { state: 'STALE', detail: `out of date${detail ? `; ${detail}` : ''}` };
   }
   return { state: 'OK', detail: 'in sync' };
 }
@@ -433,8 +455,8 @@ export function parseSelection(text, entries) {
   if (t === 'a' || t === 'all') return entries.filter(e => e.exists);
   const picked = new Set();
   for (const part of t.split(/[\s,]+/).filter(Boolean)) {
-    const i = Number(part);
-    if (!Number.isInteger(i) || i < 1 || i > entries.length) throw new Error(`Invalid selection: ${stripControls(part)}`);
+    const i = /^[1-9]\d*$/.test(part) ? Number(part) : NaN;
+    if (!Number.isInteger(i) || i > entries.length) throw new Error(`Invalid selection: ${stripControls(part)}`);
     picked.add(i - 1);
   }
   return entries.filter((e, i) => picked.has(i) && e.exists);
@@ -478,11 +500,13 @@ async function readState(h, { opts, run, cwd, home, platform, release, env }) {
   if (cls.kind === 'match') {
     // A stale row at another scope is only reported: writing there is not what install implies.
     const others = h !== 'claude' ? [] : rows.filter(r => !mine.includes(r) && SCOPES.includes(r.scope || 'user') && STALE_ROW(r, release));
+    const scoped = await staleScoped(others, release);
+    const gone = new Set(scoped.filter(e => !e.exists).map(e => e.key));
     const hints = others.map(r => {
       const sc = r.scope || 'user', where = sc === 'user' ? '' : ` in ${displayProject(r.projectPath, home, platform)}`;
+      if (gone.has(scopedKey(r))) return { key: scopedKey(r), text: `${h}: marc is also out of date at ${sc} scope${where}, but the project directory no longer exists; registry entry removal is tracked in #470` };
       return { key: scopedKey(r), text: `${h}: marc is also out of date at ${sc} scope${where}; run npx @nexaduo/marc install --scope ${sc}${sc === 'user' ? '' : ' from that directory'}` };
     });
-    const scoped = await staleScoped(others, release);
     base.scoped = scoped;
     if (mine.length && versionState(mine, release).stale) return { ...base, hints, action: 'update', note: 'registration matches; updating the stale install' };
     if (mine.length && await catalogBehind(h, enrichMarketplaces(h, markets, rows), rows, mine, release, { ...env, HOME: home })) {
@@ -662,6 +686,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
   if (!opts.harnesses.length) opts.harnesses = HARNESSES.filter(h => { try { discover(h); return true; } catch { return false; } });
   if (!opts.harnesses.length) throw new Error('No supported harness found on PATH');
   if (opts.scope && !opts.harnesses.includes('claude')) throw new Error('--scope requires Claude');
+  if (opts.allScopes && !opts.harnesses.includes('claude')) throw new Error('--all-scopes requires Claude');
   const out = makeOut(log, style, { columns });
   out.header(release, opts.command);
   if (opts.deprecatedUpdate) out.deprecated('update is deprecated: it is now an alias for install, which also updates a stale install');
@@ -697,8 +722,12 @@ export async function main(argv, { release, run = createRunner(), log = console.
     }
     const chosenKeys = new Set((f?.selected ?? []).map(e => e.key));
     for (const hint of f?.hints ?? []) if (!chosenKeys.has(hint.key)) out.line(p.harness, 'info', hint.text);
-    if (f?.scopedBlocked && !f.registered) out.line(p.harness, 'warn', NO_MARKET(p.harness));
-    if (f?.unselected?.length && !opts.allScopes) out.line(p.harness, 'info', `${p.harness}: ${f.unselected.length} project/local install(s) out of date; run npx @nexaduo/marc install --all-scopes (or install in a terminal to choose)`);
+    // With a user-scope install present, the 'none' branch below prints the same line: say it once.
+    if (f?.scopedBlocked && !f.registered && !f.mine.length) out.line(p.harness, 'warn', NO_MARKET(p.harness));
+    const gone = (f?.unselected ?? []).filter(e => !e.exists), fixable = (f?.unselected ?? []).filter(e => e.exists);
+    if (fixable.length && !opts.allScopes && !opts.scope) out.line(p.harness, 'info', `${p.harness}: ${fixable.length} project/local install(s) out of date; run npx @nexaduo/marc install --all-scopes (or install in a terminal to choose)`);
+    if (opts.allScopes) for (const e of gone) out.line(p.harness, 'warn', `${p.harness}: skipped ${e.scope} scope at ${displayProject(e.projectPath, home, platform)}: project directory no longer exists (registry entry removal is tracked in #470)`);
+    else if (gone.length) out.line(p.harness, 'info', `${p.harness}: ${gone.length} project/local entr${gone.length === 1 ? 'y points' : 'ies point'} at a missing directory; not updated (registry entry removal is tracked in #470)`);
     if (['replace', 'update', 'refuse'].includes(f?.action)) {
       for (const l of forceLines(p.harness, f, opts, home, platform)) out.line(p.harness, l.role, l.text);
       if (f.action === 'refuse') f.shown = true;
@@ -755,7 +784,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
   }
   const results = [];
   for (const h of opts.harnesses) {
-    let failed = false, outcome, threw = false, detail, notInstalled = false;
+    let failed = false, outcome, threw = false, detail, notInstalled = false, scopedRan = false;
     const f = fstate.get(h);
     const report = rows => {
       if (rows.some(r => r.enabled === false)) out.line(h, 'warn', `${h}: marc is installed but disabled`);
@@ -817,9 +846,15 @@ export async function main(argv, { release, run = createRunner(), log = console.
         for (const args of plan({ ...opts, harnesses: [h] })[0].commands) await run(h, args);
       }
       if (f?.selected?.length && ['none', 'update'].includes(f.action)) {
+        scopedRan = true;
         if (await updateScoped({ h, f, run, out, release, home, platform })) failed = true;
       }
-    } catch (e) { out.line(h, 'error', `${h}: ${e.message}`); failed = true; threw = true; }
+    } catch (e) {
+      if (f?.selected?.length && !scopedRan) out.line(h, 'warn', `${h}: skipped the selected project/local updates because an earlier step failed: ${f.selected.map(x => `${x.scope} ${displayProject(x.projectPath, home, platform)}`).join(', ')}`); out.line(h, 'error', `${h}: ${e.message}`); failed = true; threw = true; }
+    if (opts.allScopes && f?.scopedBlocked && !f.registered) {
+      out.line(h, 'warn', `${h}: --all-scopes updated nothing: the nexaduo marketplace is not registered`);
+      failed = true;
+    }
     const state = failed ? 'FAILED' : outcome || 'OK';
     results.push({ harness: h, state, detail: notInstalled ? `not installed; ${out.detail(h)}` : opts.command === 'doctor' && !threw ? detail : out.detail(h) });
     if (state !== 'OK') status = 1;

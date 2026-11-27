@@ -34,7 +34,7 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 | `--version <tag>` | Must equal the release embedded in this package; otherwise prints the matching `npx` command and exits |
 | `--dry-run` | Print the plan and change nothing (`install` still runs the read-only `plugin list` and `plugin marketplace list` first) |
 | `--force` | `install` only: re-register a nexaduo marketplace registered from another source (see below). The plan names the registration it removes. A local or unverifiable source (a possible dev clone) also needs you to type `replace` in a terminal |
-| `--all-scopes` | `install` only, Claude: also update every stale `project`/`local` install whose directory still exists (native `plugin update --scope <scope>` run in that project). Without it a terminal run offers a multi-select and `--yes` or a non-terminal run only prints hints. Missing directories are listed, never touched. Cannot combine with `--scope` |
+| `--all-scopes` | `install` only, Claude: also update every stale `project`/`local` install whose directory still exists (native `plugin update --scope <scope>` run in that project). Without it a terminal run offers a multi-select and `--yes` or a non-terminal run only prints hints. Missing directories are reported as skipped (removal of those registry entries is tracked in #470), never touched. Needs Claude in the selection; cannot combine with `--scope`. With no nexaduo marketplace registered it updates nothing and exits non-zero |
 | `--yes` | Skip the plan confirmation. Required for `install` and `uninstall` when not in a terminal; `doctor` and `--dry-run` never need it. It never answers the typed `replace` prompt |
 
 ## What it does, and what it doesn't
@@ -83,7 +83,8 @@ Then open any repository in your harness and run `/marc:tech-lead`.
   (`~/repos/app` under your home directory, otherwise the absolute path). A harness whose only
   problem is an older version, or a marketplace catalog still tracking `main`,
   is `STALE`: run `npx @nexaduo/marc install` (`install --all-scopes` when a
-  `project` or `local` row is the stale one). `FAILED` means something else is
+  `project` or `local` row with an existing directory is the stale one; a row whose
+  directory is gone is reported separately with a manual remedy, see #470). `FAILED` means something else is
   wrong (marketplace missing, fixed by `<harness> plugin marketplace add NexaDuo/mARC`, or drifted, plugin missing, release source
   unverifiable, a native CLI error) and wins over `STALE`.
 
