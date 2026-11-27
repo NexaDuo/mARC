@@ -12,6 +12,7 @@ The npm form is the Python port of launcher/lib/version.js `tagToNpm`.
 import json
 import os
 import re
+import tempfile
 from datetime import date
 import sys
 from pathlib import Path
@@ -69,17 +70,17 @@ def stamp(version, root=ROOT):
     for name, _ in outputs:
         if not (root / name).parent.is_dir():
             raise ValueError(f'{name}: directory missing')
-    written = []
-    try:
-        for name, text in outputs:
-            path = root / name
-            temp = path.with_name(path.name + '.tmp')
-            written.append(temp)
-            temp.write_text(text)
-            os.replace(temp, path)
-    finally:
-        for temp in written:
-            temp.unlink(missing_ok=True)
+    for name, text in outputs:
+        path = root / name
+        fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name + '.')
+        try:
+            with os.fdopen(fd, 'w') as handle:
+                handle.write(text)
+            os.chmod(temp_name, 0o644)
+            os.replace(temp_name, path)
+        except BaseException:
+            Path(temp_name).unlink(missing_ok=True)
+            raise
     return [n for n, _ in outputs]
 
 

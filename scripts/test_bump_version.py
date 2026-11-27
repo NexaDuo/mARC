@@ -95,6 +95,23 @@ class CatalogPointers(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'package.json'): stamp('26.12.1', self.root)
         self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
 
+    def test_stamp_ignores_planted_tmp_symlink(self):
+        outside = self.root / 'outside.txt'
+        outside.write_text('precious')
+        for name in ('VERSION', 'launcher/package.json'):
+            planted = self.root / (name + '.tmp')
+            planted.symlink_to(outside)
+        stamp('26.12.1', self.root)
+        self.assertEqual(outside.read_text(), 'precious')
+        for name in ('VERSION', 'launcher/package.json'):
+            target = self.root / name
+            self.assertTrue(target.is_file() and not target.is_symlink())
+            planted = self.root / (name + '.tmp')
+            self.assertTrue(planted.is_symlink())
+            self.assertEqual(planted.resolve(), outside.resolve())
+        self.assertEqual((self.root / 'VERSION').read_text(), '26.12.1\n')
+        self.assertEqual(check(self.root), 'v26.12.1')
+
     def test_repo_is_in_parity(self):
         self.assertEqual(check(ROOT), 'v' + read_version(ROOT))
 
