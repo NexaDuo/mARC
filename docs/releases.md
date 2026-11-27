@@ -25,11 +25,12 @@ two-live-configs split-brain that change removed, so downgrade safety was
 deliberately not chosen (#174).
 
 Versions before 0.22.0 read only the legacy path: `.claude/team.toml` (Claude
-Code), `.codex/team.toml` (Codex), `.github/copilot/team.toml` (Copilot). After
+Code) or `.github/copilot/team.toml` (Copilot). After
 `/marc:init` has written `.agents/team.toml`, they report "no `team.toml`
 found" and fall back to runtime `gh` discovery, and re-running their
-`/marc:init` writes a second, legacy `team.toml`. Antigravity is not affected:
-its legacy and new paths are both `.agents/team.toml`.
+`/marc:init` writes a second, legacy `team.toml`. Antigravity is not affected
+(its legacy and new paths are both `.agents/team.toml`), and neither is Codex,
+which shipped after 0.22.0.
 
 Instead, update forward with `npx @nexaduo/marc install` (all harnesses; see
 [install](install.md)), or `claude plugin update marc@nexaduo` for Claude Code.
