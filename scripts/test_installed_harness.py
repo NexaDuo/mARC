@@ -380,29 +380,58 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
     # the installed hooks.json (`command` / `bash`) to `bash -c` / `bash -lc` /
     # `sh -c`. Executing is necessary here: the point of this matrix is that the
     # hook BODY really runs the way the CLI runs it (cwd, env, shell, stdin), so
-    # resolving the script path without a shell (as the Antigravity command
-    # allow-list in AgyAdapter.hook_run does for its fixed dispatcher form) cannot
-    # prove it. That is only safe because the input is trusted, and the trust
-    # rests on these properties; a change that breaks one is breaking a stated
-    # assumption and must re-evaluate this sink:
+    # resolving the script path without a shell (as Antigravity.hook_run does,
+    # by allow-listing its fixed dispatcher form) cannot prove it. That is only
+    # safe because the input is trusted, and the trust rests on these
+    # properties; a change that breaks one is breaking a stated assumption and
+    # must re-evaluate this sink:
     #   1. Trigger: ci.yml runs on `push` / `pull_request`, never
-    #      `pull_request_target`, so a fork PR's code runs with no secrets and a
-    #      read-only token (`permissions: contents: read`).
-    #   2. Provenance: the installed plugin is this checkout's own compiled
-    #      output (harnesses/<h>/marc), installed into a temp dir from a local
-    #      marketplace (local_test_marketplace.prepare). Its hooks.json is
-    #      generated from core/hooks/hooks.spec.json by compile_prompts.py and
-    #      drift-gated by core/scripts/test_hooks_parity.py (#173/#170).
-    #   3. Isolation: HOME, config dirs and state stay in the temp dir, and
-    #      base_env() strips credential-looking variables from the environment.
-    # Mechanical guard for (2): never execute a command that is not byte-for-byte
-    # one of the commands in this checkout's compiled hooks.json for the same
-    # harness. It does not change what the test concludes: for the intended
-    # installs the two files are identical.
+    #      `pull_request_target`. Fork PRs get no secrets and a read-only token.
+    #      On push and same-repo PRs the Antigravity job does hold a step-scoped
+    #      secret (ANTIGRAVITY_API_KEY, in the install step only), and checkout
+    #      persists the read-only GITHUB_TOKEN in .git/config. So the trust
+    #      boundary is repo write access: anyone who can alter hooks.json or the
+    #      compiled sources on a same-repo branch can already run code in CI.
+    #   2. Provenance: the installed plugin is this checkout's compiled output
+    #      (harnesses/<h>/marc), generated from core/hooks/hooks.spec.json by
+    #      compile_prompts.py and drift-gated by core/scripts/test_hooks_parity.py
+    #      (#173/#170). claude-code, codex and copilot install it from a local
+    #      marketplace (local_test_marketplace.prepare); Antigravity's copy comes
+    #      from `agy plugin install` in an earlier CI step, not from prepare().
+    #   3. Isolation: hooks run with a temp HOME and temp state (run_hooks sets
+    #      ctx HOME to <tmp>/home unless the adapter installed one) and base_env()
+    #      drops credential-looking variables (TOKEN, API_KEY, ...), so the
+    #      step-scoped API key is not in the hook environment. What IS shared
+    #      with the job: the filesystem (the installed copy for Antigravity lives
+    #      under the job's .agy-home, written by the earlier install step), PATH,
+    #      and the persisted GITHUB_TOKEN in the checkout's .git/config. That is
+    #      acceptable under (1): the code that runs is the repo's own.
+    # Mechanical guards, both against THIS checkout and neither changing what the
+    # test concludes (for the intended installs the files are identical):
+    #   a. a command is only executed if it is byte-identical to one in the
+    #      checkout's compiled hooks.json for the same harness;
+    #   b. the hook/script files the installed copy carries (hooks/, scripts/)
+    #      must be byte-identical to the checkout's, so the scripts a command
+    #      names cannot differ from the reviewed ones. Files that exist only in
+    #      the checkout or only in the install are not compared (residual risk:
+    #      a script path outside hooks/ and scripts/ is not content-pinned).
     src_root = os.path.join(ROOT, "harnesses", ad.name, "marc")
     with contextlib.redirect_stdout(io.StringIO()):
         compiled = {c for _l, _e, _m, c in ad.hooks(src_root)}
+    drift = []
+    for sub in ("hooks", "scripts"):
+        for dp, _dn, fns in os.walk(os.path.join(src_root, sub)):
+            for fn in fns:
+                srcf = os.path.join(dp, fn)
+                inst = os.path.join(plugin, os.path.relpath(srcf, src_root))
+                if os.path.isfile(inst) and os.path.isfile(srcf):
+                    with open(srcf, "rb") as x, open(inst, "rb") as y:
+                        if x.read() != y.read():
+                            drift.append(os.path.relpath(srcf, src_root))
+    trusted = check(not drift, f"{ad.name}: installed hook/script files match the checkout ({drift[:3]})")
     for label, event, matcher, command in entries:
+        if not trusted:
+            continue
         if not check(command in compiled,
                      f"{label}: command matches the compiled harnesses/{ad.name}/marc hooks.json (not run otherwise)"):
             continue
