@@ -1623,6 +1623,16 @@ three-arm measurement (run 34987534132, preserved under
   branch fires (Antigravity shares Claude Code's hooks via symlink and, since
   its legacy fallback path is never populated in practice, is unaffected).
 
+### Notes
+- **Rolling back below 0.22.0 is not supported (#174).** After `/marc:init`
+  writes or migrates to `.agents/team.toml`, an older version does not look
+  there: it reports "no `team.toml` found" and falls back to runtime `gh`
+  discovery, and re-running its `/marc:init` writes a fresh legacy
+  `team.toml`, recreating the two-live-configs split-brain this release
+  removes. Update forward (`claude plugin update marc@nexaduo`) instead of
+  rolling back. If you must stay on an older version, copy the file back to
+  the harness's legacy config path.
+
 ## [0.21.0] - 2026-07-21
 
 ### Added
