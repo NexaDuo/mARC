@@ -35,6 +35,7 @@ Options (details in [`launcher/README.md`](../launcher/README.md)):
 - `--scope <user|project|local>`: Claude scope only
 - `--version <tag>`: must equal the launcher's embedded release
 - `--force`: replace a nexaduo marketplace registered from another source or a dev clone
+- `--all-scopes`: Claude only; also update every stale `project`/`local` install whose directory still exists
 
 ```bash
 npx @nexaduo/marc install --force
@@ -62,11 +63,17 @@ npx @nexaduo/marc install
 `install` converges: it installs when missing, updates a stale install (and a
 marketplace catalog that lags behind) and does nothing when everything is current.
 `update` is a deprecated alias with identical behavior. Claude Code acts on one
-scope (`--scope`, default `user`); a stale install at another scope is reported with
-the command to run from that directory, never written. Antigravity reinstalls its
+scope (`--scope`, default `user`). A stale `project` or `local` install elsewhere is
+offered in a terminal as a multi-select (entries whose directory is gone are marked
+`missing` and never touched), and `npx @nexaduo/marc install --all-scopes` updates every
+existing one. Without a terminal choice or `--all-scopes`, it is only reported, never
+written. If no nexaduo marketplace is registered, `install` cannot fix an old plugin:
+run `claude plugin marketplace add NexaDuo/mARC` first, then `install` again. Antigravity reinstalls its
 embedded tag, while Claude Code, Copilot and Codex follow the marketplace catalog.
 Disabled plugins are preserved. Use `npx @nexaduo/marc doctor` to check for drift: a
-harness that is only older is `STALE` (run `install`), anything else is `FAILED`, and
+harness that is only older is `STALE` (run `install`, or `install --all-scopes` when a
+project or local row with an existing directory is the stale one; a row whose directory is
+gone is reported separately and not fixable by install, tracked in #470), anything else is `FAILED`, and
 it exits non-zero in both cases. See the [launcher README](../launcher/README.md) for
 details.
 

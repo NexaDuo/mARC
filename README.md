@@ -46,6 +46,7 @@ Options (details in [`launcher/README.md`](launcher/README.md)):
 - `--scope <user|project|local>`: Claude scope only
 - `--version <tag>`: must equal the launcher's embedded release
 - `--force`: replace a nexaduo marketplace registered from another source or a dev clone
+- `--all-scopes`: also update stale project/local-scope Claude installs (terminal runs offer a choice)
 
 ```bash
 npx @nexaduo/marc install --force
