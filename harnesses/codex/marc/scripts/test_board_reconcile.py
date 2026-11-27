@@ -269,11 +269,13 @@ def test_toml_get_zero_dependency_extraction():
     check(toml_get(text, "nonexistent_key") is None, "toml_get returns None for a missing key")
 
 
-def project_items_graphql_fixture(items: dict, status_by_number=None) -> str:
+def project_items_graphql_fixture(items: dict, status_by_number=None, archived=False,
+                                  has_next=False, ids=None) -> str:
     """GraphQL `issueOrPullRequest.projectItems` reply for ONE issue.
     `items` maps project_number -> item id."""
-    return json.dumps({"data": {"repository": {"issueOrPullRequest": {"projectItems": {"nodes": [
-        {"id": iid, "project": {"number": n},
+    return json.dumps({"data": {"repository": {"issueOrPullRequest": {"projectItems": {"pageInfo": {"hasNextPage": has_next}, "nodes": [
+        {"id": iid, "isArchived": archived,
+         "project": {"id": (ids or {}).get(n, "PVT_project2"), "number": n},
          "fieldValueByName": ({"name": status_by_number} if status_by_number else None)}
         for n, iid in items.items()
     ]}}}}})
@@ -718,6 +720,64 @@ def test_set_status_direct_lookup_on_large_board_never_lists():
           "set_status issues exactly one projectItems GraphQL lookup for the issue")
 
 
+def _lookup_provider(**gql_kwargs):
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _set_status_run(project_view=json.dumps({"id": "PVT_project2"}),
+                          field_list=status_field_fixture(), **gql_kwargs)
+    return GitHubProvider(cfg, run=run), run
+
+
+def test_set_status_matches_project_id_not_just_number():
+    # Same project number (2) under another owner, different node id.
+    prov, run = _lookup_provider(graphql=json.dumps({"data": {"repository": {"issueOrPullRequest": {
+        "projectItems": {"pageInfo": {"hasNextPage": False}, "nodes": [
+            {"id": "PVTI_wrong", "isArchived": False, "project": {"id": "PVT_other", "number": 2}},
+            {"id": "PVTI_right", "isArchived": False, "project": {"id": "PVT_project2", "number": 2}},
+        ]}}}}}))
+    check(prov.set_status(5, "Done").item_id == "PVTI_right",
+          "lookup picks the item whose project id matches, not the same-numbered other project")
+    prov, run = _lookup_provider(graphql=project_items_graphql_fixture({2: "PVTI_wrong"}, ids={2: "PVT_other"}))
+    try:
+        prov.set_status(5, "Done"); ok = False
+    except BoardError:
+        ok = True
+    check(ok, "only a same-number, different-id project -> not found")
+
+
+def test_set_status_has_next_page_is_distinct_error():
+    prov, _ = _lookup_provider(graphql=project_items_graphql_fixture({7: "PVTI_o"}, has_next=True))
+    try:
+        prov.set_status(5, "Done"); msg = ""
+    except BoardError as e:
+        msg = str(e)
+    check("more than 100 projects" in msg and "not found" not in msg,
+          "unmatched with hasNextPage raises a distinct pagination error")
+
+
+def test_set_status_archived_item_warns():
+    prov, run = _lookup_provider(graphql=project_items_graphql_fixture({2: "PVTI_a"}, archived=True))
+    r = prov.set_status(5, "Done")
+    check(any("archived" in w for w in r.warnings), "archived item: status set with an archived warning")
+    check(len([c for c in run.calls if c[:3] == ["gh", "project", "item-edit"]]) == 1,
+          "archived item still gets its status edited")
+
+
+def test_set_status_lookup_failure_paths():
+    prov, _ = _lookup_provider(graphql=RuntimeError("HTTP 502"))
+    try:
+        prov.set_status(5, "Done"); msg = ""
+    except BoardError as e:
+        msg = str(e)
+    check("graphql" in msg and "502" in msg, "GraphQL call failure surfaces as BoardError")
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo=None, project_number=2, provider="github")
+    run = _set_status_run(project_view=json.dumps({"id": "PVT_project2"}), field_list=status_field_fixture())
+    try:
+        GitHubProvider(cfg, run=run).set_status(5, "Done"); msg = ""
+    except BoardError as e:
+        msg = str(e)
+    check("gh_repo" in msg, "missing gh_repo raises BoardError")
+
+
 def test_set_status_explicit_item_id_skips_lookup():
     cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
     run = _set_status_run(project_view=json.dumps({"id": "PVT_project2"}),
@@ -727,17 +787,23 @@ def test_set_status_explicit_item_id_skips_lookup():
     check(result.item_id == "PVTI_x", "set_status honours a caller-supplied item id")
 
 
-def test_reconcile_warns_when_item_list_hits_limit():
+def test_reconcile_warns_only_when_more_than_limit():
     cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
-    items = json.dumps({"items": [
-        {"id": f"PVTI_{i}", "status": "Todo", "content": {"number": i, "title": f"t{i}"}}
-        for i in range(1, 4)
-    ]})
-    run = _set_status_run(item_list=items, graphql=graphql_no_linked_pr_fixture())
-    _, _, _, _, warnings = GitHubProvider(cfg, run=run).list_open_items(3)
-    check(any("truncated at 3" in w for w in warnings), "reconcile warns with its truncation limit when hit")
-    _, _, _, _, warnings = GitHubProvider(cfg, run=run).list_open_items(50)
-    check(not any("truncated" in w for w in warnings), "reconcile does not warn below the limit")
+
+    def mk(n):
+        return json.dumps({"items": [
+            {"id": f"PVTI_{i}", "status": "Todo", "content": {"number": i, "title": f"t{i}"}}
+            for i in range(1, n + 1)]})
+
+    # gh is asked for limit+1; 4 back for limit 3 -> truncated, 3 shown
+    run = _set_status_run(item_list=mk(4), graphql=graphql_no_linked_pr_fixture())
+    items, _, _, _, w = GitHubProvider(cfg, run=run).list_open_items(3)
+    check(any("truncated at 3" in x for x in w) and len(items) == 3, "warns and caps at limit when more exist")
+    lim = [c for c in run.calls if c[:3] == ["gh", "project", "item-list"]][0]  # type: ignore[attr-defined]
+    check(lim[lim.index("--limit") + 1] == "4", "item-list is fetched with limit+1")
+    run = _set_status_run(item_list=mk(3), graphql=graphql_no_linked_pr_fixture())
+    items, _, _, _, w = GitHubProvider(cfg, run=run).list_open_items(3)
+    check(not any("truncated" in x for x in w) and len(items) == 3, "exactly the limit: no warning")
 
 
 def main() -> int:
@@ -751,7 +817,11 @@ def main() -> int:
     test_set_status_missing_project_scope_fails_loudly()
     test_set_status_direct_lookup_on_large_board_never_lists()
     test_set_status_explicit_item_id_skips_lookup()
-    test_reconcile_warns_when_item_list_hits_limit()
+    test_set_status_matches_project_id_not_just_number()
+    test_set_status_has_next_page_is_distinct_error()
+    test_set_status_archived_item_warns()
+    test_set_status_lookup_failure_paths()
+    test_reconcile_warns_only_when_more_than_limit()
     test_create_issue_happy_path_with_board_and_status()
     test_create_issue_no_board_configured_degrades_gracefully()
     test_create_issue_item_add_failure_keeps_the_issue()
