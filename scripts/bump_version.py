@@ -76,7 +76,11 @@ def stamp(version, root=ROOT):
         try:
             with os.fdopen(fd, 'w') as handle:
                 handle.write(text)
-            os.chmod(temp_name, 0o644)
+                handle.flush()
+                if hasattr(os, 'fchmod'):
+                    os.fchmod(handle.fileno(), 0o644)
+            if not hasattr(os, 'fchmod'):
+                os.chmod(temp_name, 0o644)
             os.replace(temp_name, path)
         except BaseException:
             Path(temp_name).unlink(missing_ok=True)

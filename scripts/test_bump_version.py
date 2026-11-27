@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Offline pointer parity and local PR-tree catalog regressions."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -95,12 +97,31 @@ class CatalogPointers(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'package.json'): stamp('26.12.1', self.root)
         self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
 
+    def hidden_temps(self):
+        return [p for p in self.root.rglob('.*') if p.is_file()]
+
+    def test_stamp_leaves_no_temp_files_and_mode_0644(self):
+        stamp('26.12.1', self.root)
+        self.assertEqual(self.hidden_temps(), [])
+        if os.name == 'posix':
+            for name in ('VERSION', 'launcher/package.json', 'launcher/release.json'):
+                self.assertEqual((self.root / name).stat().st_mode & 0o777, 0o644)
+
+    def test_failed_replace_propagates_and_removes_own_temp(self):
+        with mock.patch('bump_version.os.replace', side_effect=OSError('boom')):
+            with self.assertRaisesRegex(OSError, 'boom'): stamp('26.12.1', self.root)
+        self.assertEqual(self.hidden_temps(), [])
+        self.assertEqual((self.root / 'VERSION').read_text(), '26.11.25.2\n')
+
     def test_stamp_ignores_planted_tmp_symlink(self):
         outside = self.root / 'outside.txt'
         outside.write_text('precious')
         for name in ('VERSION', 'launcher/package.json'):
             planted = self.root / (name + '.tmp')
-            planted.symlink_to(outside)
+            try:
+                planted.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                self.skipTest('symlinks unavailable')
         stamp('26.12.1', self.root)
         self.assertEqual(outside.read_text(), 'precious')
         for name in ('VERSION', 'launcher/package.json'):
