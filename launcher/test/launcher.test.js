@@ -7,7 +7,7 @@ import { rmSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStyle, stripControls } from '../lib/style.js';
-import { main, displayProject, makeOut, parseArgs, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
+import { main, displayProject, makeOut, parseArgs, parseSelection, installAgy, tempRoots, HARNESSES } from '../lib/main.js';
 import { tagToNpm, npmToTag } from '../lib/version.js';
 import { safeValue, spawnSpec, resolveExecutable, createRunner } from '../lib/process.js';
 import { classifyMarketplace, enrichMarketplaces, describeSource, redactSource, safeVersion, parsePlugins, parseMarketplaces, marketplaceWarnings, marketplaceMatches, sourceHasPointer, readCatalogSource } from '../lib/lists.js';
@@ -964,7 +964,8 @@ for (const h of ['claude', 'codex', 'agy']) {
     const { code, text } = await doctorRun(h, { list });
     assert.equal(code, 1);
     assert.ok(text.includes(`${h}: STALE`), text.join('|'));
-    assert.ok(text.some(l => l.includes(staleHint)));
+    // Claude's fixture also has a stale project row: only --all-scopes reaches it (#466).
+    assert.ok(text.some(l => l.includes(h === 'claude' ? 'run `npx @nexaduo/marc install --all-scopes`' : staleHint)), text.join('|'));
     assert.ok(!text.includes(`${h}: FAILED`));
     const color = await doctorRun(h, { list }, { env: { FORCE_COLOR: '1' } });
     assert.ok(color.logs.some(l => l.includes(`${ESC}[1;93mSTALE`)), 'STALE uses the amber role');
@@ -1784,7 +1785,7 @@ test('SEC-3 (#458): an already-current harness shows `already current`, not its 
 test('SEC-3 follow-up (#458): no registered marketplace + old plugin is not "already current"; --force prints one no-op line', async () => {
   const r = await force(['install', '--dry-run', '--harness', 'claude'], { claude: { markets: [], plugins: OLD } });
   assert.ok(!r.logs.some(l => l.includes('already current')), r.logs.join('|'));
-  assert.ok(r.logs.includes('claude: nexaduo marketplace not registered; run npx @nexaduo/marc doctor'), r.logs.join('|'));
+  assert.ok(r.logs.includes('claude: nexaduo marketplace not registered; register it with `claude plugin marketplace add NexaDuo/mARC`, then rerun `npx @nexaduo/marc install`'), r.logs.join('|'));
   const f = await force(['install', '--dry-run', '--force', '--harness', 'claude'], { claude: { markets: [GOOD.claude], plugins: CURRENT } });
   assert.ok(f.logs.includes('claude: --force: nothing to do'), f.logs.join('|'));
   assert.ok(!f.logs.some(l => l.includes('already current')), f.logs.join('|'));
@@ -1829,7 +1830,7 @@ test('README and HELP parity: every flag in --help appears in the root and launc
   const logs = [];
   assert.equal(await main(['--help'], { release, log: s => logs.push(s) }), 0);
   const flags = [...new Set(logs.join('\n').match(/--[a-z][a-z-]*/g))];
-  for (const f of ['--yes', '--dry-run', '--harness', '--scope', '--version', '--force']) assert.ok(flags.includes(f), `HELP lists ${f}`);
+  for (const f of ['--yes', '--dry-run', '--harness', '--scope', '--version', '--force', '--all-scopes']) assert.ok(flags.includes(f), `HELP lists ${f}`);
   assert.ok(!flags.includes('--force-local'));
   for (const file of ['README.md', 'launcher/README.md']) {
     const text = await readFile(path.join(ROOT, file), 'utf8');
@@ -1872,4 +1873,121 @@ test('banner (#453): shown only for color + 40+ columns + unicode; plain output 
   for (const c of [{ env: { NO_COLOR: '1', FORCE_COLOR: '3' } }, { env: { TERM: 'dumb' } }, { env: {}, stdoutIsTTY: false }]) {
     assert.deepEqual(capture({ ...c, columns: 200 }), [header], 'plain mode is byte-identical');
   }
+});
+
+// ---- #466: offer to update stale project/local-scope installs ----
+async function scopedRegistry(t, { markets = [GOOD.claude] } = {}) {
+  const dir = await temp(t), mk = async n => { const d = path.join(dir, n); await mkdir(d); return d; };
+  const a = await mk('app-a'), b = await mk('app-b'), cur = await mk('app-cur'), cwd = await mk('cwd');
+  const gone = path.join(dir, 'gone');
+  const row = (version, scope, projectPath) => ({ id: 'marc@nexaduo', version, scope, projectPath, enabled: true });
+  const plugins = [row('26.11.25.2', 'user'), row('26.11.14', 'project', a), row('26.11.10', 'local', b),
+    row('26.11.12', 'project', gone), row('26.11.25.2', 'project', cur)];
+  const calls = [];
+  // Update only moves the row of the project it runs in (cwd), like the native CLI.
+  const run = async (h, args, options) => {
+    calls.push([h, args, options]);
+    if (args[1] === 'list') return JSON.stringify(plugins);
+    if (args.join(' ') === 'plugin marketplace list --json') return JSON.stringify(markets);
+    if (args[1] === 'update' && args[2] === 'marc@nexaduo') {
+      const r = plugins.find(p => p.scope === args[4] && p.projectPath === options?.cwd);
+      if (r) r.version = '26.11.25.2';
+    }
+    return '';
+  };
+  return { dir, a, b, gone, cur, cwd, calls, run, plugins };
+}
+const wcalls = calls => calls.filter(([, a]) => !a.includes('list'));
+const updateTargets = calls => wcalls(calls).filter(([, a]) => a[1] === 'update' && a[2] === 'marc@nexaduo').map(([, a, o]) => `${a[4]}@${o?.cwd}`);
+const baseOpts = (s, extra = {}) => ({ release, run: s.run, env: {}, stdoutIsTTY: false, home: s.dir, cwd: s.cwd, platform: process.platform, ...extra });
+
+test('#466 TTY: the multi-select lists every stale entry, marks the missing one, and only the chosen project is written', async t => {
+  const s = await scopedRegistry(t), logs = [];
+  let offered;
+  const code = await main(['install', '--harness', 'claude'], baseOpts(s, { isTTY: true, log: x => logs.push(x), confirm: async () => true,
+    selectScopes: async entries => { offered = entries; return [entries.find(e => e.projectPath === s.a)]; } }));
+  assert.equal(code, 0, logs.join('\n'));
+  assert.deepEqual(offered.map(e => [e.scope, e.exists]), [['project', true], ['local', true], ['project', false]], 'the current project is not offered');
+  assert.ok(offered.find(e => !e.exists).label.includes('missing'), 'missing entry is flagged');
+  assert.ok(offered.every(e => e.label.includes(`-> ${release.tag}`) && e.label.includes(e.scope)));
+  assert.deepEqual(updateTargets(s.calls), [`project@${s.a}`]);
+  assert.ok(logs.some(l => l.includes('claude plugin update marc@nexaduo --scope project') && l.includes('(cwd ~/app-a)')), 'plan lists the command per project');
+  assert.ok(logs.some(l => l.includes('app-b') && l.includes('out of date')), 'unselected project stays a hint');
+  assert.ok(logs.includes('claude: updated 1 of 1 project/local install(s)'));
+  assert.ok(!JSON.stringify(wcalls(s.calls)).includes(s.b) && !JSON.stringify(wcalls(s.calls)).includes('gone') && !JSON.stringify(wcalls(s.calls)).includes('app-cur'), 'no write to an unselected project');
+});
+
+test('#466 TTY: choosing nothing writes nothing and never prompts for confirmation; a handed-back missing entry is ignored', async t => {
+  const s = await scopedRegistry(t);
+  let asked = false;
+  const code = await main(['install', '--harness', 'claude'], baseOpts(s, { isTTY: true, log: () => {}, confirm: async () => { asked = true; return true; },
+    selectScopes: async entries => entries.filter(e => !e.exists) }));
+  assert.equal(code, 0); assert.equal(asked, false); assert.deepEqual(wcalls(s.calls), []);
+});
+
+test('#466 --all-scopes updates every existing stale entry (cwd = project), skips the missing and current ones, removes nothing', async t => {
+  const s = await scopedRegistry(t), logs = [];
+  const code = await main(['install', '--all-scopes', '--yes', '--harness', 'claude'], baseOpts(s, { log: x => logs.push(x) }));
+  assert.equal(code, 0, logs.join('\n'));
+  assert.deepEqual(updateTargets(s.calls).sort(), [`local@${s.b}`, `project@${s.a}`].sort());
+  assert.deepEqual(wcalls(s.calls).filter(([, a]) => a[1] !== 'update').map(([, a]) => a), [['plugin', 'marketplace', 'update', 'nexaduo']]);
+  assert.ok(!wcalls(s.calls).some(([, a, o]) => ['uninstall', 'remove'].includes(a[1]) || o?.cwd === s.gone || o?.cwd === s.cur));
+  assert.ok(logs.some(l => l.includes('missing')) === false, 'missing entries are not offered under --all-scopes');
+  assert.ok(logs.includes('claude: updated 2 of 2 project/local install(s)'));
+  const dry = await scopedRegistry(t), dl = [];
+  await main(['install', '--all-scopes', '--dry-run', '--harness', 'claude'], baseOpts(dry, { log: x => dl.push(x) }));
+  assert.deepEqual(wcalls(dry.calls), []); assert.equal(dl.filter(l => l.includes('plugin update marc@nexaduo')).length, 2, 'dry-run plan lists each project command');
+});
+
+test('#466 non-TTY and --yes without --all-scopes: hints only, no write, no prompt', async t => {
+  for (const argv of [['install', '--yes', '--harness', 'claude']]) {
+    const s = await scopedRegistry(t), logs = [];
+    let selected = false;
+    const code = await main(argv, baseOpts(s, { isTTY: false, log: x => logs.push(x), selectScopes: async () => { selected = true; return []; } }));
+    assert.equal(code, 0); assert.equal(selected, false); assert.deepEqual(wcalls(s.calls), []);
+    assert.ok(logs.some(l => l.includes('install --all-scopes')), logs.join('\n'));
+  }
+  const s = await scopedRegistry(t); let selected = false;
+  await main(['install', '--yes', '--harness', 'claude'], baseOpts(s, { isTTY: true, log: () => {}, selectScopes: async () => { selected = true; return []; } }));
+  assert.equal(selected, false, '--yes in a terminal does not prompt'); assert.deepEqual(wcalls(s.calls), []);
+});
+
+test('#466 a failed project update is reported, the others still run, and the exit is non-zero', async t => {
+  const s = await scopedRegistry(t), logs = [], inner = s.run;
+  const run = async (h, args, o) => { if (args[1] === 'update' && o?.cwd === s.a) throw new Error('native failure'); return inner(h, args, o); };
+  const code = await main(['install', '--all-scopes', '--yes', '--harness', 'claude'], baseOpts(s, { run, log: x => logs.push(x) }));
+  assert.equal(code, 1); assert.ok(logs.some(l => l.includes('could not update project scope at ~/app-a')), logs.join('\n'));
+  assert.ok(updateTargets(s.calls).includes(`local@${s.b}`));
+});
+
+test('#466 no nexaduo marketplace: nothing is offered; the remedy names the command that registers it', async t => {
+  const s = await scopedRegistry(t, { markets: [] }), logs = [];
+  const code = await main(['install', '--all-scopes', '--yes', '--harness', 'claude'], baseOpts(s, { log: x => logs.push(x) }));
+  assert.deepEqual(wcalls(s.calls), []);
+  const fix = 'register it with `claude plugin marketplace add NexaDuo/mARC`, then rerun `npx @nexaduo/marc install`';
+  assert.ok(logs.some(l => l.includes(fix)), logs.join('\n'));
+  assert.equal(code, 0);
+  const user = await force(['install', '--yes', '--harness', 'claude'], { claude: { markets: [], plugins: OLD } });
+  assert.ok(user.logs.some(l => l.includes('claude plugin marketplace add NexaDuo/mARC')), user.logs.join('|'));
+  const doc = await force(['doctor', '--harness', 'claude'], { claude: { markets: [], plugins: OLD } });
+  assert.ok(doc.logs.some(l => l.includes('marketplace missing; register it with `claude plugin marketplace add NexaDuo/mARC`')), doc.logs.join('|'));
+});
+
+test('#466 doctor: a stale project/local row names install --all-scopes; a stale user row alone keeps plain install', async () => {
+  const rows = JSON.parse(fixtures.claude);
+  const scoped = await doctorRun('claude', { list: JSON.stringify([rows[0], { ...rows[1], version: '26.11.14' }]) });
+  assert.ok(scoped.text.includes('claude: STALE') && scoped.text.some(l => l.includes('run `npx @nexaduo/marc install --all-scopes`')), scoped.text.join('|'));
+  const user = await doctorRun('claude', { list: JSON.stringify([{ ...rows[0], version: '26.11.14' }, rows[1]]) });
+  assert.ok(user.text.some(l => l.includes('run `npx @nexaduo/marc install`')) && !user.text.some(l => l.includes('--all-scopes')), user.text.join('|'));
+});
+
+test('#466 parseArgs and parseSelection: --all-scopes is install-only and excludes --scope; selections skip missing entries', async () => {
+  assert.equal(parseArgs(['install', '--all-scopes']).allScopes, true);
+  assert.throws(() => parseArgs(['doctor', '--all-scopes']), /install only/);
+  assert.throws(() => parseArgs(['install', '--all-scopes', '--scope', 'project']), /cannot be combined/);
+  const es = [{ exists: true }, { exists: false }, { exists: true }];
+  assert.deepEqual(parseSelection('1,2', es), [es[0]]);
+  assert.deepEqual(parseSelection('a', es), [es[0], es[2]]);
+  assert.deepEqual(parseSelection('', es), []);
+  assert.throws(() => parseSelection('9', es), /Invalid selection/);
 });

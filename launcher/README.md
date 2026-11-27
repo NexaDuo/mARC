@@ -34,6 +34,7 @@ Then open any repository in your harness and run `/marc:tech-lead`.
 | `--version <tag>` | Must equal the release embedded in this package; otherwise prints the matching `npx` command and exits |
 | `--dry-run` | Print the plan and change nothing (`install` still runs the read-only `plugin list` and `plugin marketplace list` first) |
 | `--force` | `install` only: re-register a nexaduo marketplace registered from another source (see below). The plan names the registration it removes. A local or unverifiable source (a possible dev clone) also needs you to type `replace` in a terminal |
+| `--all-scopes` | `install` only, Claude: also update every stale `project`/`local` install whose directory still exists (native `plugin update --scope <scope>` run in that project). Without it a terminal run offers a multi-select and `--yes` or a non-terminal run only prints hints. Missing directories are listed, never touched. Cannot combine with `--scope` |
 | `--yes` | Skip the plan confirmation. Required for `install` and `uninstall` when not in a terminal; `doctor` and `--dry-run` never need it. It never answers the typed `replace` prompt |
 
 ## What it does, and what it doesn't
@@ -70,14 +71,20 @@ Then open any repository in your harness and run `/marc:tech-lead`.
   checks run before the plan, so the exact `marketplace update` / `plugin update`
   commands are shown before you confirm; if a read fails, nothing changes. A
   stale Claude row at another scope is reported with the command to run from
-  that directory, never written. `update` is a deprecated alias with identical
+  that directory; in a terminal a multi-select offers to update the stale
+  `project`/`local` rows (entries whose directory is gone are marked `missing`,
+  unchecked, and never updated), and `--all-scopes` updates every existing one.
+  Each chosen project's `claude plugin update marc@nexaduo --scope <scope>`
+  runs with that project as the working directory and is listed in the plan;
+  no unselected project is written. `update` is a deprecated alias with identical
   behavior.
 - `doctor` changes nothing and exits non-zero when it finds drift. Claude
   `project` and `local` rows add the project they belong to as an extra field
   (`~/repos/app` under your home directory, otherwise the absolute path). A harness whose only
   problem is an older version, or a marketplace catalog still tracking `main`,
-  is `STALE`: run `npx @nexaduo/marc install`. `FAILED` means something else is
-  wrong (marketplace missing or drifted, plugin missing, release source
+  is `STALE`: run `npx @nexaduo/marc install` (`install --all-scopes` when a
+  `project` or `local` row is the stale one). `FAILED` means something else is
+  wrong (marketplace missing, fixed by `<harness> plugin marketplace add NexaDuo/mARC`, or drifted, plugin missing, release source
   unverifiable, a native CLI error) and wins over `STALE`.
 
 ## Versions
