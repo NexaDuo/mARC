@@ -440,7 +440,7 @@ def test_bulk_reader_routes_to_dedicated_role_on_claude_code() -> None:
 def test_sec_rev_bypass_from_payload() -> None:
     print("\n--- Test (e): @sec/@rev bypass keys off payload agent_type only (#289) ---")
     with tempfile.TemporaryDirectory() as tmp:
-        write_team_toml(tmp, "[token_guard]\nmax_read_lines = 350\nbulk_reader = true\n")
+        write_team_toml(tmp, "[token_guard]\nmax_read_lines = 350\nbulk_reader = false\n")
         big = write_big_file(tmp)
         base = {"tool_name": "Read", "tool_input": {"path": big}}
 

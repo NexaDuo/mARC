@@ -62,6 +62,13 @@ def main():
     # 'marc:security'). This replaces a session-wide 'ps' argv regex that any
     # process could forge. A missing/other value means NO bypass (fail-closed
     # for the bypass). Robustness, not an access boundary.
+    # `claude --agent security|review` (dispatch_agent.py, bare name) also
+    # reports agent_type 'marc:security'/'marc:review' (empirically confirmed
+    # in review), so that path is covered too.
+    # Caveat: 'agent_type' is only provided by Claude Code today, and
+    # read-guard is wired only in claude-code (hook_ids). If it is wired into
+    # another harness later, @sec/@rev get no unlimited-read bypass there (the
+    # guard applies to them) until an equivalent identifier exists.
     if payload.get('agent_type') in ('marc:security', 'marc:review'):
         sys.exit(0)
 
