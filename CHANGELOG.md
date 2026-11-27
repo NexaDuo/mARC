@@ -1626,12 +1626,18 @@ three-arm measurement (run 34987534132, preserved under
 ### Notes
 - **Rolling back below 0.22.0 is not supported (#174).** After `/marc:init`
   writes or migrates to `.agents/team.toml`, an older version does not look
-  there: it reports "no `team.toml` found" and falls back to runtime `gh`
-  discovery, and re-running its `/marc:init` writes a fresh legacy
-  `team.toml`, recreating the two-live-configs split-brain this release
-  removes. Update forward (`claude plugin update marc@nexaduo`) instead of
-  rolling back. If you must stay on an older version, copy the file back to
-  the harness's legacy config path.
+  there. It reads only its legacy path (`.claude/team.toml` for Claude Code,
+  `.codex/team.toml` for Codex, `.github/copilot/team.toml` for Copilot),
+  reports "no `team.toml` found", and falls back to runtime `gh` discovery.
+  Re-running its `/marc:init` writes a fresh legacy `team.toml`, recreating
+  the two-live-configs split-brain this release removes. Antigravity has no
+  exposure: its legacy and new paths are both `.agents/team.toml`. Update
+  forward instead of rolling back: `npx @nexaduo/marc install` (all
+  harnesses), or `claude plugin update marc@nexaduo` for Claude Code. If you
+  must stay on an older version, move the file to the legacy path
+  (`mv .agents/team.toml <legacy path>`), or copy it and delete the legacy
+  copy once you update forward; a leftover legacy file goes stale and the
+  drift returns.
 
 ## [0.21.0] - 2026-07-21
 

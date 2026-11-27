@@ -22,11 +22,17 @@ Rolling back to an earlier mARC version is not supported. Per-repo config now ha
 one source of truth, `.agents/team.toml` (#166). Keeping a readable copy at the
 legacy path so an older version could still find it would recreate the
 two-live-configs split-brain that change removed, so downgrade safety was
-deliberately not chosen (#174). Versions before 0.22.0 do not look in
-`.agents/`: they report "no `team.toml` found" and fall back to runtime `gh`
-discovery, and re-running their `/marc:init` writes a second, legacy
-`team.toml`.
+deliberately not chosen (#174).
 
-Instead, update forward with `claude plugin update marc@nexaduo`. If you must
-stay on an older version, copy `.agents/team.toml` back to the harness's legacy
-config path.
+Versions before 0.22.0 read only the legacy path: `.claude/team.toml` (Claude
+Code), `.codex/team.toml` (Codex), `.github/copilot/team.toml` (Copilot). After
+`/marc:init` has written `.agents/team.toml`, they report "no `team.toml`
+found" and fall back to runtime `gh` discovery, and re-running their
+`/marc:init` writes a second, legacy `team.toml`. Antigravity is not affected:
+its legacy and new paths are both `.agents/team.toml`.
+
+Instead, update forward with `npx @nexaduo/marc install` (all harnesses; see
+[install](install.md)), or `claude plugin update marc@nexaduo` for Claude Code.
+If you must stay on an older version, move `.agents/team.toml` to the legacy
+path (or copy it, then delete the legacy copy after you update forward).
+Otherwise the old file goes stale and the two-config drift returns.
