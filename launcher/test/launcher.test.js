@@ -1781,6 +1781,15 @@ test('SEC-3 (#458): an already-current harness shows `already current`, not its 
   assert.ok(!r.logs.some(l => l.includes('plugin install') || l.includes('marketplace add')), r.logs.join('|'));
 });
 
+test('SEC-3 follow-up (#458): no registered marketplace + old plugin is not "already current"; --force prints one no-op line', async () => {
+  const r = await force(['install', '--dry-run', '--harness', 'claude'], { claude: { markets: [], plugins: OLD } });
+  assert.ok(!r.logs.some(l => l.includes('already current')), r.logs.join('|'));
+  assert.ok(r.logs.includes('claude: nexaduo marketplace not registered; run npx @nexaduo/marc doctor'), r.logs.join('|'));
+  const f = await force(['install', '--dry-run', '--force', '--harness', 'claude'], { claude: { markets: [GOOD.claude], plugins: CURRENT } });
+  assert.ok(f.logs.includes('claude: --force: nothing to do'), f.logs.join('|'));
+  assert.ok(!f.logs.some(l => l.includes('already current')), f.logs.join('|'));
+});
+
 test('REV-5 (#458): an all-refused run prints the refusal sentence once, and the result detail keeps it', async () => {
   const r = await force(['install', '--yes', '--harness', 'claude'], { claude: { markets: [FOREIGN.claude], plugins: [] } });
   assert.equal(r.code, 1); noWrite(r);

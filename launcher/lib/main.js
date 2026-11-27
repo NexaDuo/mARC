@@ -604,7 +604,11 @@ export async function main(argv, { release, run = createRunner(), log = console.
     if (['replace', 'update', 'refuse'].includes(f?.action)) {
       for (const l of forceLines(p.harness, f, opts, home, platform)) out.line(p.harness, l.role, l.text);
       if (f.action === 'refuse') f.shown = true;
-    } else if (f?.action === 'none' && f.mine.length) out.line(p.harness, 'info', `${p.harness}: already current`);
+    } else if (f?.action === 'none' && f.mine.length) {
+      // 'none' with a registered matching marketplace means current; without one the version was never checked.
+      if (!f.registered) out.line(p.harness, 'warn', `${p.harness}: nexaduo marketplace not registered; run npx @nexaduo/marc doctor`);
+      else if (!f.note) out.line(p.harness, 'info', `${p.harness}: already current`);
+    }
     else for (const args of p.commands) out.line(p.harness, 'cmd', `${p.harness} ${args.join(' ')}`);
   }
   const replacing = h => fstate.get(h)?.action === 'replace';
