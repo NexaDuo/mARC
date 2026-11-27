@@ -228,6 +228,8 @@ export function makeOut(log, st, { columns } = {}) {
       const body = cols.slice(1).map((c, i) => cell(c, widths[i + 1], 'info')).join('  ');
       put(h, `  ${cell(cols[0], widths[0], 'harness')}  ${body}${drift ? `  ${p('drift', 'DRIFT')}` : extra ? `  ${' '.repeat(5)}` : ''}${extra ? `  ${p('info', extra)}` : ''}`.trimEnd());
     },
+    // Remember a line as the harness's result detail without printing it again.
+    keep(h, text) { last.set(h, text); },
     detail(h) { const t = last.get(h) || 'done';
       return t.startsWith(`${h}: `) ? t.slice(h.length + 2) : t; },
     results(list) {
@@ -293,7 +295,7 @@ export function displayProject(projectPath, home, platform = process.platform) {
 
 // Returns { state: OK|STALE|FAILED, detail }. STALE: the only problems are a
 // version mismatch and/or a catalog that tracks main. Anything else is FAILED.
-async function doctor(h, run, release, out, scope, home, platform) {
+async function doctor(h, run, release, out, scope, home, platform, env = process.env) {
   const rows = parsePlugins(h, await run(h, listArgs(h))).filter(p => h !== 'claude' || !scope || p.scope === scope);
   let failed = !rows.length, stale = false;
   if (!rows.length) out.alt(h, `${h}\tmissing\t-`, 'error', `${h}: missing`);
@@ -313,7 +315,7 @@ async function doctor(h, run, release, out, scope, home, platform) {
       out.line(h, 'dim', `${h}: pin state unverifiable from native list`);
     }
     if (!markets.length) { out.line(h, 'warn', `${h}: nexaduo marketplace missing`); failed = true; }
-    const source = await readCatalogSource(h, markets, rows);
+    const source = await readCatalogSource(h, markets, rows, { ...env, HOME: home });
     const sources = source !== null ? [source] : rows.map(r => r.source).filter(Boolean);
     if (!sources.length) {
       out.line(h, 'warn', `${h}: catalog pointer unavailable in native lists; cannot verify release source`);
@@ -601,7 +603,9 @@ export async function main(argv, { release, run = createRunner(), log = console.
     for (const hint of f?.hints ?? []) out.line(p.harness, 'info', hint);
     if (['replace', 'update', 'refuse'].includes(f?.action)) {
       for (const l of forceLines(p.harness, f, opts, home, platform)) out.line(p.harness, l.role, l.text);
-    } else for (const args of p.commands) out.line(p.harness, 'cmd', `${p.harness} ${args.join(' ')}`);
+      if (f.action === 'refuse') f.shown = true;
+    } else if (f?.action === 'none' && f.mine.length) out.line(p.harness, 'info', `${p.harness}: already current`);
+    else for (const args of p.commands) out.line(p.harness, 'cmd', `${p.harness} ${args.join(' ')}`);
   }
   const replacing = h => fstate.get(h)?.action === 'replace';
   let status = 0;
@@ -656,7 +660,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
     };
     try {
       if (opts.command === 'doctor') {
-        const d = await doctor(h, run, release, out, opts.scope, home, platform);
+        const d = await doctor(h, run, release, out, opts.scope, home, platform, env);
         outcome = d.state === 'FAILED' ? undefined : d.state; failed = d.state === 'FAILED'; detail = d.detail;
       } else if (h === 'agy' && ['install', 'update'].includes(opts.command)) {
         await installAgy({ run, release, tmpRoot });
@@ -665,9 +669,10 @@ export async function main(argv, { release, run = createRunner(), log = console.
       } else if (f?.action === 'refuse') {
         if (!f.quiet && !f.remedyAfter) manualRemedy(h, out, opts.scope);
         if (!f.mine.length) { notInstalled = true; out.line(h, 'info', `${h}: marc not installed`); }
-        if (!f.remedyAfter) throw new Error(f.message);
-        // The message points at "the commands below": print it first, then the remedy block.
-        out.line(h, 'error', `${h}: ${f.message}`); manualRemedy(h, out, opts.scope); failed = true; threw = true;
+        // The plan already printed this refusal: keep it as the result detail, do not repeat it.
+        if (!f.remedyAfter && f.shown) { out.keep(h, `${h}: ${f.message}`); failed = true; threw = true; }
+        else if (!f.remedyAfter) throw new Error(f.message);
+        else { out.line(h, 'error', `${h}: ${f.message}`); manualRemedy(h, out, opts.scope); failed = true; threw = true; } // message points at "the commands below": print it first, then the remedy block
       } else if (f?.action === 'replace') {
         const r = await forceReplace({ h, f, run, out, ctx, report, opts, cwd, home, platform });
         outcome = r.outcome; failed = r.failed;
@@ -683,7 +688,7 @@ export async function main(argv, { release, run = createRunner(), log = console.
         outcome = report(after);
         if (f.catalog && outcome === 'OK' && await catalogBehind(h, enrichMarketplaces(h, parseMarketplaces(h, await run(h, MLIST)), rowsAfter), rowsAfter, after, release, { ...env, HOME: home })) {
           manualRemedy(h, out, scope);
-          throw new Error('the marketplace catalog still does not point at the release after the update; the manual remedy above re-registers it');
+          throw new Error('the marketplace catalog still does not point at the release after the update; re-registering (the manual remedy above) only helps if the upstream catalog already carries the release pointer; run npx @nexaduo/marc doctor to check');
         }
       } else if (opts.command === 'install') {
         const scope = opts.scope || 'user';
