@@ -347,7 +347,7 @@ async function doctor(h, run, release, out, scope, home, platform, env = process
   if (stale) {
     // Plain install converges the user scope only; --all-scopes also reaches project/local rows whose
     // directory exists. A row whose directory is gone can never be fixed by install (#466/#470): it is
-    // reported apart, with a manual remedy, so doctor never points at a command that leaves it STALE.
+    // reported apart (diagnosis only, removal tracked in #470), so doctor never points at a command that leaves it STALE.
     const staleScoped = h === 'claude' ? rows.filter(r => ['project', 'local'].includes(r.scope) && !sameVersion(r.version, release)) : [];
     const missing = [], existing = [], noPath = [];
     const hasPath = r => typeof r.projectPath === 'string' && path.isAbsolute(r.projectPath);
