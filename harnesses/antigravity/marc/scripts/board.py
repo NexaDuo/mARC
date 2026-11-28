@@ -781,11 +781,31 @@ class GitHubProvider(BoardProvider):
                 board_item_id = item.get("id")
                 board_added = True
             except Exception as e:  # noqa: BLE001 - board add is best-effort, never lose the issue
-                warnings.append(
-                    f"gh project item-add failed (missing `project` scope? run "
-                    f"`gh auth refresh -s project,read:project`) — issue #{issue_number} was "
-                    f"created but NOT added to the board: {e}"
-                )
+                if "content already exists in this project" in str(e).lower():
+                    # The project's auto-add workflow beat us to it: the issue IS
+                    # on the board. Resolve its item id directly (origin: #478).
+                    board_added = True
+                    try:
+                        pv = json.loads(self._run([
+                            "gh", "project", "view", str(self.config.project_number),
+                            "--owner", self.config.gh_org, "--format", "json"]))
+                        board_item_id = self._lookup_project_item(
+                            issue_number, pv.get("id"))["id"]
+                    except Exception as e2:  # noqa: BLE001 - best-effort
+                        warnings.append(
+                            f"issue #{issue_number} is already on the board (auto-add) but "
+                            f"its item id could not be resolved: {e2}")
+                elif re.search(r"scope|resource not accessible|insufficient|\b403\b", str(e), re.I):
+                    warnings.append(
+                        f"gh project item-add failed (missing `project` scope? run "
+                        f"`gh auth refresh -s project,read:project`) — issue #{issue_number} was "
+                        f"created but NOT added to the board: {e}"
+                    )
+                else:
+                    warnings.append(
+                        f"gh project item-add failed — issue #{issue_number} was created "
+                        f"but NOT added to the board: {e}"
+                    )
 
             if board_added and status:
                 try:

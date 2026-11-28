@@ -565,6 +565,53 @@ def test_create_issue_item_add_failure_keeps_the_issue():
           "create_issue warns that item-add failed")
 
 
+def test_create_issue_item_add_already_exists_is_success():
+    """Project auto-add already added the issue: item-add says 'Content already
+    exists' -> board_added True, id from the direct lookup, status applied (#478)."""
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/204\n",
+        item_add=RuntimeError("GraphQL: Content already exists in this project (addProjectV2ItemById)"),
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        graphql=project_items_graphql_fixture({2: "PVTI_auto1"}),
+    )
+    provider = GitHubProvider(cfg, run=run)
+    result = provider.create_issue("auto-added issue", "", [], status="Todo")
+    check(result.board_added is True, "already-exists item-add counts as board_added")
+    check(result.board_item_id == "PVTI_auto1", "item id comes from the direct lookup")
+    check(result.status == "Todo", "--status is applied after already-exists")
+    check(result.warnings == [], "already-exists carries no warning")
+    edit = [c for c in run.calls if c[:3] == ["gh", "project", "item-edit"]]  # type: ignore[attr-defined]
+    check(len(edit) == 1 and edit[0][edit[0].index("--id") + 1] == "PVTI_auto1",
+          "item-edit uses the looked-up id")
+
+
+def test_create_issue_item_add_scope_error_shows_scope_hint():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/205\n",
+        item_add=RuntimeError("error: your authentication token is missing required scopes [project]"),
+    )
+    result = GitHubProvider(cfg, run=run).create_issue("scope issue", "", [], status="Todo")
+    check(result.board_added is False, "scope error -> board_added False")
+    check(any("gh auth refresh -s project" in w for w in result.warnings), "scope error carries the scope hint")
+
+
+def test_create_issue_item_add_other_error_has_no_scope_hint():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/206\n",
+        item_add=RuntimeError("HTTP 502: Bad Gateway"),
+    )
+    result = GitHubProvider(cfg, run=run).create_issue("flaky issue", "", [], status="Todo")
+    check(result.board_added is False, "other error -> board_added False")
+    check(result.issue_number == 206, "other error still keeps the created issue")
+    check(any("502" in w for w in result.warnings), "other error carries gh's real text")
+    check(not any("auth refresh" in w or "scope" in w for w in result.warnings),
+          "other error has no scope hint")
+
+
 def test_create_issue_status_failure_keeps_the_board_add():
     """Board add succeeds but `set_status` fails (e.g. unknown status name):
     board_added stays True, status stays unset, and the failure surfaces as a
@@ -825,6 +872,9 @@ def main() -> int:
     test_create_issue_happy_path_with_board_and_status()
     test_create_issue_no_board_configured_degrades_gracefully()
     test_create_issue_item_add_failure_keeps_the_issue()
+    test_create_issue_item_add_already_exists_is_success()
+    test_create_issue_item_add_scope_error_shows_scope_hint()
+    test_create_issue_item_add_other_error_has_no_scope_hint()
     test_create_issue_status_failure_keeps_the_board_add()
     test_create_issue_creation_failure_raises_loudly()
     test_create_issue_finds_likely_duplicate_and_blocks_without_force()
