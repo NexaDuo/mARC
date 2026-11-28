@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -26,6 +28,16 @@ REAL_AUTH = b'{"token": "stub"}'
 # mode, then runs the test's body.
 STUB_HEAD = (
     "#!/bin/sh\n"
+    # `codex [-c k=v] features list`: loaded only if a trust override was passed AND the
+    # cwd project config enables the control flag (STUB_FEATURES=never simulates no load).
+    'case " $* " in *" features list "*)\n'
+    '  echo "features $*" >> "$STUB_LOG"\n'
+    '  v=false\n'
+    '  case " $* " in *trust_level*) grep -q "gcp_setup_wizard = true" .codex/config.toml 2>/dev/null'
+    ' && [ "${STUB_FEATURES:-}" != never ] && v=true;; esac\n'
+    '  echo "gcp_setup_wizard                         stable             $v"; exit 0;;\n'
+    "esac\n"
+    'echo "execargs=$*" >> "$STUB_LOG"\n'
     'echo "home=$CODEX_HOME" >> "$STUB_LOG"\n'
     'cat "$CODEX_HOME/config.toml" >> "$STUB_LOG" 2>/dev/null; echo >> "$STUB_LOG"\n'
     'if [ -f "$CODEX_HOME/auth.json" ]; then '
@@ -37,8 +49,17 @@ STUB_HEAD = (
 )
 
 
-def run_with_stub(stub_body: str) -> "tuple[subprocess.CompletedProcess[str], Path]":
+_TMPS: "list[Path]" = []
+
+
+def tearDownModule():
+    for d in _TMPS:
+        shutil.rmtree(str(d), ignore_errors=True)
+
+
+def run_with_stub(stub_body: str, extra_env: "dict | None" = None) -> "tuple[subprocess.CompletedProcess[str], Path]":
     tmp = Path(tempfile.mkdtemp(prefix="marc-probe-test-"))
+    _TMPS.append(tmp)
     bin_dir = tmp / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "codex"
@@ -52,7 +73,7 @@ def run_with_stub(stub_body: str) -> "tuple[subprocess.CompletedProcess[str], Pa
     runtime.mkdir(mode=0o700)
     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
                HOME=str(tmp / "home"), CODEX_HOME=str(real), XDG_RUNTIME_DIR=str(runtime),
-               STUB_LOG=str(tmp / "stub.log"))
+               STUB_LOG=str(tmp / "stub.log"), **(extra_env or {}))
     proc = subprocess.run([sys.executable, str(PROBE), "--exec"], env=env, capture_output=True,
                           text=True, timeout=120)
     return proc, tmp
@@ -120,6 +141,7 @@ class ExecFailsClosed(unittest.TestCase):
     def test_sweep_stale_temp_homes(self):
         # REV-10: only stale, user-owned real dirs with the prefix go; symlinks are not followed.
         parent = Path(tempfile.mkdtemp(prefix="marc-sweep-test-"))
+        self.addCleanup(shutil.rmtree, str(parent), True)
         stale = parent / (probe.TEMP_HOME_PREFIX + "old")
         fresh = parent / (probe.TEMP_HOME_PREFIX + "new")
         other = parent / "unrelated-old"
@@ -139,6 +161,56 @@ class ExecFailsClosed(unittest.TestCase):
         self.assertFalse(stale.exists())
         self.assertTrue(fresh.exists() and other.exists() and link.is_symlink())
         self.assertTrue((victim / "keep").exists())
+
+    def test_trust_args_shape(self):
+        # #358: inline-table form, one -c pair, nothing written to any config file.
+        ws = Path("/tmp/a b/ws")
+        self.assertEqual(probe.trust_args(ws),
+                         ["-c", 'projects={"/tmp/a b/ws"={trust_level="trusted"}}'])
+
+    def test_only_project_config_is_trusted_and_controlled(self):
+        proc, tmp = run_with_stub("exit 1")
+        log = (tmp / "stub.log").read_text(errors="replace").splitlines()
+        execs = [ln for ln in log if ln.startswith("execargs=")]
+        self.assertEqual(len(execs), len(probe.EXEC_CASES))
+        trusted = [ln for ln in execs if "trust_level" in ln]
+        self.assertEqual(len(trusted), 1)
+        self.assertIn("-C ", trusted[0])
+        self.assertIn("/ws-exec-project-config", trusted[0])
+        # control: one untrusted + one trusted `features list`, both before that exec.
+        feats = [ln for ln in log if ln.startswith("features ")]
+        self.assertEqual(len(feats), 2)
+        self.assertNotIn("trust_level", feats[0])
+        self.assertIn("trust_level", feats[1])
+        self.assertIn("positive control", proc.stdout)
+        self.assertIn(probe.CONTROL_FEATURE, probe.PROJECT_CONFIG)
+        self.assertIn(probe.OVERRIDE_LINE, probe.PROJECT_CONFIG)
+
+    def test_failed_positive_control_skips_exec(self):
+        proc, tmp = run_with_stub("exit 0", {"STUB_FEATURES": "never"})
+        log = (tmp / "stub.log").read_text(errors="replace").splitlines()
+        execs = [ln for ln in log if ln.startswith("execargs=")]
+        self.assertEqual(len(execs), len(probe.EXEC_CASES) - 1)  # project-config never ran
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("positive control failed", proc.stdout)
+
+    def test_feature_state_parse(self):
+        self.assertIs(probe.feature_state("x stable true\ngcp_setup_wizard  stable  true\n"), True)
+        self.assertIs(probe.feature_state("gcp_setup_wizard stable false\n"), False)
+        self.assertIsNone(probe.feature_state("nothing here\n"))
+
+    def test_deferred_signals_hold_until_block_ends(self):
+        # #358: a SIGTERM that lands during cleanup waits; it fires only after the block.
+        def handler(signum, _frame):
+            raise probe._Terminated(f"signal {signum}")
+        old = signal.signal(signal.SIGTERM, handler)
+        self.addCleanup(signal.signal, signal.SIGTERM, old)
+        done = []
+        with self.assertRaises(probe._Terminated):
+            with probe._deferred_signals():
+                os.kill(os.getpid(), signal.SIGTERM)
+                done.append("cleanup finished")
+        self.assertEqual(done, ["cleanup finished"])
 
     def test_judge_exec(self):
         none = {k: False for k in ("write_workspace", "write_tmp", "write_home",
