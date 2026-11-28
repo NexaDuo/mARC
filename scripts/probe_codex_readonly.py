@@ -29,13 +29,24 @@ Usage:
         no config; `sandbox_mode = "danger-full-access"` in a user config.toml
         inside a throwaway CODEX_HOME (the real one is never written; see
         run_exec_case for the refresh-token caveat); the same line in a project
-        `.codex/config.toml` inside the probe workspace. Never run in CI.
+        `.codex/config.toml` inside the probe workspace, with that workspace marked
+        trusted for that one subprocess only (#358), after a no-model positive
+        control proved the project config really loads there. Never run in CI.
 
 What the default mode proves, and what it does not (#351 SEC-1): it checks what
 the profile CONTAINS, with the profile named explicitly by `codex sandbox -P`.
 The reviewer argv selects it only through `-c default_permissions=...`; whether
 `codex exec` honors that selection over a user or project `sandbox_mode` is
 unverified until the owner's `--exec` run passes in all three cases.
+
+Trust (#358): Codex loads a project's `.codex/` layer only for a trusted project,
+so an untrusted probe workspace could pass the project-config row without the
+override ever being read. That case therefore adds
+`-c 'projects={"<ws>"={trust_level="trusted"}}'` (inline-table form; the dotted
+`-c projects."<ws>".trust_level=...` form was observed NOT to take effect on
+codex-cli 0.172.0). The real config.toml is never written. The positive control
+(`codex features list` with a harmless project-config feature flag, trusted vs
+not) must flip false -> true, else the case exits 2 before any model call.
 
 Exit codes: 0 matrix as expected; 1 matrix changed (a Codex upgrade changed the
 profile semantics, or the probe found a hole); 2 the probe could not run (codex
@@ -45,6 +56,8 @@ failed exec, an absent probe sentinel or any missing row).
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -242,6 +255,10 @@ EXEC_PROMPT = (
 
 
 OVERRIDE_LINE = 'sandbox_mode = "danger-full-access"'
+# Harmless, UI-only feature flag (a setup wizard, default false) whose effective
+# state `codex features list` prints without any model call (#358).
+CONTROL_FEATURE = "gcp_setup_wizard"
+PROJECT_CONFIG = f"{OVERRIDE_LINE}\n[features]\n{CONTROL_FEATURE} = true\n"
 EXEC_CASES = ("no-config", "user-config", "project-config")
 
 
@@ -261,6 +278,54 @@ def judge_exec(exit_code: int, stdout: str, effects: Dict[str, bool]) -> Tuple[i
 
 TEMP_HOME_PREFIX = "marc-probe-codex-home-"
 STALE_AFTER_SEC = 3600  # older than any live run (3 cases x 600 s timeout)
+
+
+def trust_args(ws: Path) -> List[str]:
+    """`-c` override marking `ws` trusted for one subprocess; no config file is written (#358)."""
+    text = str(ws)
+    if "\x7f" in text:
+        raise ValueError("workspace path has a character TOML forbids unescaped")
+    # A JSON string is a valid TOML basic string (control chars become \\u00XX); a lone
+    # surrogate cannot be encoded below and fails closed too.
+    key = json.dumps(text, ensure_ascii=False)
+    key.encode("utf-8")
+    return ["-c", f'projects={{{key}={{trust_level="trusted"}}}}']
+
+
+def feature_state(stdout: str) -> "bool | None":
+    for line in stdout.splitlines():
+        parts = line.split()
+        if parts and parts[0] == CONTROL_FEATURE and parts[-1] in ("true", "false"):
+            return parts[-1] == "true"
+    return None
+
+
+def positive_control(ws: Path, env: Dict[str, str]) -> Dict[str, object]:
+    """No model call: prove the project config loads iff the workspace is trusted (#358).
+
+    `codex features list` in the workspace, once untrusted, once with trust_args.
+    """
+    states: Dict[str, "bool | None"] = {}
+    for label, extra in (("untrusted", []), ("trusted", trust_args(ws))):
+        try:
+            p = subprocess.run(["codex", *extra, "features", "list"], cwd=str(ws), env=env,
+                               capture_output=True, text=True, timeout=60)
+            states[label] = feature_state(p.stdout)
+        except (OSError, subprocess.SubprocessError):
+            states[label] = None
+    return {"feature": CONTROL_FEATURE, **states,
+            "loaded": states["untrusted"] is False and states["trusted"] is True}
+
+
+@contextlib.contextmanager
+def _deferred_signals():
+    """Hold SIGTERM/SIGHUP until the block ends, so setup/cleanup is never cut short (#358)."""
+    sigs = {signal.SIGTERM, signal.SIGHUP, signal.SIGINT}
+    saved = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, saved)  # a pending signal fires here
 
 
 def _temp_home_parent() -> Path:
@@ -319,6 +384,13 @@ def _temp_codex_home() -> Path:
     return home
 
 
+def _file_hash(path: Path) -> "str | None":
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def _real_codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
@@ -346,37 +418,71 @@ def run_exec_case(base: Path, case: str) -> Tuple[int, Dict[str, object]]:
                     home carries no other user settings, so an owner who needs a
                     custom provider/model config gets exit 2 (could not run) for
                     this case: fail closed, never a false pass.
-    project-config  OVERRIDE_LINE in <workspace>/.codex/config.toml (the reviewed checkout)
+    project-config  OVERRIDE_LINE (plus the harmless control feature flag) in
+                    <workspace>/.codex/config.toml (the reviewed checkout), the
+                    workspace marked trusted for this subprocess via trust_args
+                    (#358), and only after positive_control() shows it loads.
+    SIGTERM/SIGHUP are deferred during temp-home creation and cleanup, so those
+    (and SIGINT) never leave a temp home; only SIGKILL can, and the next run
+    sweeps it after 1h.
     Writes and the commit are judged from the filesystem; read_file and network
     come from the model's echo of the probe output.
     """
     box = Battery(base, f"exec-{case}")
-    argv = ["codex", "exec", "-C", str(box.ws), *CODEX_READONLY_PROFILE_ARGS, EXEC_PROMPT]
+    # Trust sits BEFORE the subcommand, exactly where positive_control() puts it (REV-1).
+    pre = trust_args(box.ws) if case == "project-config" else []
+    argv = ["codex", *pre, "exec", "-C", str(box.ws), *CODEX_READONLY_PROFILE_ARGS, EXEC_PROMPT]
+    shown_argv = argv[:-1] + ["<prompt>"]
+    real_cfg = _real_codex_home() / "config.toml"
+    cfg_before = _file_hash(real_cfg) if case == "project-config" else None
     temp_home: "Path | None" = None
+    control: "Dict[str, object] | None" = None
     old = {sig: signal.signal(sig, _raise_terminated) for sig in (signal.SIGTERM, signal.SIGHUP)}
     try:
-        if case == "user-config":
-            temp_home = _temp_codex_home()
-            # The active CODEX_HOME is the temp one: probe writes into it (CDX-2).
-            box.retarget_codex_home(temp_home)
-        env = box.env()
-        if case == "project-config":
-            (box.ws / ".codex").mkdir()
-            (box.ws / ".codex" / "config.toml").write_text(OVERRIDE_LINE + "\n", encoding="utf-8")
         try:
-            e = subprocess.run(argv, cwd=str(box.ws), env=env, capture_output=True, text=True,
-                               timeout=600)
-            code_out = (e.returncode, e.stdout, e.stderr)
-        except (OSError, subprocess.SubprocessError) as exc:
-            code_out = (127, "", str(exc))
-        effects = box.side_effects()
+            if case == "user-config":
+                with _deferred_signals():  # no window between mkdtemp and the assignment
+                    temp_home = _temp_codex_home()
+                # The active CODEX_HOME is the temp one: probe writes into it (CDX-2).
+                box.retarget_codex_home(temp_home)
+            env = box.env()
+            if case == "project-config":
+                (box.ws / ".codex").mkdir()
+                (box.ws / ".codex" / "config.toml").write_text(PROJECT_CONFIG, encoding="utf-8")
+                control = positive_control(box.ws, env)
+            if control is not None and not control["loaded"]:
+                code_out = (None, "", "")
+            else:
+                try:
+                    e = subprocess.run(argv, cwd=str(box.ws), env=env, capture_output=True,
+                                       text=True, timeout=600)
+                    code_out = (e.returncode, e.stdout, e.stderr)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    code_out = (127, "", str(exc))
+            effects = box.side_effects()
+            cfg_after = _file_hash(real_cfg) if case == "project-config" else None
+        finally:
+            with _deferred_signals():  # a signal during cleanup waits until cleanup is done
+                if temp_home is not None:
+                    shutil.rmtree(str(temp_home), ignore_errors=True)
+                box.cleanup()
     finally:
-        if temp_home is not None:
-            shutil.rmtree(str(temp_home), ignore_errors=True)
-        box.cleanup()
         for sig, handler in old.items():
             signal.signal(sig, handler)
+    if code_out[0] is None:  # positive control failed: no model call was made
+        out = {"exec_exit": None, "sentinel": False, "result": {}, "leaked_side_effects": [],
+               "positive_control": control, "argv": shown_argv,
+               "error": "positive control failed: the project config did not load even with the "
+                        "workspace trusted (or loaded without trust); the row would prove "
+                        "nothing, so exec was not run"}
+        return 2, out
     code, out = judge_exec(code_out[0], code_out[1], effects)
+    out["argv"] = shown_argv
+    if control is not None:
+        out["positive_control"] = control
+    if cfg_before != cfg_after:
+        out["error"] = "the real CODEX_HOME config.toml changed during the case; nothing is proven"
+        code = 1 if code == 1 else 2
     if code == 2:
         out["stderr"] = code_out[2][-1000:]
     return code, out
@@ -417,7 +523,7 @@ def main(argv: List[str]) -> int:
         sys.stderr.write(f"probe_codex_readonly: interrupted by {e}; nothing is proven\n")
         return 2
     if args.json:
-        print(json.dumps(report, indent=2))
+        print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         print(f"codex: {report.get('codex_version', '?')}  profile: {CODEX_READONLY_PROFILE}")
         if "argv" in report:
@@ -430,6 +536,10 @@ def main(argv: List[str]) -> int:
             for c, v in cases.items():
                 print(f"{c}: exit={v['exec_exit']} sentinel={v['sentinel']} code={v['code']}"
                       + (f" ERROR: {v['error']}" if v.get("error") else ""))
+                if v.get("argv"):
+                    print(f"{c}: argv: " + " ".join(str(a) for a in v["argv"]))
+                if v.get("positive_control"):
+                    print(f"{c}: positive control {v['positive_control']}")
                 if v.get("leaked_side_effects"):
                     print(f"{c}: LEAKED side effects: {v['leaked_side_effects']}")
         else:
