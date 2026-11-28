@@ -333,7 +333,8 @@ class BoardProvider(ABC):
 
     @abstractmethod
     def set_status(self, issue_number: int, status: str,
-                    item_id: Optional[str] = None) -> StatusResult:
+                    item_id: Optional[str] = None,
+                    project_id: Optional[str] = None) -> StatusResult:
         """Resolve the board item linked to `issue_number` and move it to
         `status` (must exactly match one of the project's Status field
         options). MUST raise `BoardError` — never silently no-op — if the
@@ -615,7 +616,8 @@ class GitHubProvider(BoardProvider):
         )
 
     def set_status(self, issue_number: int, status: str,
-                    item_id: Optional[str] = None) -> StatusResult:
+                    item_id: Optional[str] = None,
+                    project_id: Optional[str] = None) -> StatusResult:
         if not (self.config.project_number and self.config.gh_org):
             raise BoardError(
                 "no board configured (missing project_number/gh_org in team.toml) "
@@ -623,18 +625,19 @@ class GitHubProvider(BoardProvider):
                 "guess or auto-bind an untitled/ambiguous board"
             )
 
-        try:
-            project_raw = self._run(
-                ["gh", "project", "view", str(self.config.project_number),
-                 "--owner", self.config.gh_org, "--format", "json"]
-            )
-            project = json.loads(project_raw)
-            project_id = project.get("id")
-        except Exception as e:  # noqa: BLE001
-            raise BoardError(
-                f"gh project view failed (missing `project` scope? run "
-                f"`gh auth refresh -s project,read:project`): {e}"
-            ) from e
+        if not project_id:  # caller may pass an already-resolved id (origin: #478)
+            try:
+                project_raw = self._run(
+                    ["gh", "project", "view", str(self.config.project_number),
+                     "--owner", self.config.gh_org, "--format", "json"]
+                )
+                project = json.loads(project_raw)
+                project_id = project.get("id")
+            except Exception as e:  # noqa: BLE001
+                raise BoardError(
+                    f"gh project view failed (missing `project` scope? run "
+                    f"`gh auth refresh -s project,read:project`): {e}"
+                ) from e
         if not project_id:
             raise BoardError(
                 f"gh project view returned no project id for #{self.config.project_number} "
@@ -765,6 +768,7 @@ class GitHubProvider(BoardProvider):
         board_added = False
         board_item_id: Optional[str] = None
         result_status: Optional[str] = None
+        project_id: Optional[str] = None
 
         if not (self.config.project_number and self.config.gh_org):
             warnings.append(
@@ -784,18 +788,19 @@ class GitHubProvider(BoardProvider):
                 if "content already exists in this project" in str(e).lower():
                     # The project's auto-add workflow beat us to it: the issue IS
                     # on the board. Resolve its item id directly (origin: #478).
-                    board_added = True
+                    board_added = True  # GitHub's error is authoritative
                     try:
                         pv = json.loads(self._run([
                             "gh", "project", "view", str(self.config.project_number),
                             "--owner", self.config.gh_org, "--format", "json"]))
+                        project_id = pv.get("id")
                         board_item_id = self._lookup_project_item(
-                            issue_number, pv.get("id"))["id"]
+                            issue_number, project_id)["id"]
                     except Exception as e2:  # noqa: BLE001 - best-effort
                         warnings.append(
-                            f"issue #{issue_number} is already on the board (auto-add) but "
-                            f"its item id could not be resolved: {e2}")
-                elif re.search(r"scope|resource not accessible|insufficient|\b403\b", str(e), re.I):
+                            f"issue #{issue_number} is already on the board; item id not "
+                            f"resolved: {e2}")
+                elif re.search(r"scope|could not resolve to a projectv2|resource not accessible|insufficient|\b403\b", str(e), re.I):
                     warnings.append(
                         f"gh project item-add failed (missing `project` scope? run "
                         f"`gh auth refresh -s project,read:project`) — issue #{issue_number} was "
@@ -809,7 +814,8 @@ class GitHubProvider(BoardProvider):
 
             if board_added and status:
                 try:
-                    status_result = self.set_status(issue_number, status, item_id=board_item_id)
+                    status_result = self.set_status(issue_number, status, item_id=board_item_id,
+                                                    project_id=project_id)
                     result_status = status_result.status
                     warnings.extend(status_result.warnings)
                 except BoardError as e:

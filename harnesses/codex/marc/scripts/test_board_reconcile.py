@@ -612,6 +612,57 @@ def test_create_issue_item_add_other_error_has_no_scope_hint():
           "other error has no scope hint")
 
 
+def test_create_issue_already_exists_lookup_fails_never_raises():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/207\n",
+        item_add=RuntimeError("GraphQL: Content already exists in this project (addProjectV2ItemById)"),
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        graphql=RuntimeError("boom"),
+    )
+    result = GitHubProvider(cfg, run=run).create_issue("lookup-fail", "", [], status="Todo")
+    check(result.board_added is True and result.board_item_id is None,
+          "lookup failure keeps board_added True with no item id")
+    check(any("already on the board; item id not resolved" in w for w in result.warnings),
+          "lookup failure warns")
+
+def test_create_issue_already_exists_without_status_resolves_id():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/208\n",
+        item_add=RuntimeError("GraphQL: Content already exists in this project (addProjectV2ItemById)"),
+        project_view=json.dumps({"id": "PVT_project2"}),
+        graphql=project_items_graphql_fixture({2: "PVTI_auto2"}),
+    )
+    result = GitHubProvider(cfg, run=run).create_issue("no status", "", [], status=None)
+    check(result.board_added is True and result.board_item_id == "PVTI_auto2",
+          "id resolved even without --status")
+
+def test_create_issue_already_exists_single_project_view():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/209\n",
+        item_add=RuntimeError("GraphQL: Content already exists in this project (addProjectV2ItemById)"),
+        project_view=json.dumps({"id": "PVT_project2"}),
+        field_list=status_field_fixture(),
+        graphql=project_items_graphql_fixture({2: "PVTI_auto3"}),
+    )
+    result = GitHubProvider(cfg, run=run).create_issue("one view", "", [], status="Todo")
+    views = [c for c in run.calls if c[:3] == ["gh", "project", "view"]]  # type: ignore[attr-defined]
+    check(len(views) == 1, "one gh project view per create")
+    check(result.status == "Todo", "status still applied with the passed project id")
+
+def test_create_issue_item_add_unresolvable_projectv2_shows_scope_hint():
+    cfg = RepoConfig(gh_org="YourOrg", gh_repo="YourOrg/your-repo", project_number=2, provider="github")
+    run = _create_run(
+        issue_create="https://github.com/YourOrg/your-repo/issues/210\n",
+        item_add=RuntimeError("GraphQL: Could not resolve to a ProjectV2 with the number 2."),
+    )
+    result = GitHubProvider(cfg, run=run).create_issue("invisible", "", [], status="Todo")
+    check(result.board_added is False and any("gh auth refresh -s project" in w for w in result.warnings),
+          "unresolvable ProjectV2 carries the scope hint")
+
 def test_create_issue_status_failure_keeps_the_board_add():
     """Board add succeeds but `set_status` fails (e.g. unknown status name):
     board_added stays True, status stays unset, and the failure surfaces as a
@@ -875,6 +926,10 @@ def main() -> int:
     test_create_issue_item_add_already_exists_is_success()
     test_create_issue_item_add_scope_error_shows_scope_hint()
     test_create_issue_item_add_other_error_has_no_scope_hint()
+    test_create_issue_already_exists_lookup_fails_never_raises()
+    test_create_issue_already_exists_without_status_resolves_id()
+    test_create_issue_already_exists_single_project_view()
+    test_create_issue_item_add_unresolvable_projectv2_shows_scope_hint()
     test_create_issue_status_failure_keeps_the_board_add()
     test_create_issue_creation_failure_raises_loudly()
     test_create_issue_finds_likely_duplicate_and_blocks_without_force()
