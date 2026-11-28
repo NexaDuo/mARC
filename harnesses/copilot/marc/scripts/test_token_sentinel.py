@@ -186,7 +186,7 @@ def run_hook(env_tmp: str, transcript_path: str | None, session_id: str,
         stdin_text = json.dumps({"transcript_path": transcript_path,
                                  "session_id": session_id})
     proc = subprocess.run(
-        [sys.executable, SENTINEL, "--hook"],
+        [sys.executable, SENTINEL, "--hook", "--harness", "claude-code"],
         input=stdin_text, capture_output=True, text=True, env=env,
     )
     return proc.returncode, proc.stdout
@@ -341,7 +341,8 @@ def main() -> int:
         mixed = write_mixed_turn(fixtures, "mixed_sidechain.jsonl",
                                  SONNET, MAIN_CTX, SONNET, SIDE_CTX)
         cli = subprocess.run(
-            [sys.executable, SENTINEL, mixed, "--tokens", "1", "--calls", "1"],
+            [sys.executable, SENTINEL, mixed, "--tokens", "1", "--calls", "1",
+             "--harness", "claude-code"],
             capture_output=True, text=True,
         )
         check(cli.returncode in (0, 1), "manual CLI on mixed transcript: runs cleanly")
