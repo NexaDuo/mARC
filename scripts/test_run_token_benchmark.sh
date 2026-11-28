@@ -786,6 +786,47 @@ fi
 
 rm -rf "$TEAM_TOML_TESTDIR"
 
+# -----------------------------------------------------------------------
+# Part: manifest.json built with jq + git describe hardening (issue #282)
+# -----------------------------------------------------------------------
+M282="$(mktemp -d)"
+PATHO_MODEL=$'m"od\\el\nline2 $(touch PWNED) `touch PWNED2`'
+PATHO_VER=$'1.2.3"\\'
+(
+    cd "$M282"
+    MODEL="$PATHO_MODEL"
+    TASKS_JSON='[{"name":"a","prompt":"p"}]'
+    ITERATIONS=5
+    TASK_HASH=abc123
+    CURRENT_REF='v1.0'
+    CLAUDE_VERSION="$PATHO_VER"
+    write_bench_manifest "$M282/manifest.json"
+) || true
+if jq . "$M282/manifest.json" >/dev/null 2>&1 \
+    && [ "$(jq -j .model "$M282/manifest.json"; echo x)" = "${PATHO_MODEL}x" ] \
+    && [ "$(jq -j .claude_version "$M282/manifest.json"; echo x)" = "${PATHO_VER}x" ] \
+    && [ "$(jq -r '.iterations|type' "$M282/manifest.json")" = number ] \
+    && [ "$(jq -r 'keys_unsorted|join(",")' "$M282/manifest.json")" = "model,tasks,iterations,task_hash,tag,claude_version" ] \
+    && [ ! -e "$M282/PWNED" ]; then
+    pass "manifest.json is valid JSON with exact values for pathological MODEL/CLAUDE_VERSION (quote, backslash, newline, \$(...))"
+else
+    fail "manifest.json invalid or values altered for pathological input: $(head -c 400 "$M282/manifest.json" 2>&1)"
+fi
+
+# Hostile ref: resolve_prev_release_tag must pass the ref after `--` so a
+# ref starting with `-` can never be parsed as a git option.
+GIT_ARGS_LOG="$M282/git_args"
+(
+    git() { printf '%s\n' "$*" >> "$GIT_ARGS_LOG"; return 1; }
+    resolve_prev_release_tag "--hostile" >/dev/null
+)
+if grep -q -- ' -- --hostile^$' "$GIT_ARGS_LOG"; then
+    pass "git describe receives a hostile ref only after '--' (no option injection)"
+else
+    fail "git describe args did not isolate the ref with '--': $(cat "$GIT_ARGS_LOG" 2>&1)"
+fi
+rm -rf "$M282"
+
 echo
 if [ "$FAILS" -eq 0 ]; then
     echo "All checks passed."

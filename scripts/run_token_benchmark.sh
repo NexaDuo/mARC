@@ -382,7 +382,7 @@ resolve_prev_release_tag() {
     local candidate="$from_ref"
 
     while true; do
-        if ! candidate=$(git describe --tags --abbrev=0 "${candidate}^" 2>/dev/null); then
+        if ! candidate=$(git describe --tags --abbrev=0 -- "${candidate}^" 2>/dev/null); then
             echo ""
             return 0
         fi
@@ -1264,6 +1264,21 @@ print(json.dumps({"harness": "codex", "task": sys.argv[1], "scenario_hash": sys.
     python3 "$(dirname "${BASH_SOURCE[0]}")/benchmark_report.py" --harness codex --dir "$CODEX_OUT_DIR" --iterations "$CODEX_ITERATIONS"
 }
 
+# Build manifest.json with jq so a MODEL/tag/version containing `"`, `\`, a
+# newline or `$(...)` can never yield invalid or injected JSON (issue #282).
+# Reads MODEL, TASKS_JSON, ITERATIONS, TASK_HASH, CURRENT_REF, CLAUDE_VERSION.
+write_bench_manifest() {
+    local out="$1"
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "ERROR: jq is required to write manifest.json but was not found on PATH." >&2
+        return 1
+    fi
+    jq -n --arg model "$MODEL" --argjson tasks "$TASKS_JSON" \
+        --argjson iterations "$ITERATIONS" --arg task_hash "$TASK_HASH" \
+        --arg tag "$CURRENT_REF" --arg claude_version "$CLAUDE_VERSION" \
+        '{model: $model, tasks: $tasks, iterations: $iterations, task_hash: $task_hash, tag: $tag, claude_version: $claude_version}' > "$out"
+}
+
 main() {
     emit_real_run_output
 
@@ -1493,16 +1508,7 @@ names = sys.argv[1].split(chr(31))
 prompts = sys.argv[2].split(chr(31))
 print(json.dumps([{'name': n, 'prompt': p} for n, p in zip(names, prompts)]))
 " "$(IFS=$'\x1f'; echo "${TASK_NAMES[*]}")" "$(IFS=$'\x1f'; echo "${TASK_PROMPTS[*]}")")
-    cat << JSON > "docs/marc/benchmarks/$CURRENT_REF/manifest.json"
-{
-  "model": "$MODEL",
-  "tasks": $TASKS_JSON,
-  "iterations": $ITERATIONS,
-  "task_hash": "$TASK_HASH",
-  "tag": "$CURRENT_REF",
-  "claude_version": "$CLAUDE_VERSION"
-}
-JSON
+    write_bench_manifest "docs/marc/benchmarks/$CURRENT_REF/manifest.json"
 }
 
 # Only run main() when executed directly, not when sourced by the companion
