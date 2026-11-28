@@ -1031,6 +1031,12 @@ jobs:
         with:
           node-version: "22"
 
+      # The checkout is shallow and only holds the PR ref; the upgrade tests
+      # (#368) archive origin/main from it. Same credential-free fetch the
+      # Claude Code upgrade step uses.
+      - name: Fetch origin/main for the upgrade-path tests
+        run: git fetch --depth=1 origin main
+
       - name: Install Claude Code CLI (pinned)
         run: |
           npm i -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
@@ -1216,6 +1222,22 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           python3 scripts/test_installed_harness.py antigravity --plugin "$CONFIG_DIR"
 
+      # Cross-repo install + upgrade path, Antigravity (#368). Same gate as the
+      # install step above (a fork PR skips, a missing secret on a trusted
+      # context already failed it). agy has no update command (probed, see
+      # scripts/test_harness_upgrade.py), so the real path is installing the
+      # PR build over the origin/main build, from a consumer dir outside the
+      # checkout, in a temp HOME.
+      - name: Tier 2 — Antigravity cross-repo install + upgrade path (#368)
+        id: antigravity_upgrade
+        if: steps.antigravity_install.outcome == 'success'
+        env:
+          HOME: ${{ github.workspace }}/.agy-home
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          python3 scripts/test_harness_upgrade.py antigravity
+
       # Always-visible status for the Antigravity step above, regardless of
       # whether it ran, was skipped (fork PR — expected, honest SKIP), or
       # failed (secret missing on a trusted context — real regression). This
@@ -1246,6 +1268,16 @@ jobs:
                 echo "Antigravity's installed copy failed scripts/test_installed_harness.py (agy hook contract #343, or bundled scripts not resolving to the installed copy #364/#367). This is a real regression — the step is load-bearing (no continue-on-error) and fails the job."
               } >> "$GITHUB_STEP_SUMMARY" ;;
             *) echo "Antigravity hook-resolution coverage: outcome '${{ steps.antigravity_hooks.outcome }}' unrecognized." ;;
+          esac
+
+          case "${{ steps.antigravity_upgrade.outcome }}" in
+            success) echo "Antigravity cross-repo install + upgrade coverage: RAN and PASSED." ;;
+            skipped) echo "Antigravity cross-repo install + upgrade coverage: SKIPPED (install step did not succeed, fork PR or see above)." ;;
+            failure) {
+                echo "### :red_circle: Antigravity cross-repo install + upgrade coverage: FAILED"
+                echo "scripts/test_harness_upgrade.py antigravity failed: the origin/main build did not upgrade to the PR build, or a component is no longer registered. This is a real regression."
+              } >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "Antigravity cross-repo install + upgrade coverage: outcome '${{ steps.antigravity_upgrade.outcome }}' unrecognized." ;;
           esac
 
       # Tier 2 — Copilot harness install + component registration (issue #127
@@ -1314,6 +1346,17 @@ jobs:
           python3 scripts/probe_shell_env.py copilot --json "$RUNNER_TEMP/copilot-probe.json"
           python3 scripts/test_installed_harness.py copilot --probe-json "$RUNNER_TEMP/copilot-probe.json"
 
+      # Cross-repo install + upgrade path, Copilot (#368). No secret. `copilot
+      # plugin update` is a real command, but it only moves a plugin whose
+      # version changed, so the test stamps the origin/main build with a lower
+      # version when the two are equal (see scripts/test_harness_upgrade.py).
+      - name: Tier 2 — Copilot cross-repo install + upgrade path (#368)
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          COPILOT_GITHUB_TOKEN: ""
+        run: python3 scripts/test_harness_upgrade.py copilot
+
       # Installed-copy matrix, Codex (#367). Same shape; the probe drives
       # `codex exec` against a local mock Responses endpoint inside Codex's
       # default read-only sandbox, which needs unprivileged user namespaces
@@ -1329,6 +1372,16 @@ jobs:
           codex --version
           python3 scripts/probe_shell_env.py codex --json "$RUNNER_TEMP/codex-probe.json"
           python3 scripts/test_installed_harness.py codex --probe-json "$RUNNER_TEMP/codex-probe.json"
+
+      # Cross-repo install + upgrade path, Codex (#368). Codex has no `plugin
+      # update` and `plugin marketplace upgrade` only refreshes Git
+      # marketplaces, so the real path is `plugin add` again once the local
+      # marketplace checkout moves to the PR build.
+      - name: Tier 2 — Codex cross-repo install + upgrade path (#368)
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/scripts/ci-codex/node_modules/.bin:$PATH"
+          python3 scripts/test_harness_upgrade.py codex
 
       # 8. Cross-repo proof: from a working directory OUTSIDE the mARC checkout,
       #    with its OWN fresh config dir, add the marketplace by pointing at the
