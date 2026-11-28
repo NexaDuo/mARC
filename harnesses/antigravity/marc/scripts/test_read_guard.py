@@ -480,6 +480,25 @@ def test_targeted_read_passes_through() -> None:
         check(proc_offset.returncode == 0 and proc_offset.stdout.strip() == "", "read with 'offset' passes through untouched")
 
 
+def python_body_hazards(src: str) -> list:
+    """Return shell-hazard chars in the double-quoted body of `python3 -c "`."""
+    start = src.index('python3 -c "') + len('python3 -c "')
+    end = src.rindex('\n"')
+    body = src[start:end]
+    return [c for c in ("`", "$", '"') if c in body]
+
+
+def test_python_body_has_no_shell_metachars() -> None:
+    print("\n--- Test (g): python3 -c body has no backtick/$/unescaped quote (#289 SEC-3) ---")
+    with open(READ_GUARD_SH, "r", encoding="utf-8") as f:
+        src = f.read()
+    check(python_body_hazards(src) == [], f"read-guard.sh python body is shell-inert (hazards={python_body_hazards(src)})")
+    # Mutation: injecting each hazard into a scratch copy must be detected.
+    for bad in ("`id`", "$HOME", 'say "hi"'):
+        mutated = src.replace("def main():", "# " + bad + "\ndef main():", 1)
+        check(python_body_hazards(mutated) != [], f"mutation {bad!r} is detected")
+
+
 def main() -> int:
     if not os.path.isfile(READ_GUARD_SH):
         check(False, f"read-guard.sh not found at {READ_GUARD_SH}")
@@ -497,6 +516,7 @@ def main() -> int:
     test_bulk_reader_fail_open()
     test_sec_rev_bypass_from_payload()
     test_targeted_read_passes_through()
+    test_python_body_has_no_shell_metachars()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")
