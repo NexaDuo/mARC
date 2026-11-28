@@ -90,18 +90,22 @@ class Guard(unittest.TestCase):
 
         class Spy(t.ClaudeCode):
             def hook_run(s, plugin, ws, event, matcher, command, seed):
-                seen.append(t.base_env(s.ctx)["HOME"])
+                seen.append({k: s.ctx[k] for k in ("HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME")})
                 return None
 
         ad = Spy(os.path.join(self.tmp, "run"))
         os.makedirs(ad.tmp)
-        ad.ctx = {"HOME": "/job/real-home"}
+        real = {k: "/job/real-" + k for k in ("HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME")}
+        ad.ctx = dict(real)
         ad.inherited_home = True
         with contextlib.redirect_stdout(io.StringIO()):
             t.run_hooks(ad, self.plugin, "")
         self.assertTrue(seen)
-        self.assertTrue(all(h == os.path.join(ad.tmp, "home") for h in seen), seen[:2])
-        self.assertEqual(ad.ctx["HOME"], "/job/real-home")
+        for ctx in seen:
+            for k, v in ctx.items():
+                self.assertTrue(v.startswith(ad.tmp), (k, v))
+        for k, v in real.items():
+            self.assertEqual(ad.ctx[k], v)
 
 
 if __name__ == "__main__":

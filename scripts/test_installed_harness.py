@@ -371,9 +371,14 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
     # Hook side effects stay in the temp dir; the version check reads a local
     # file instead of the network, and reports a newer version so the test
     # can see the outdated-check body actually ran.
-    real_home = ad.ctx.get("HOME") if getattr(ad, "inherited_home", False) else None
-    if real_home is not None:
-        ad.ctx["HOME"] = os.path.join(ad.tmp, "home")
+    # --plugin mode inherits these from the job; hooks get temp stand-ins (#172)
+    swapped = {}
+    if getattr(ad, "inherited_home", False):
+        for k in ("HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME"):
+            if k in ad.ctx:
+                swapped[k] = ad.ctx[k]
+                ad.ctx[k] = os.path.join(ad.tmp, "home" if k == "HOME" else k.lower())
+                os.makedirs(ad.ctx[k], exist_ok=True)
     ad.ctx.setdefault("HOME", os.path.join(ad.tmp, "home"))
     os.makedirs(ad.ctx["HOME"], exist_ok=True)
     # OLDPWD: a CLI inherits whatever the user's shell exported, usually the
@@ -404,8 +409,9 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
     #   3. Isolation: hooks run with a temp HOME and temp state (run_hooks sets
     #      ctx HOME to <tmp>/home unless the adapter installed one; in --plugin
     #      mode, where HOME is inherited from the job, it is swapped for the temp
-    #      HOME for the hooks only, because the later scripts phase needs the real
-    #      one for `agy plugin list`) and base_env()
+    #      HOME for the hooks only (as are CODEX_HOME, CLAUDE_CONFIG_DIR, COPILOT_HOME),
+    #      because the later scripts phase needs the real ones for
+    #      `agy plugin list`) and base_env()
     #      drops credential-looking variables (TOKEN, API_KEY, ...), so the
     #      step-scoped API key is not in the hook environment. What IS shared
     #      with the job: the filesystem (the installed copy for Antigravity lives
@@ -450,8 +456,7 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
         ad.hook_expect(label, event, matcher, r.stdout)
     for k in ("MARC_STATE_DIR", "MARC_REMOTE_PLUGIN_JSON_URL", "OLDPWD"):
         ad.ctx.pop(k, None)
-    if real_home is not None:
-        ad.ctx["HOME"] = real_home
+    ad.ctx.update(swapped)
 
 
 INVOCATION = re.compile(r'python3 "(.+?)/([A-Za-z0-9_.\-]+\.py)"')
