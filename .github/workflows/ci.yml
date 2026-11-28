@@ -958,6 +958,11 @@ jobs:
       - name: cross-harness script-parity self-test
         run: python3 core/scripts/test_script_parity.py
 
+      # 8d-1. Installed-copy matrix HOME isolation (#477): the Copilot/Codex
+      #       adapters must never read or write the caller's real HOME. No CLI.
+      - name: installed-copy matrix HOME-isolation self-test
+        run: python3 scripts/test_installed_harness_homes.py
+
       # 8d-2. Cross-harness hooks-parity self-test (issue #173, #170). Same
       #       shape as the script-parity gate above, but for hooks.json: every
       #       harness's compiled hooks/hooks.json must match what
