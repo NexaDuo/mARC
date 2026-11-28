@@ -7,6 +7,8 @@ import shutil
 import sys
 import tempfile
 import json
+import contextlib
+import io
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,13 +31,14 @@ class Guard(unittest.TestCase):
     def run_it(self):
         ad = t.ClaudeCode(os.path.join(self.tmp, "run"))
         os.makedirs(ad.tmp)
-        t.run_hooks(ad, self.plugin, "")
+        with contextlib.redirect_stdout(io.StringIO()):
+            t.run_hooks(ad, self.plugin, "")
 
     def test_untampered_runs_clean(self):
         self.run_it()
         self.assertEqual(t.failures, [])
 
-    def test_tampered_command_fails_and_does_not_run(self):
+    def test_tampered_hooks_json_fails_and_does_not_run(self):
         p = os.path.join(self.plugin, "hooks", "hooks.json")
         d = json.load(open(p, encoding="utf-8"))
         for entries in d["hooks"].values():
@@ -43,6 +46,7 @@ class Guard(unittest.TestCase):
                 for h in e["hooks"]:
                     h["command"] += f"; touch {self.marker}"
         json.dump(d, open(p, "w", encoding="utf-8"))
+        # hooks.json lives under hooks/, so this is caught by the content check.
         self.run_it()
         self.assertFalse(os.path.exists(self.marker))
         self.assertTrue(any("match the checkout" in f for f in t.failures))
@@ -59,17 +63,45 @@ class Guard(unittest.TestCase):
                 yield label, ev, m, (c + f"; touch {self.marker}") if plugin != SRC else c
         t.ClaudeCode.hooks = tampered
         self.addCleanup(setattr, t.ClaudeCode, "hooks", real)
-        t.run_hooks(ad, self.plugin, "")
+        with contextlib.redirect_stdout(io.StringIO()):
+            t.run_hooks(ad, self.plugin, "")
         self.assertFalse(os.path.exists(self.marker))
         self.assertTrue(any("matches the compiled" in f for f in t.failures))
+        # isolation: the content check passed, only the command pin fired
+        self.assertFalse(any("match the checkout" in f for f in t.failures))
 
     def test_tampered_script_fails_and_does_not_run(self):
         script = os.path.join(self.plugin, "hooks", "invariants-card.sh")
-        with open(script, "a", encoding="utf-8") as f:
-            f.write(f"\ntouch {self.marker}\n")
+        with open(script, encoding="utf-8") as f:
+            lines = f.read().split("\n")
+        assert lines[0].startswith("#!"), lines[0]
+        # right after the shebang, so it runs if the script is ever executed
+        lines.insert(1, f"touch {self.marker}")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
         self.run_it()
         self.assertFalse(os.path.exists(self.marker))
         self.assertTrue(any("match the checkout" in f for f in t.failures))
+
+    def test_inherited_home_is_swapped_for_hooks(self):
+        """--plugin mode inherits the job's HOME; hooks must see a temp HOME,
+        and the scripts phase must get the real one back."""
+        seen = []
+
+        class Spy(t.ClaudeCode):
+            def hook_run(s, plugin, ws, event, matcher, command, seed):
+                seen.append(t.base_env(s.ctx)["HOME"])
+                return None
+
+        ad = Spy(os.path.join(self.tmp, "run"))
+        os.makedirs(ad.tmp)
+        ad.ctx = {"HOME": "/job/real-home"}
+        ad.inherited_home = True
+        with contextlib.redirect_stdout(io.StringIO()):
+            t.run_hooks(ad, self.plugin, "")
+        self.assertTrue(seen)
+        self.assertTrue(all(h == os.path.join(ad.tmp, "home") for h in seen), seen[:2])
+        self.assertEqual(ad.ctx["HOME"], "/job/real-home")
 
 
 if __name__ == "__main__":

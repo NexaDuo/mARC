@@ -371,6 +371,9 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
     # Hook side effects stay in the temp dir; the version check reads a local
     # file instead of the network, and reports a newer version so the test
     # can see the outdated-check body actually ran.
+    real_home = ad.ctx.get("HOME") if getattr(ad, "inherited_home", False) else None
+    if real_home is not None:
+        ad.ctx["HOME"] = os.path.join(ad.tmp, "home")
     ad.ctx.setdefault("HOME", os.path.join(ad.tmp, "home"))
     os.makedirs(ad.ctx["HOME"], exist_ok=True)
     # OLDPWD: a CLI inherits whatever the user's shell exported, usually the
@@ -399,7 +402,10 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
     #      marketplace (local_test_marketplace.prepare); Antigravity's copy comes
     #      from `agy plugin install` in an earlier CI step, not from prepare().
     #   3. Isolation: hooks run with a temp HOME and temp state (run_hooks sets
-    #      ctx HOME to <tmp>/home unless the adapter installed one) and base_env()
+    #      ctx HOME to <tmp>/home unless the adapter installed one; in --plugin
+    #      mode, where HOME is inherited from the job, it is swapped for the temp
+    #      HOME for the hooks only, because the later scripts phase needs the real
+    #      one for `agy plugin list`) and base_env()
     #      drops credential-looking variables (TOKEN, API_KEY, ...), so the
     #      step-scoped API key is not in the hook environment. What IS shared
     #      with the job: the filesystem (the installed copy for Antigravity lives
@@ -444,6 +450,8 @@ def run_hooks(ad: Adapter, plugin: str, seed: str) -> None:
         ad.hook_expect(label, event, matcher, r.stdout)
     for k in ("MARC_STATE_DIR", "MARC_REMOTE_PLUGIN_JSON_URL", "OLDPWD"):
         ad.ctx.pop(k, None)
+    if real_home is not None:
+        ad.ctx["HOME"] = real_home
 
 
 INVOCATION = re.compile(r'python3 "(.+?)/([A-Za-z0-9_.\-]+\.py)"')
@@ -549,6 +557,9 @@ def main() -> int:
             plugin = os.path.realpath(a.plugin)
             ad.ctx = {k: os.environ[k] for k in ("HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME", "PATH")
                       if k in os.environ}
+            # The scripts phase needs the real HOME (`agy plugin list` reads it),
+            # but the hooks must not run in it (#172): run_hooks swaps in a temp HOME.
+            ad.inherited_home = True
         else:
             if not shutil.which(ad.cli):
                 print(f"FAIL: `{ad.cli}` is not on PATH, nothing was tested")
