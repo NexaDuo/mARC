@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -281,7 +282,13 @@ STALE_AFTER_SEC = 3600  # older than any live run (3 cases x 600 s timeout)
 
 def trust_args(ws: Path) -> List[str]:
     """`-c` override marking `ws` trusted for one subprocess; no config file is written (#358)."""
-    key = json.dumps(str(ws))  # a TOML basic string is JSON-compatible for plain paths
+    text = str(ws)
+    if "\x7f" in text:
+        raise ValueError("workspace path has a character TOML forbids unescaped")
+    # A JSON string is a valid TOML basic string (control chars become \\u00XX); a lone
+    # surrogate cannot be encoded below and fails closed too.
+    key = json.dumps(text, ensure_ascii=False)
+    key.encode("utf-8")
     return ["-c", f'projects={{{key}={{trust_level="trusted"}}}}']
 
 
@@ -313,12 +320,12 @@ def positive_control(ws: Path, env: Dict[str, str]) -> Dict[str, object]:
 @contextlib.contextmanager
 def _deferred_signals():
     """Hold SIGTERM/SIGHUP until the block ends, so setup/cleanup is never cut short (#358)."""
-    sigs = {signal.SIGTERM, signal.SIGHUP}
-    signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+    sigs = {signal.SIGTERM, signal.SIGHUP, signal.SIGINT}
+    saved = signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
     try:
         yield
     finally:
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, sigs)  # a pending signal fires here
+        signal.pthread_sigmask(signal.SIG_SETMASK, saved)  # a pending signal fires here
 
 
 def _temp_home_parent() -> Path:
@@ -377,6 +384,13 @@ def _temp_codex_home() -> Path:
     return home
 
 
+def _file_hash(path: Path) -> "str | None":
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 def _real_codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
@@ -409,15 +423,18 @@ def run_exec_case(base: Path, case: str) -> Tuple[int, Dict[str, object]]:
                     workspace marked trusted for this subprocess via trust_args
                     (#358), and only after positive_control() shows it loads.
     SIGTERM/SIGHUP are deferred during temp-home creation and cleanup, so those
-    never leave a temp home; only SIGKILL can, and the next run sweeps it after 1h.
+    (and SIGINT) never leave a temp home; only SIGKILL can, and the next run
+    sweeps it after 1h.
     Writes and the commit are judged from the filesystem; read_file and network
     come from the model's echo of the probe output.
     """
     box = Battery(base, f"exec-{case}")
-    argv = ["codex", "exec", "-C", str(box.ws), *CODEX_READONLY_PROFILE_ARGS]
-    if case == "project-config":
-        argv += trust_args(box.ws)
-    argv.append(EXEC_PROMPT)
+    # Trust sits BEFORE the subcommand, exactly where positive_control() puts it (REV-1).
+    pre = trust_args(box.ws) if case == "project-config" else []
+    argv = ["codex", *pre, "exec", "-C", str(box.ws), *CODEX_READONLY_PROFILE_ARGS, EXEC_PROMPT]
+    shown_argv = argv[:-1] + ["<prompt>"]
+    real_cfg = _real_codex_home() / "config.toml"
+    cfg_before = _file_hash(real_cfg) if case == "project-config" else None
     temp_home: "Path | None" = None
     control: "Dict[str, object] | None" = None
     old = {sig: signal.signal(sig, _raise_terminated) for sig in (signal.SIGTERM, signal.SIGHUP)}
@@ -443,6 +460,7 @@ def run_exec_case(base: Path, case: str) -> Tuple[int, Dict[str, object]]:
                 except (OSError, subprocess.SubprocessError) as exc:
                     code_out = (127, "", str(exc))
             effects = box.side_effects()
+            cfg_after = _file_hash(real_cfg) if case == "project-config" else None
         finally:
             with _deferred_signals():  # a signal during cleanup waits until cleanup is done
                 if temp_home is not None:
@@ -453,14 +471,18 @@ def run_exec_case(base: Path, case: str) -> Tuple[int, Dict[str, object]]:
             signal.signal(sig, handler)
     if code_out[0] is None:  # positive control failed: no model call was made
         out = {"exec_exit": None, "sentinel": False, "result": {}, "leaked_side_effects": [],
-               "positive_control": control,
+               "positive_control": control, "argv": shown_argv,
                "error": "positive control failed: the project config did not load even with the "
                         "workspace trusted (or loaded without trust); the row would prove "
                         "nothing, so exec was not run"}
         return 2, out
     code, out = judge_exec(code_out[0], code_out[1], effects)
+    out["argv"] = shown_argv
     if control is not None:
         out["positive_control"] = control
+    if cfg_before != cfg_after:
+        out["error"] = "the real CODEX_HOME config.toml changed during the case; nothing is proven"
+        code = 1 if code == 1 else 2
     if code == 2:
         out["stderr"] = code_out[2][-1000:]
     return code, out
@@ -501,7 +523,7 @@ def main(argv: List[str]) -> int:
         sys.stderr.write(f"probe_codex_readonly: interrupted by {e}; nothing is proven\n")
         return 2
     if args.json:
-        print(json.dumps(report, indent=2))
+        print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         print(f"codex: {report.get('codex_version', '?')}  profile: {CODEX_READONLY_PROFILE}")
         if "argv" in report:
@@ -514,6 +536,8 @@ def main(argv: List[str]) -> int:
             for c, v in cases.items():
                 print(f"{c}: exit={v['exec_exit']} sentinel={v['sentinel']} code={v['code']}"
                       + (f" ERROR: {v['error']}" if v.get("error") else ""))
+                if v.get("argv"):
+                    print(f"{c}: argv: " + " ".join(str(a) for a in v["argv"]))
                 if v.get("positive_control"):
                     print(f"{c}: positive control {v['positive_control']}")
                 if v.get("leaked_side_effects"):

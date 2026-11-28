@@ -33,7 +33,8 @@ STUB_HEAD = (
     'case " $* " in *" features list "*)\n'
     '  echo "features $*" >> "$STUB_LOG"\n'
     '  v=false\n'
-    '  case " $* " in *trust_level*) grep -q "gcp_setup_wizard = true" .codex/config.toml 2>/dev/null'
+    # Loaded only if the override names the EXACT workspace path (REV-2).
+    '  case "$*" in *\'{"\'"$(pwd -P)"\'"={trust_level="trusted"}}\'*) grep -q "gcp_setup_wizard = true" .codex/config.toml 2>/dev/null'
     ' && [ "${STUB_FEATURES:-}" != never ] && v=true;; esac\n'
     '  echo "gcp_setup_wizard                         stable             $v"; exit 0;;\n'
     "esac\n"
@@ -44,7 +45,8 @@ STUB_HEAD = (
     'echo "authmode=$(stat -c %a "$CODEX_HOME/auth.json")" >> "$STUB_LOG"; fi\n'
     # argv is `codex exec -C <ws> ...`: record whether <ws> is a git work tree (CDX-1)
     # and where the write_codex_home probe points (CDX-2).
-    'echo "cwd_git=$(git -C "$3" rev-parse --is-inside-work-tree 2>/dev/null || echo no)" >> "$STUB_LOG"\n'
+    'ws=""; prev=""; for a in "$@"; do [ "$prev" = -C ] && ws=$a; prev=$a; done\n'
+    'echo "cwd_git=$(git -C "$ws" rev-parse --is-inside-work-tree 2>/dev/null || echo no)" >> "$STUB_LOG"\n'
     'echo "probe_codex=$MARC_PROBE_CODEX" >> "$STUB_LOG"\n'
 )
 
@@ -176,6 +178,15 @@ class ExecFailsClosed(unittest.TestCase):
         trusted = [ln for ln in execs if "trust_level" in ln]
         self.assertEqual(len(trusted), 1)
         self.assertIn("-C ", trusted[0])
+        # REV-1: trust comes BEFORE `exec`, the same position the control uses.
+        self.assertTrue(trusted[0].startswith("execargs=-c projects="), trusted[0])
+        self.assertIn(" exec -C ", trusted[0])
+        # REV-4: the printed argv carries the trust args.
+        self.assertIn("project-config: argv: codex -c projects=", proc.stdout)
+        # REV-3: both control calls happen before the project-config exec.
+        seq = [ln for ln in log if ln.startswith(("features ", "execargs="))]
+        k = next(i for i, ln in enumerate(seq) if "trust_level" in ln and ln.startswith("execargs="))
+        self.assertEqual([ln.split()[0] for ln in seq[k - 2:k]], ["features", "features"])
         self.assertIn("/ws-exec-project-config", trusted[0])
         # control: one untrusted + one trusted `features list`, both before that exec.
         feats = [ln for ln in log if ln.startswith("features ")]
@@ -193,6 +204,59 @@ class ExecFailsClosed(unittest.TestCase):
         self.assertEqual(len(execs), len(probe.EXEC_CASES) - 1)  # project-config never ran
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
         self.assertIn("positive control failed", proc.stdout)
+
+    def test_wrong_path_trust_is_not_loaded(self):
+        # REV-2: trust naming another path must not count as loaded.
+        ws = Path(tempfile.mkdtemp(prefix="marc-probe-test-"))
+        _TMPS.append(ws)
+        (ws / ".codex").mkdir()
+        (ws / ".codex" / "config.toml").write_text(probe.PROJECT_CONFIG)
+        bin_dir = ws / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "codex"
+        stub.write_text(STUB_HEAD + "exit 1\n")
+        stub.chmod(0o755)
+        env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                   STUB_LOG=str(ws / "log"))
+        good = probe.positive_control(ws.resolve(), env)
+        self.assertTrue(good["loaded"], good)
+        real = probe.trust_args
+        probe.trust_args = lambda _ws: real(Path("/elsewhere"))
+        try:
+            bad = probe.positive_control(ws.resolve(), env)
+        finally:
+            probe.trust_args = real
+        self.assertFalse(bad["loaded"], bad)
+
+    def test_real_config_change_fails_the_case(self):
+        # SEC-3: codex touching the real config.toml during project-config is exit 2.
+        proc, tmp = run_with_stub('echo x >> "$CODEX_HOME/config.toml"; exit 1')
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("project-config: exit=1", proc.stdout)
+        self.assertIn("config.toml changed", proc.stdout)
+
+    def test_trust_args_rejects_unencodable_path(self):
+        with self.assertRaises(ValueError):
+            probe.trust_args(Path("/tmp/a\x7fb"))
+        with self.assertRaises(UnicodeEncodeError):
+            probe.trust_args(Path("/tmp/\udc80"))
+        self.assertIn("é", probe.trust_args(Path("/tmp/é"))[1])  # not \u-escaped
+
+    def test_deferred_signals_restore_the_saved_mask_and_cover_sigint(self):
+        # SEC-1/SEC-2: SIGINT is held too; the prior mask is restored, not blanket-unblocked.
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})
+        self.addCleanup(signal.pthread_sigmask, signal.SIG_UNBLOCK, {signal.SIGUSR1})
+        with probe._deferred_signals():
+            held = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+            self.assertTrue({signal.SIGTERM, signal.SIGHUP, signal.SIGINT} <= held)
+        after = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        self.assertIn(signal.SIGUSR1, after)
+        self.assertNotIn(signal.SIGINT, after)
+        old = signal.signal(signal.SIGINT, signal.default_int_handler)
+        self.addCleanup(signal.signal, signal.SIGINT, old)
+        with self.assertRaises(KeyboardInterrupt):
+            with probe._deferred_signals():
+                os.kill(os.getpid(), signal.SIGINT)
 
     def test_feature_state_parse(self):
         self.assertIs(probe.feature_state("x stable true\ngcp_setup_wizard  stable  true\n"), True)
