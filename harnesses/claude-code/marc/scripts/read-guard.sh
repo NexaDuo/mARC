@@ -62,7 +62,7 @@ def main():
     # 'marc:security'). This replaces a session-wide 'ps' argv regex that any
     # process could forge. A missing/other value means NO bypass (fail-closed
     # for the bypass). Robustness, not an access boundary.
-    # `claude --agent security|review` (dispatch_agent.py, bare name) also
+    # Running claude with --agent security or review (dispatch_agent.py, bare name) also
     # reports agent_type 'marc:security'/'marc:review' (empirically confirmed
     # in review), so that path is covered too.
     # Caveat: 'agent_type' is only provided by Claude Code today, and
