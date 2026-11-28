@@ -250,7 +250,9 @@ class Codex(Adapter):
     def hook_run(self, plugin, ws, event, matcher, command, seed):
         env = base_env(self.ctx)
         if seed != "drop-hook-env":
-            data = os.path.join(self.ctx["CODEX_HOME"], "plugins", "data", "marc-nexaduo")
+            # --source/--plugin leave ctx without CODEX_HOME; derive it as install() does.
+            home = self.ctx.setdefault("CODEX_HOME", os.path.join(self.tmp, "codex-home"))
+            data = os.path.join(home, "plugins", "data", "marc-nexaduo")
             env.update(PLUGIN_ROOT=plugin, CLAUDE_PLUGIN_ROOT=plugin, PLUGIN_DATA=data, CLAUDE_PLUGIN_DATA=data)
         src = "compact" if matcher == "compact" else "startup"
         return sh(["bash", "-lc", command], cwd=ws, env=env, input=payload("codex", event, ws, src))
@@ -288,6 +290,11 @@ class Copilot(Adapter):
         return os.path.join(self.ctx["HOME"], ".copilot", "plugin-data", "nexaduo", "marc")
 
     def hook_run(self, plugin, ws, event, matcher, command, seed):
+        # The script-copy hook locates the plugin by scanning $HOME/.copilot/installed-plugins.
+        # --source/--plugin never installed one, so mirror the install layout in the temp HOME.
+        mirror = os.path.join(self.ctx["HOME"], ".copilot", "installed-plugins", "nexaduo", "marc")
+        if not os.path.isdir(mirror):
+            shutil.copytree(plugin, mirror, symlinks=True)
         env = base_env(self.ctx)
         if seed != "drop-hook-env":
             env.update(PLUGIN_ROOT=plugin, COPILOT_PLUGIN_ROOT=plugin, CLAUDE_PLUGIN_ROOT=plugin,
