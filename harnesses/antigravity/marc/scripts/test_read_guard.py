@@ -437,25 +437,34 @@ def test_bulk_reader_routes_to_dedicated_role_on_claude_code() -> None:
     check("'--harness', 'antigravity'" not in guard_src, "read-guard.sh no longer dispatches to the 'antigravity' harness")
 
 
-def test_sec_rev_bypass_unaffected() -> None:
-    print("\n--- Test (e): @sec/@rev bypass still short-circuits ---")
+def test_sec_rev_bypass_from_payload() -> None:
+    print("\n--- Test (e): @sec/@rev bypass keys off payload agent_type only (#289) ---")
     with tempfile.TemporaryDirectory() as tmp:
-        write_team_toml(tmp, "[token_guard]\nmax_read_lines = 350\nbulk_reader = true\n")
+        write_team_toml(tmp, "[token_guard]\nmax_read_lines = 350\nbulk_reader = false\n")
         big = write_big_file(tmp)
+        base = {"tool_name": "Read", "tool_input": {"path": big}}
 
-        # Simulate ps output matching the bypass regex by stubbing `ps` on
-        # PATH with a fake that emits an --agent sec/rev command line for
-        # this session id, mirroring what the real guard shells out to.
-        bin_dir = os.path.join(tmp, "fakebin")
-        os.makedirs(bin_dir, exist_ok=True)
-        fake_ps = os.path.join(bin_dir, "ps")
-        with open(fake_ps, "w", encoding="utf-8") as f:
-            f.write("#!/usr/bin/env bash\necho 'claude --agent sec -p do-the-review'\n")
-        st = os.stat(fake_ps)
-        os.chmod(fake_ps, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        for agent in ("marc:security", "marc:review"):
+            proc = run_guard(tmp, dict(base, agent_type=agent, agent_id="a1"))
+            check(proc.returncode == 0 and proc.stdout.strip() == "", f"guard inert for agent_type={agent} (stdout={proc.stdout!r})")
 
-        proc = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big}}, extra_path=bin_dir)
-        check(proc.returncode == 0 and proc.stdout.strip() == "", f"guard is fully inert when running under an @sec/@rev subagent (stdout={proc.stdout!r})")
+        # Regression for #289: a decoy process in the same session with
+        # '--agent sec' in its argv must NOT disable the guard when the
+        # payload carries no agent identity.
+        decoy = subprocess.Popen(
+            ["bash", "-c", "exec -a 'claude --agent sec /marc:rev' sleep 30"],
+            start_new_session=False,
+        )
+        try:
+            proc = run_guard(tmp, base)
+            check(parse_deny_reason(proc) is not None, "no agent_type + decoy '--agent sec' process: guard still denies")
+        finally:
+            decoy.kill()
+            decoy.wait()
+
+        for agent in ("marc:engineer", "security", "Explore"):
+            proc = run_guard(tmp, dict(base, agent_type=agent))
+            check(parse_deny_reason(proc) is not None, f"agent_type={agent} is not bypassed")
 
 
 def test_targeted_read_passes_through() -> None:
@@ -469,6 +478,25 @@ def test_targeted_read_passes_through() -> None:
 
         proc_offset = run_guard(tmp, {"tool_name": "Read", "tool_input": {"path": big, "offset": 10}})
         check(proc_offset.returncode == 0 and proc_offset.stdout.strip() == "", "read with 'offset' passes through untouched")
+
+
+def python_body_hazards(src: str) -> list:
+    """Return shell-hazard chars in the double-quoted body of `python3 -c "`."""
+    start = src.index('python3 -c "') + len('python3 -c "')
+    end = src.rindex('\n"')
+    body = src[start:end]
+    return [c for c in ("`", "$", '"') if c in body]
+
+
+def test_python_body_has_no_shell_metachars() -> None:
+    print("\n--- Test (g): python3 -c body has no backtick/$/unescaped quote (#289 SEC-3) ---")
+    with open(READ_GUARD_SH, "r", encoding="utf-8") as f:
+        src = f.read()
+    check(python_body_hazards(src) == [], f"read-guard.sh python body is shell-inert (hazards={python_body_hazards(src)})")
+    # Mutation: injecting each hazard into a scratch copy must be detected.
+    for bad in ("`id`", "$HOME", 'say "hi"'):
+        mutated = src.replace("def main():", "# " + bad + "\ndef main():", 1)
+        check(python_body_hazards(mutated) != [], f"mutation {bad!r} is detected")
 
 
 def main() -> int:
@@ -486,8 +514,9 @@ def main() -> int:
     test_bulk_reader_prompt_interpolates_configured_max_lines()
     test_bulk_reader_routes_to_dedicated_role_on_claude_code()
     test_bulk_reader_fail_open()
-    test_sec_rev_bypass_unaffected()
+    test_sec_rev_bypass_from_payload()
     test_targeted_read_passes_through()
+    test_python_body_has_no_shell_metachars()
 
     if _failures:
         print(f"\n{len(_failures)} failure(s):")
