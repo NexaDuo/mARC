@@ -1273,10 +1273,15 @@ write_bench_manifest() {
         echo "ERROR: jq is required to write manifest.json but was not found on PATH." >&2
         return 1
     fi
-    jq -n --arg model "$MODEL" --argjson tasks "$TASKS_JSON" \
+    if ! jq -n --arg model "$MODEL" --argjson tasks "$TASKS_JSON" \
         --argjson iterations "$ITERATIONS" --arg task_hash "$TASK_HASH" \
         --arg tag "$CURRENT_REF" --arg claude_version "$CLAUDE_VERSION" \
-        '{model: $model, tasks: $tasks, iterations: $iterations, task_hash: $task_hash, tag: $tag, claude_version: $claude_version}' > "$out"
+        '{model: $model, tasks: $tasks, iterations: $iterations, task_hash: $task_hash, tag: $tag, claude_version: $claude_version}' > "$out.tmp"; then
+        rm -f "$out.tmp"
+        echo "ERROR: jq failed building manifest.json; $out not written." >&2
+        return 1
+    fi
+    mv -f "$out.tmp" "$out"
 }
 
 main() {

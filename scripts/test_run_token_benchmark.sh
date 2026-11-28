@@ -794,13 +794,9 @@ PATHO_MODEL=$'m"od\\el\nline2 $(touch PWNED) `touch PWNED2`'
 PATHO_VER=$'1.2.3"\\'
 (
     cd "$M282"
-    MODEL="$PATHO_MODEL"
-    TASKS_JSON='[{"name":"a","prompt":"p"}]'
-    ITERATIONS=5
-    TASK_HASH=abc123
-    CURRENT_REF='v1.0'
-    CLAUDE_VERSION="$PATHO_VER"
-    write_bench_manifest "$M282/manifest.json"
+    MODEL="$PATHO_MODEL" TASKS_JSON='[{"name":"a","prompt":"p"}]' ITERATIONS=5 \
+        TASK_HASH=abc123 CURRENT_REF='v1.0' CLAUDE_VERSION="$PATHO_VER" \
+        write_bench_manifest "$M282/manifest.json"
 ) || true
 if jq . "$M282/manifest.json" >/dev/null 2>&1 \
     && [ "$(jq -j .model "$M282/manifest.json"; echo x)" = "${PATHO_MODEL}x" ] \
@@ -817,6 +813,7 @@ fi
 # ref starting with `-` can never be parsed as a git option.
 GIT_ARGS_LOG="$M282/git_args"
 (
+    # shellcheck disable=SC2329 # invoked indirectly by resolve_prev_release_tag
     git() { printf '%s\n' "$*" >> "$GIT_ARGS_LOG"; return 1; }
     resolve_prev_release_tag "--hostile" >/dev/null
 )
@@ -824,6 +821,27 @@ if grep -q -- ' -- --hostile^$' "$GIT_ARGS_LOG"; then
     pass "git describe receives a hostile ref only after '--' (no option injection)"
 else
     fail "git describe args did not isolate the ref with '--': $(cat "$GIT_ARGS_LOG" 2>&1)"
+fi
+# jq failure (invalid --argjson) must not leave a 0-byte/partial manifest.json.
+jqfail_rc=0
+(
+    MODEL=m TASKS_JSON='not json' ITERATIONS=5 TASK_HASH=h CURRENT_REF=v CLAUDE_VERSION=c \
+        write_bench_manifest "$M282/bad.json" 2>/dev/null
+) || jqfail_rc=$?
+if [ "$jqfail_rc" -ne 0 ] && [ ! -e "$M282/bad.json" ] && [ ! -e "$M282/bad.json.tmp" ]; then
+    pass "write_bench_manifest on jq failure returns non-zero and leaves no manifest.json/.tmp"
+else
+    fail "jq failure left artifacts or returned 0 (rc=$jqfail_rc)"
+fi
+echo KEEP > "$M282/keep.json"
+(
+    MODEL=m TASKS_JSON='not json' ITERATIONS=5 TASK_HASH=h CURRENT_REF=v CLAUDE_VERSION=c \
+        write_bench_manifest "$M282/keep.json" 2>/dev/null
+) || true
+if [ "$(cat "$M282/keep.json")" = KEEP ]; then
+    pass "write_bench_manifest on jq failure leaves an existing manifest.json unchanged"
+else
+    fail "existing manifest.json was clobbered on jq failure"
 fi
 rm -rf "$M282"
 
