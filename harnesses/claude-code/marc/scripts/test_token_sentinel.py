@@ -481,6 +481,17 @@ def main() -> int:
               f"duplicate message.id usage summed once, id-less counted each ({t['cache_write_tokens']})")
         check(t["calls"] == 2, "tool_use calls still counted per record")
 
+    # --- #386 REV-2: an unsupported harness is a silent no-op hook / CLI exit 2
+    for label, argv, want_rc in (
+            ("hook", ["--hook", "--harness", "codex"], 0),
+            ("cli", ["--harness", "codex"], 2)):
+        r = subprocess.run([sys.executable, SENTINEL] + argv, input="{}",
+                           capture_output=True, text=True)
+        check(r.returncode == want_rc and r.stdout == ""
+              and "unavailable" in r.stderr,
+              f"--harness codex ({label}): exit {want_rc}, empty stdout, "
+              f"'unavailable' on stderr")
+
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
         for m in _failures:

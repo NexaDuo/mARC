@@ -117,10 +117,18 @@ jobs:
 
       - name: Token sentinel tests, every compiled harness copy (#386)
         run: |
+          set -u
+          rc=0
           for d in core/scripts harnesses/*/marc/scripts; do
             echo "== $d"
-            (cd "$d" && python3 test_token_sentinel.py | tee /dev/stderr | { ! grep -q '^FAIL'; })
+            if [ ! -f "$d/test_token_sentinel.py" ]; then
+              echo "::error::missing $d/test_token_sentinel.py"; rc=1; continue
+            fi
+            out=$(cd "$d" && python3 test_token_sentinel.py 2>&1) || { echo "::error::$d exited non-zero"; rc=1; }
+            echo "$out"
+            if printf '%s\n' "$out" | grep -q '^FAIL'; then echo "::error::$d printed FAIL"; rc=1; fi
           done
+          exit "$rc"
 
       - name: Install Claude Code CLI (pinned)
         run: |
