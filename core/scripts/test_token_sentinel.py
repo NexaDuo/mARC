@@ -186,7 +186,7 @@ def run_hook(env_tmp: str, transcript_path: str | None, session_id: str,
         stdin_text = json.dumps({"transcript_path": transcript_path,
                                  "session_id": session_id})
     proc = subprocess.run(
-        [sys.executable, SENTINEL, "--hook"],
+        [sys.executable, SENTINEL, "--hook", "--harness", "claude-code"],
         input=stdin_text, capture_output=True, text=True, env=env,
     )
     return proc.returncode, proc.stdout
@@ -341,7 +341,8 @@ def main() -> int:
         mixed = write_mixed_turn(fixtures, "mixed_sidechain.jsonl",
                                  SONNET, MAIN_CTX, SONNET, SIDE_CTX)
         cli = subprocess.run(
-            [sys.executable, SENTINEL, mixed, "--tokens", "1", "--calls", "1"],
+            [sys.executable, SENTINEL, mixed, "--tokens", "1", "--calls", "1",
+             "--harness", "claude-code"],
             capture_output=True, text=True,
         )
         check(cli.returncode in (0, 1), "manual CLI on mixed transcript: runs cleanly")
@@ -479,6 +480,17 @@ def main() -> int:
         check(t["cache_write_tokens"] == 100 + 10 + 10 + 50,
               f"duplicate message.id usage summed once, id-less counted each ({t['cache_write_tokens']})")
         check(t["calls"] == 2, "tool_use calls still counted per record")
+
+    # --- #386 REV-2: an unsupported harness is a silent no-op hook / CLI exit 2
+    for label, argv, want_rc in (
+            ("hook", ["--hook", "--harness", "codex"], 0),
+            ("cli", ["--harness", "codex"], 2)):
+        r = subprocess.run([sys.executable, SENTINEL] + argv, input="{}",
+                           capture_output=True, text=True)
+        check(r.returncode == want_rc and r.stdout == ""
+              and "unavailable" in r.stderr,
+              f"--harness codex ({label}): exit {want_rc}, empty stdout, "
+              f"'unavailable' on stderr")
 
     if _failures:
         print(f"\n{len(_failures)} FAILURE(S):")
